@@ -25,6 +25,7 @@ const MAX_PDF_LENGTH = 8000;
 const MAX_HISTORY_MESSAGES = 12;
 
 let currentAbortController: AbortController | null = null;
+const shortcutTextCache = new Map<string, string>();
 
 const SHORTCUT_FILES = [
   { id: "summarize", label: "Summarize", file: "summarize.txt" },
@@ -403,13 +404,18 @@ function setShortcutLabelOverrides(overrides: Record<string, string>) {
 }
 
 async function loadShortcutText(file: string): Promise<string> {
+  if (shortcutTextCache.has(file)) {
+    return shortcutTextCache.get(file)!;
+  }
   const uri = `chrome://${config.addonRef}/content/shortcuts/${file}`;
   const fetchFn = ztoolkit.getGlobal("fetch") as typeof fetch;
   const res = await fetchFn(uri);
   if (!res.ok) {
     throw new Error(`Failed to load ${file}`);
   }
-  return res.text();
+  const text = await res.text();
+  shortcutTextCache.set(file, text);
+  return text;
 }
 
 async function renderShortcuts(body: Element, item?: Zotero.Item | null) {
@@ -478,7 +484,9 @@ async function renderShortcuts(body: Element, item?: Zotero.Item | null) {
   }
 
   if (menu && menuEdit) {
-    menuEdit.addEventListener("click", (e: Event) => {
+    if (!menu.dataset.listenerAttached) {
+      menu.dataset.listenerAttached = "true";
+      menuEdit.addEventListener("click", (e: Event) => {
       e.preventDefault();
       e.stopPropagation();
       const shortcutId = menu.dataset.shortcutId || "";
@@ -527,13 +535,14 @@ async function renderShortcuts(body: Element, item?: Zotero.Item | null) {
         target.textContent = labelValue || target.dataset.label || shortcutId;
       }
       menu.style.display = "none";
-    });
+      });
 
-    body.addEventListener("click", () => {
-      menu.style.display = "none";
-      menu.dataset.shortcutId = "";
-      (menu as any)._target = null;
-    });
+      body.addEventListener("click", () => {
+        menu.style.display = "none";
+        menu.dataset.shortcutId = "";
+        (menu as any)._target = null;
+      });
+    }
   }
 }
 
