@@ -1356,6 +1356,36 @@ async function renderShortcuts(body: Element, item?: Zotero.Item | null) {
   container.innerHTML = "";
   const overrides = getShortcutOverrides();
   const labelOverrides = getShortcutLabelOverrides();
+  const positionShortcutMenu = (evt: MouseEvent) => {
+    if (!menu) return;
+    const win = body.ownerDocument?.defaultView;
+    if (!win) return;
+
+    const viewportMargin = 8;
+    menu.style.position = "fixed";
+    menu.style.display = "grid";
+    menu.style.visibility = "hidden";
+
+    const menuRect = menu.getBoundingClientRect();
+    let left = evt.clientX;
+    let top = evt.clientY;
+
+    const maxLeft = Math.max(
+      viewportMargin,
+      win.innerWidth - menuRect.width - viewportMargin,
+    );
+    const maxTop = Math.max(
+      viewportMargin,
+      win.innerHeight - menuRect.height - viewportMargin,
+    );
+
+    left = Math.min(Math.max(viewportMargin, left), maxLeft);
+    top = Math.min(Math.max(viewportMargin, top), maxTop);
+
+    menu.style.left = `${Math.round(left)}px`;
+    menu.style.top = `${Math.round(top)}px`;
+    menu.style.visibility = "visible";
+  };
 
   for (const shortcut of SHORTCUT_FILES) {
     let promptText = overrides[shortcut.id];
@@ -1367,7 +1397,7 @@ async function renderShortcuts(body: Element, item?: Zotero.Item | null) {
       }
     }
 
-    const labelText = labelOverrides[shortcut.id] || shortcut.label;
+    const labelText = (labelOverrides[shortcut.id] || shortcut.label).trim();
 
     const btn = body.ownerDocument!.createElementNS(
       "http://www.w3.org/1999/xhtml",
@@ -1379,13 +1409,15 @@ async function renderShortcuts(body: Element, item?: Zotero.Item | null) {
     btn.dataset.shortcutId = shortcut.id;
     btn.dataset.prompt = promptText || "";
     btn.dataset.label = labelText;
+    btn.dataset.defaultLabel = shortcut.label;
     btn.disabled = !item || !promptText;
 
     btn.addEventListener("click", (e: Event) => {
       e.preventDefault();
       e.stopPropagation();
-      if (!item || !promptText) return;
-      sendQuestion(body, item, btn.dataset.prompt || "");
+      const nextPrompt = (btn.dataset.prompt || "").trim();
+      if (!item || !nextPrompt) return;
+      sendQuestion(body, item, nextPrompt);
     });
 
     btn.addEventListener("contextmenu", (e: Event) => {
@@ -1393,18 +1425,10 @@ async function renderShortcuts(body: Element, item?: Zotero.Item | null) {
       e.stopPropagation();
       if (!menu) return;
       const evt = e as MouseEvent;
-      const panel = body.querySelector("#llm-main") as HTMLElement | null;
-      const panelRect = panel?.getBoundingClientRect();
-      if (panelRect) {
-        menu.style.left = `${evt.clientX - panelRect.left}px`;
-        menu.style.top = `${evt.clientY - panelRect.top}px`;
-      } else {
-        menu.style.left = `${evt.clientX}px`;
-        menu.style.top = `${evt.clientY}px`;
-      }
+      positionShortcutMenu(evt);
       menu.dataset.shortcutId = shortcut.id;
       (menu as any)._target = btn;
-      menu.style.display = "block";
+      menu.style.display = "grid";
     });
 
     container.appendChild(btn);
@@ -1445,9 +1469,11 @@ async function renderShortcuts(body: Element, item?: Zotero.Item | null) {
         if (target) {
           target.dataset.prompt = next;
           target.disabled = !next;
-          target.dataset.label =
-            labelValue || target.dataset.label || shortcutId;
-          target.textContent = labelValue || target.dataset.label || shortcutId;
+          const fallbackLabel =
+            target.dataset.defaultLabel || target.dataset.label || shortcutId;
+          const resolvedLabel = labelValue || fallbackLabel;
+          target.dataset.label = resolvedLabel;
+          target.textContent = resolvedLabel;
         }
         menu.style.display = "none";
       });
@@ -1476,7 +1502,7 @@ async function openShortcutEditDialog(
     },
   };
 
-  const dialog = new ztoolkit.Dialog(6, 2)
+  const dialog = new ztoolkit.Dialog(3, 2)
     .addCell(0, 0, {
       tag: "h2",
       properties: { innerHTML: "Edit Shortcut" },

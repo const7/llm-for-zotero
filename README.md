@@ -7,12 +7,13 @@
 
 
 
-02.06.2026 Update: Zotero-LLM is now support mainstream reasoning models, including `gpt-5.x` series from OpenAI, `gemini-3-pro-preview`, `gemini-2.5-flash` from Google, `deepseek-chat` and `deepseek-reasoner` from Deepseek, and `kimi-k2.5` series from Moonshot. You can easily connect to these models with your own API key and enjoy the power of LLMs while reading papers in Zotero.
+## 🗓️ 02.06.2026 Update
+Zotero-LLM v3.0 [release](https://github.com/yilewang/zotero-llm/releases) is now support mainstream reasoning models, including `gpt-5.x` series from OpenAI, `gemini-3-pro-preview`, `gemini-2.5-flash` from Google, `deepseek-chat` and `deepseek-reasoner` from Deepseek, and `kimi-k2.5` series from Moonshot. You can easily connect to these models with your own API key and enjoy the power of LLMs while reading papers in Zotero.
 
-
+## Introduction
 **Zotero-LLM** is a powerful plugin for [Zotero](https://www.zotero.org/) that integrates Large Language Models (LLMs) directly into the Zotero PDF reader. Unlike other tools that require you to upload your pdfs to a portal, this plugin is designed to conveniently access LLMs without the need to leave Zotero. It quietly sits in the panel of the Zotero reader, like your standby research assistant, ready to help you with any questions you have when reading a paper.
 
-![image](./assets/demo.gif)
+![image](./assets/demo_video1.gif)
 
 Key Features
 
@@ -35,9 +36,9 @@ Key Features
 
   - All shortcuts are customizable.
 
-- 📝 Seamless Integration: Lives inside the Zotero sidebar—no tab switching required.
+- Support for mainstream LLM providers: OpenAI, Google Gemini, Deepseek, Moonshot and any provider with a compatible API.
 
-![image](./assets/demo2.png)
+![image](./assets/demo_video2.gif)
 
 ### Installation
 
@@ -54,6 +55,7 @@ Click the gear icon and select `Install Add-on From File`
 #### Step 3: Restart `Zotero`
 
 Select the `.xpi` file and restart `Zotero` to complete the installation.
+
 
 ### Configuration
 
@@ -73,6 +75,8 @@ Open the LLM Assistant sidebar (click the distinct icon in the right-hand toolba
 
 Type a question in the chat box, such as "What is the main conclusion of this paper?"
 
+![image](./assets/demo3.png)
+
 ### FAQ
 
 > Q: Is it free to use?
@@ -81,7 +85,7 @@ A: Yes, absolutely free. You only pay for API calls, if you choose to use a paid
 
 > Q: Does this work with local models?
 
-A: Yes! You can point the plugin to a local endpoint (like Ollama) to run models entirely offline for maximum privacy.
+A: Unfortunately, no. This plugin is designed to work with LLMs that are accessible via API. If you have a local model that provides an API interface, you can try connecting it by entering the appropriate API details in the settings.
 
 > Q: Is my data used to train models?
 
