@@ -112,6 +112,7 @@ let currentRequestId = 0;
 let cancelledRequestId = -1;
 let currentAbortController: AbortController | null = null;
 let panelFontScalePercent = FONT_SCALE_DEFAULT_PERCENT;
+let responseMenuTarget: { item: Zotero.Item; message: Message } | null = null;
 
 // Screenshot selection state (per item)
 const selectedImageCache = new Map<number, string>();
@@ -781,6 +782,34 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
   shortcutMenu.appendChild(menuEditBtn);
   container.appendChild(shortcutMenu);
 
+  // Response context menu
+  const responseMenu = createElement(doc, "div", "llm-response-menu", {
+    id: "llm-response-menu",
+  });
+  responseMenu.style.display = "none";
+  const responseMenuCopyBtn = createElement(
+    doc,
+    "button",
+    "llm-response-menu-item",
+    {
+      id: "llm-response-menu-copy",
+      type: "button",
+      textContent: "Copy",
+    },
+  );
+  const responseMenuNoteBtn = createElement(
+    doc,
+    "button",
+    "llm-response-menu-item",
+    {
+      id: "llm-response-menu-note",
+      type: "button",
+      textContent: "Create a new note",
+    },
+  );
+  responseMenu.append(responseMenuCopyBtn, responseMenuNoteBtn);
+  container.appendChild(responseMenu);
+
   // Input section
   const inputSection = createElement(doc, "div", "llm-input-section");
   const inputBox = createElement(doc, "textarea", "llm-input", {
@@ -1339,6 +1368,119 @@ function sanitizeText(text: string) {
   return out;
 }
 
+function escapeNoteHtml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function resolveParentItemForNote(item: Zotero.Item): Zotero.Item | null {
+  if (item.isAttachment() && item.parentID) {
+    return Zotero.Items.get(item.parentID) || null;
+  }
+  return item;
+}
+
+function buildAssistantNoteHtml(message: Message): string {
+  const response = sanitizeText(message.text || "").trim();
+  const source = message.modelName?.trim() || "unknown";
+  let responseHtml = "";
+  try {
+    responseHtml = renderMarkdown(response);
+  } catch (err) {
+    ztoolkit.log("Note markdown render error:", err);
+    responseHtml = escapeNoteHtml(response).replace(/\n/g, "<br/>");
+  }
+  return `<div>${responseHtml}</div><p>From ${escapeNoteHtml(source)} model, written by Zotero-LLM plugin</p>`;
+}
+
+function positionMenuAtPointer(
+  body: Element,
+  menu: HTMLDivElement,
+  clientX: number,
+  clientY: number,
+): void {
+  const win = body.ownerDocument?.defaultView;
+  if (!win) return;
+
+  const viewportMargin = 8;
+  menu.style.position = "fixed";
+  menu.style.display = "grid";
+  menu.style.visibility = "hidden";
+  menu.style.maxHeight = `${Math.max(120, win.innerHeight - viewportMargin * 2)}px`;
+  menu.style.overflowY = "auto";
+
+  const menuRect = menu.getBoundingClientRect();
+  const maxLeft = Math.max(
+    viewportMargin,
+    win.innerWidth - menuRect.width - viewportMargin,
+  );
+  const maxTop = Math.max(
+    viewportMargin,
+    win.innerHeight - menuRect.height - viewportMargin,
+  );
+  const left = Math.min(Math.max(viewportMargin, clientX), maxLeft);
+  const top = Math.min(Math.max(viewportMargin, clientY), maxTop);
+  menu.style.left = `${Math.round(left)}px`;
+  menu.style.top = `${Math.round(top)}px`;
+  menu.style.visibility = "visible";
+}
+
+async function copyTextToClipboard(body: Element, text: string): Promise<void> {
+  const safeText = sanitizeText(text).trim();
+  if (!safeText) return;
+
+  const win = body.ownerDocument?.defaultView as
+    | (Window & { navigator?: Navigator })
+    | undefined;
+  if (win?.navigator?.clipboard?.writeText) {
+    try {
+      await win.navigator.clipboard.writeText(safeText);
+      return;
+    } catch (err) {
+      ztoolkit.log("Clipboard API copy failed:", err);
+    }
+  }
+
+  try {
+    const helper = (
+      globalThis as typeof globalThis & {
+        Components?: {
+          classes: Record<string, { getService: (iface: unknown) => unknown }>;
+          interfaces: Record<string, unknown>;
+        };
+      }
+    ).Components;
+    const svc = helper?.classes?.[
+      "@mozilla.org/widget/clipboardhelper;1"
+    ]?.getService(helper.interfaces.nsIClipboardHelper) as
+      | { copyString: (value: string) => void }
+      | undefined;
+    if (svc) svc.copyString(safeText);
+  } catch (err) {
+    ztoolkit.log("Clipboard fallback copy failed:", err);
+  }
+}
+
+async function createNoteFromAssistantMessage(
+  item: Zotero.Item,
+  message: Message,
+): Promise<void> {
+  const parentItem = resolveParentItemForNote(item);
+  if (!parentItem?.id) {
+    throw new Error("No parent item available for note creation");
+  }
+
+  const note = new Zotero.Item("note");
+  note.libraryID = parentItem.libraryID;
+  note.parentID = parentItem.id;
+  note.setNote(buildAssistantNoteHtml(message));
+  await note.saveTx();
+}
+
 function clampNumber(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
@@ -1759,6 +1901,16 @@ function setupHandlers(body: Element, item?: Zotero.Item | null) {
   const removeImgBtn = body.querySelector(
     "#llm-remove-img",
   ) as HTMLButtonElement | null;
+  const responseMenu = body.querySelector(
+    "#llm-response-menu",
+  ) as HTMLDivElement | null;
+  const responseMenuCopyBtn = body.querySelector(
+    "#llm-response-menu-copy",
+  ) as HTMLButtonElement | null;
+  const responseMenuNoteBtn = body.querySelector(
+    "#llm-response-menu-note",
+  ) as HTMLButtonElement | null;
+  const status = body.querySelector("#llm-status") as HTMLElement | null;
 
   if (!inputBox || !sendBtn) {
     ztoolkit.log("LLM: Could not find input or send button");
@@ -1790,6 +1942,48 @@ function setupHandlers(body: Element, item?: Zotero.Item | null) {
   };
   const isFloatingMenuOpen = (menu: HTMLDivElement | null) =>
     Boolean(menu && menu.style.display !== "none");
+  const closeResponseMenu = () => {
+    if (responseMenu) responseMenu.style.display = "none";
+    responseMenuTarget = null;
+  };
+
+  if (responseMenu && responseMenuCopyBtn && responseMenuNoteBtn) {
+    if (!responseMenu.dataset.listenerAttached) {
+      responseMenu.dataset.listenerAttached = "true";
+      responseMenu.addEventListener("mousedown", (e: Event) => {
+        e.stopPropagation();
+      });
+      responseMenu.addEventListener("contextmenu", (e: Event) => {
+        e.preventDefault();
+        e.stopPropagation();
+      });
+      responseMenuCopyBtn.addEventListener("click", async (e: Event) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!responseMenuTarget) return;
+        await copyTextToClipboard(body, responseMenuTarget.message.text || "");
+        if (status) setStatus(status, "Copied response", "ready");
+        closeResponseMenu();
+      });
+      responseMenuNoteBtn.addEventListener("click", async (e: Event) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!responseMenuTarget) return;
+        try {
+          await createNoteFromAssistantMessage(
+            responseMenuTarget.item,
+            responseMenuTarget.message,
+          );
+          if (status) setStatus(status, "Created a new note", "ready");
+        } catch (err) {
+          ztoolkit.log("Create note failed:", err);
+          if (status) setStatus(status, "Failed to create note", "error");
+        } finally {
+          closeResponseMenu();
+        }
+      });
+    }
+  }
 
   // Clicking non-interactive panel area gives keyboard focus to the panel.
   panelRoot.addEventListener("mousedown", (e: Event) => {
@@ -2362,7 +2556,8 @@ function setupHandlers(body: Element, item?: Zotero.Item | null) {
     !(doc as unknown as { __llmModelMenuDismiss?: boolean })
       .__llmModelMenuDismiss
   ) {
-    doc.addEventListener("click", (e: Event) => {
+    doc.addEventListener("mousedown", (e: Event) => {
+      const me = e as MouseEvent;
       const modelMenuEl = doc.querySelector(
         "#llm-model-menu",
       ) as HTMLDivElement | null;
@@ -2375,6 +2570,9 @@ function setupHandlers(body: Element, item?: Zotero.Item | null) {
       const reasoningButtonEl = doc.querySelector(
         "#llm-reasoning-toggle",
       ) as HTMLButtonElement | null;
+      const responseMenuEl = doc.querySelector(
+        "#llm-response-menu",
+      ) as HTMLDivElement | null;
       const target = e.target as Node | null;
       if (
         modelMenuEl &&
@@ -2392,6 +2590,15 @@ function setupHandlers(body: Element, item?: Zotero.Item | null) {
             !reasoningButtonEl?.contains(target)))
       ) {
         setFloatingMenuOpen(reasoningMenuEl, REASONING_MENU_OPEN_CLASS, false);
+      }
+      if (
+        responseMenuEl &&
+        responseMenuEl.style.display !== "none" &&
+        me.button === 0 &&
+        (!target || !responseMenuEl.contains(target))
+      ) {
+        responseMenuEl.style.display = "none";
+        responseMenuTarget = null;
       }
     });
     (
@@ -2678,6 +2885,20 @@ function refreshChat(body: Element, item?: Zotero.Item | null) {
           ztoolkit.log("LLM render error:", err);
           bubble.textContent = safeText;
         }
+        bubble.addEventListener("contextmenu", (e: Event) => {
+          const me = e as MouseEvent;
+          me.preventDefault();
+          me.stopPropagation();
+          if (typeof me.stopImmediatePropagation === "function") {
+            me.stopImmediatePropagation();
+          }
+          const responseMenu = doc.querySelector(
+            "#llm-response-menu",
+          ) as HTMLDivElement | null;
+          if (!responseMenu || !item) return;
+          responseMenuTarget = { item, message: msg };
+          positionMenuAtPointer(body, responseMenu, me.clientX, me.clientY);
+        });
       }
 
       const hasReasoningSummary = Boolean(msg.reasoningSummary?.trim());

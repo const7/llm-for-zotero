@@ -213,6 +213,45 @@
   background: var(--fill-quinary);
 }
 
+.llm-response-menu {
+  position: absolute;
+  z-index: 12;
+  background: var(--material-background);
+  border: 1px solid var(--stroke-secondary);
+  border-radius: calc(6px * var(--llm-font-scale, 1));
+  padding: calc(4px * var(--llm-font-scale, 1));
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.2);
+  gap: 2px;
+}
+
+.llm-response-menu-item {
+  appearance: none;
+  -moz-appearance: none;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: calc(24px * var(--llm-font-scale, 1));
+  margin: 0;
+  background: none;
+  border: none;
+  color: var(--fill-primary);
+  padding: calc(4px * var(--llm-font-scale, 1))
+    calc(8px * var(--llm-font-scale, 1));
+  font-size: var(--llm-fs-11);
+  line-height: 1.2;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  border-radius: calc(4px * var(--llm-font-scale, 1));
+  white-space: nowrap;
+}
+
+.llm-response-menu-item:hover {
+  background: var(--fill-quinary);
+}
+
 /* Welcome Message */
 .llm-welcome {
   display: flex;
