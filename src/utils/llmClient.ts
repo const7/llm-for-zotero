@@ -50,8 +50,10 @@ export type ChatParams = {
   context?: string;
   history?: ChatMessage[];
   signal?: AbortSignal;
-  /** Base64 data URL of an image to include with the prompt */
+  /** Base64 data URL of an image to include with the prompt (legacy single-image field) */
   image?: string;
+  /** Base64 data URLs to include with the prompt */
+  images?: string[];
   /** Override model for this request */
   model?: string;
   /** Override API base for this request */
@@ -223,18 +225,32 @@ function buildMessages(
     messages.push(...params.history);
   }
 
-  // Build user message - with image if provided (vision API format)
-  if (params.image) {
+  const imageUrls: string[] = [];
+  if (Array.isArray(params.images)) {
+    for (const image of params.images) {
+      if (typeof image === "string" && image.trim()) {
+        imageUrls.push(image.trim());
+      }
+    }
+  }
+  if (typeof params.image === "string" && params.image.trim()) {
+    imageUrls.push(params.image.trim());
+  }
+
+  // Build user message - with image(s) if provided (vision API format)
+  if (imageUrls.length) {
     const contentParts: (TextContent | ImageContent)[] = [
       { type: "text", text: params.prompt },
-      {
+    ];
+    for (const url of imageUrls) {
+      contentParts.push({
         type: "image_url",
         image_url: {
-          url: params.image,
+          url,
           detail: "high",
         },
-      },
-    ];
+      });
+    }
     messages.push({
       role: "user",
       content: contentParts,

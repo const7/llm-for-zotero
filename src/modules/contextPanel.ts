@@ -48,6 +48,7 @@ const FONT_SCALE_STEP_PERCENT = 10;
 const SELECTED_TEXT_MAX_LENGTH = 4000;
 const SELECTED_TEXT_PREVIEW_LENGTH = 240;
 const MAX_EDITABLE_SHORTCUTS = 5;
+const MAX_SELECTED_IMAGES = 5;
 const INCLUDE_SELECTED_TEXT_SHORTCUT_ID = "include-selected-text";
 const CUSTOM_SHORTCUT_ID_PREFIX = "custom-shortcut";
 
@@ -153,7 +154,7 @@ let responseMenuTarget: {
 } | null = null;
 
 // Screenshot selection state (per item)
-const selectedImageCache = new Map<number, string>();
+const selectedImageCache = new Map<number, string[]>();
 const selectedTextCache = new Map<number, string>();
 const recentReaderSelectionCache = new Map<number, string>();
 
@@ -1091,18 +1092,21 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
   });
   imagePreview.style.display = "none";
 
-  const previewImg = createElement(doc, "img", "llm-preview-img", {
-    id: "llm-preview-img",
-    alt: "Selected screenshot",
+  const imagePreviewMeta = createElement(doc, "div", "llm-image-preview-meta", {
+    id: "llm-image-preview-meta",
+    textContent: "0 images selected",
+  });
+  const previewStrip = createElement(doc, "div", "llm-image-preview-strip", {
+    id: "llm-image-preview-strip",
   });
 
   const removeImgBtn = createElement(doc, "button", "llm-remove-img-btn", {
     id: "llm-remove-img",
-    textContent: "×",
-    title: "Remove image",
+    textContent: "Clear All",
+    title: "Clear selected screenshots",
   });
 
-  imagePreview.append(previewImg, removeImgBtn);
+  imagePreview.append(imagePreviewMeta, previewStrip, removeImgBtn);
   inputSection.appendChild(imagePreview);
 
   // Actions row
@@ -3363,9 +3367,12 @@ function setupHandlers(body: Element, item?: Zotero.Item | null) {
   const selectedContextClear = body.querySelector(
     "#llm-selected-context-clear",
   ) as HTMLButtonElement | null;
-  const previewImg = body.querySelector(
-    "#llm-preview-img",
-  ) as HTMLImageElement | null;
+  const previewStrip = body.querySelector(
+    "#llm-image-preview-strip",
+  ) as HTMLDivElement | null;
+  const previewMeta = body.querySelector(
+    "#llm-image-preview-meta",
+  ) as HTMLDivElement | null;
   const removeImgBtn = body.querySelector(
     "#llm-remove-img",
   ) as HTMLButtonElement | null;
@@ -3477,16 +3484,64 @@ function setupHandlers(body: Element, item?: Zotero.Item | null) {
 
   // Helper to update image preview UI
   const updateImagePreview = () => {
-    if (!item || !imagePreview || !previewImg || !screenshotBtn) return;
-    const selectedImage = selectedImageCache.get(item.id);
-    if (selectedImage) {
-      previewImg.src = selectedImage;
+    if (!item || !imagePreview || !previewStrip || !previewMeta || !screenshotBtn)
+      return;
+    const ownerDoc = body.ownerDocument;
+    if (!ownerDoc) return;
+    const selectedImages = selectedImageCache.get(item.id) || [];
+    if (selectedImages.length) {
+      previewStrip.innerHTML = "";
+      for (const [index, imageUrl] of selectedImages.entries()) {
+        const thumbItem = createElement(ownerDoc, "div", "llm-preview-item");
+        const thumb = createElement(ownerDoc, "img", "llm-preview-img", {
+          alt: "Selected screenshot",
+        }) as HTMLImageElement;
+        thumb.src = imageUrl;
+        const removeOneBtn = createElement(
+          ownerDoc,
+          "button",
+          "llm-preview-remove-one",
+          {
+            type: "button",
+            textContent: "×",
+            title: `Remove screenshot ${index + 1}`,
+          },
+        );
+        removeOneBtn.addEventListener("click", (e: Event) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (!item) return;
+          const currentImages = selectedImageCache.get(item.id) || [];
+          if (index < 0 || index >= currentImages.length) return;
+          const nextImages = currentImages.filter((_, i) => i !== index);
+          if (nextImages.length) {
+            selectedImageCache.set(item.id, nextImages);
+          } else {
+            selectedImageCache.delete(item.id);
+          }
+          updateImagePreview();
+          if (status) {
+            setStatus(
+              status,
+              `Screenshot removed (${nextImages.length}/${MAX_SELECTED_IMAGES})`,
+              "ready",
+            );
+          }
+        });
+        thumbItem.append(thumb, removeOneBtn);
+        previewStrip.appendChild(thumbItem);
+      }
+      previewMeta.textContent = `${selectedImages.length}/${MAX_SELECTED_IMAGES} screenshot${selectedImages.length > 1 ? "s" : ""}`;
       imagePreview.style.display = "flex";
-      screenshotBtn.disabled = true;
-      screenshotBtn.textContent = "📷 Screenshot Selected";
+      screenshotBtn.disabled = selectedImages.length >= MAX_SELECTED_IMAGES;
+      screenshotBtn.textContent =
+        selectedImages.length >= MAX_SELECTED_IMAGES
+          ? `📷 Max ${MAX_SELECTED_IMAGES} screenshots`
+          : `📷 Add Screenshot (${selectedImages.length}/${MAX_SELECTED_IMAGES})`;
     } else {
       imagePreview.style.display = "none";
-      previewImg.src = "";
+      previewStrip.innerHTML = "";
+      previewMeta.textContent = "0 images selected";
       screenshotBtn.disabled = false;
       screenshotBtn.textContent = "📷 Select Screenshot";
     }
@@ -3743,8 +3798,11 @@ function setupHandlers(body: Element, item?: Zotero.Item | null) {
       ? `[Selected text included]\n${text || "Please explain this selected text."}`
       : text;
     inputBox.value = "";
-    const image = selectedImageCache.get(item.id);
-    // Clear the selected image after sending
+    const images = (selectedImageCache.get(item.id) || []).slice(
+      0,
+      MAX_SELECTED_IMAGES,
+    );
+    // Clear selected images after sending
     selectedImageCache.delete(item.id);
     updateImagePreview();
     if (selectedText) {
@@ -3758,7 +3816,7 @@ function setupHandlers(body: Element, item?: Zotero.Item | null) {
       body,
       item,
       composedQuestion,
-      image,
+      images,
       selectedProfile?.model,
       selectedProfile?.apiBase,
       selectedProfile?.apiKey,
@@ -3923,6 +3981,18 @@ function setupHandlers(body: Element, item?: Zotero.Item | null) {
       );
 
       const status = body.querySelector("#llm-status") as HTMLElement | null;
+      const currentImages = selectedImageCache.get(item.id) || [];
+      if (currentImages.length >= MAX_SELECTED_IMAGES) {
+        if (status) {
+          setStatus(
+            status,
+            `Maximum ${MAX_SELECTED_IMAGES} screenshots allowed`,
+            "error",
+          );
+        }
+        updateImagePreview();
+        return;
+      }
       if (status) setStatus(status, "Select a region...", "sending");
 
       try {
@@ -3934,9 +4004,20 @@ function setupHandlers(body: Element, item?: Zotero.Item | null) {
         );
         if (dataUrl) {
           const optimized = await optimizeImageDataUrl(mainWindow, dataUrl);
-          selectedImageCache.set(item.id, optimized);
+          const existingImages = selectedImageCache.get(item.id) || [];
+          const nextImages = [...existingImages, optimized].slice(
+            0,
+            MAX_SELECTED_IMAGES,
+          );
+          selectedImageCache.set(item.id, nextImages);
           updateImagePreview();
-          if (status) setStatus(status, "Screenshot captured", "ready");
+          if (status) {
+            setStatus(
+              status,
+              `Screenshot captured (${nextImages.length}/${MAX_SELECTED_IMAGES})`,
+              "ready",
+            );
+          }
         } else {
           if (status) setStatus(status, "Selection cancelled", "ready");
         }
@@ -4136,7 +4217,7 @@ function setupHandlers(body: Element, item?: Zotero.Item | null) {
       selectedImageCache.delete(item.id);
       updateImagePreview();
       const status = body.querySelector("#llm-status") as HTMLElement | null;
-      if (status) setStatus(status, "Image removed", "ready");
+      if (status) setStatus(status, "Screenshots cleared", "ready");
     });
   }
 
@@ -4200,7 +4281,7 @@ async function sendQuestion(
   body: Element,
   item: Zotero.Item,
   question: string,
-  image?: string,
+  images?: string[],
   model?: string,
   apiBase?: string,
   apiKey?: string,
@@ -4251,8 +4332,9 @@ async function sendQuestion(
   const effectiveAdvanced =
     advanced || getAdvancedModelParamsForProfile(fallbackProfile.key);
   const shownQuestion = displayQuestion || question;
-  const userMessageText = image
-    ? `${shownQuestion}\n[📷 Image attached]`
+  const imageCount = Array.isArray(images) ? images.filter(Boolean).length : 0;
+  const userMessageText = imageCount
+    ? `${shownQuestion}\n[📷 ${imageCount} image${imageCount > 1 ? "s" : ""} attached]`
     : shownQuestion;
   const userMessage: Message = {
     role: "user",
@@ -4313,7 +4395,7 @@ async function sendQuestion(
       pdfContext = await buildContext(
         pdfTextCache.get(contextSource.contextItem.id),
         question,
-        Boolean(image),
+        imageCount > 0,
         { apiBase: effectiveApiBase, apiKey: effectiveApiKey },
       );
     }
@@ -4343,7 +4425,7 @@ async function sendQuestion(
         context: pdfContext,
         history: llmHistory,
         signal: currentAbortController?.signal,
-        image: image,
+        images: images,
         model: effectiveModel,
         apiBase: effectiveApiBase,
         apiKey: effectiveApiKey,
