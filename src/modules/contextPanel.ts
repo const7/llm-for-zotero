@@ -11,6 +11,8 @@ import {
   callEmbeddings,
   callLLMStream,
   ChatMessage,
+  getGeminiReasoningProfile,
+  getOpenAIReasoningProfile,
   ReasoningConfig as LLMReasoningConfig,
   ReasoningEvent,
   ReasoningLevel as LLMReasoningLevel,
@@ -94,6 +96,7 @@ type ReasoningLevelSelection = "none" | LLMReasoningLevel;
 type ReasoningOption = {
   level: LLMReasoningLevel;
   enabled: boolean;
+  label?: string;
 };
 type ActionDropdownSpec = {
   slotId: string;
@@ -375,31 +378,62 @@ function getReasoningOptions(
   modelName: string,
 ): ReasoningOption[] {
   if (provider === "openai") {
-    return [
-      { level: "default", enabled: true },
-      { level: "medium", enabled: true },
-      { level: "high", enabled: true },
-      { level: "xhigh", enabled: true },
+    const profile = getOpenAIReasoningProfile(modelName);
+    const options: ReasoningOption[] = [
+      { level: "default", enabled: true, label: profile.defaultEffort },
     ];
+    const seenLabels = new Set<string>(
+      options.map((entry) => entry.label || "").filter(Boolean),
+    );
+    for (const effort of profile.supportedEfforts) {
+      if (effort === "none") continue;
+      if (seenLabels.has(effort)) continue;
+      seenLabels.add(effort);
+      options.push({
+        level: effort as LLMReasoningLevel,
+        enabled: true,
+        label: effort,
+      });
+    }
+    return options;
   }
   if (provider === "gemini") {
-    const name = modelName.trim().toLowerCase();
+    const profile = getGeminiReasoningProfile(modelName);
+    const normalizedModel = modelName.trim().toLowerCase();
     const isGemini3ProFamily =
-      name === "gemini-3-pro" ||
-      name === "gemini-3-pro-preview" ||
-      name.startsWith("gemini-3-pro-preview-") ||
-      name.startsWith("gemini-3-pro-");
-    return [
-      { level: "low", enabled: isGemini3ProFamily },
-      { level: "medium", enabled: !isGemini3ProFamily },
-      { level: "high", enabled: isGemini3ProFamily },
-    ];
+      normalizedModel === "gemini-3-pro" ||
+      normalizedModel === "gemini-3-pro-preview" ||
+      normalizedModel.startsWith("gemini-3-pro-preview-") ||
+      normalizedModel.startsWith("gemini-3-pro-");
+    const options: ReasoningOption[] = isGemini3ProFamily
+      ? []
+      : [
+          {
+            level: "default",
+            enabled: true,
+            label: `${profile.defaultValue}`,
+          },
+        ];
+    const seenLabels = new Set<string>(
+      options.map((entry) => entry.label || "").filter(Boolean),
+    );
+    for (const option of profile.options) {
+      const label = `${option.value}`;
+      if (seenLabels.has(label)) continue;
+      seenLabels.add(label);
+      options.push({
+        level: option.level,
+        enabled: true,
+        label,
+      });
+    }
+    return options;
   }
   if (provider === "deepseek") {
-    return [{ level: "default", enabled: true }];
+    return [{ level: "default", enabled: true, label: "enabled" }];
   }
   if (provider === "kimi") {
-    return [{ level: "default", enabled: true }];
+    return [{ level: "default", enabled: true, label: "model" }];
   }
   return [];
 }
@@ -3985,7 +4019,13 @@ function setupHandlers(body: Element, item?: Zotero.Item | null) {
     modelName: string,
     options: ReasoningOption[],
   ): string => {
-    if (level !== "default") return level;
+    const option = options.find((entry) => entry.level === level);
+    if (option?.label) {
+      return option.label;
+    }
+    if (level !== "default") {
+      return level;
+    }
     // Align UI wording with provider payload semantics in llmClient.ts:
     // - DeepSeek: thinking.type = "enabled"
     // - Kimi: reasoning is model-native (no separate level payload)
@@ -3998,7 +4038,9 @@ function setupHandlers(body: Element, item?: Zotero.Item | null) {
     // Keep "default" for providers with explicit level controls.
     // (OpenAI reasoning_effort / Responses reasoning.effort, Gemini thinking_level/budget)
     void modelName;
-    void options;
+    if (provider === "openai") {
+      return getOpenAIReasoningProfile(modelName).defaultEffort;
+    }
     return "default";
   };
 

@@ -39,10 +39,38 @@ export type ChatMessage = {
 };
 
 export type ReasoningProvider = "openai" | "gemini" | "deepseek" | "kimi";
-export type ReasoningLevel = "default" | "low" | "medium" | "high" | "xhigh";
+export type ReasoningLevel =
+  | "default"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh";
 export type ReasoningConfig = {
   provider: ReasoningProvider;
   level: ReasoningLevel;
+};
+export type OpenAIReasoningEffort =
+  | "none"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh";
+export type OpenAIReasoningProfile = {
+  defaultEffort: OpenAIReasoningEffort;
+  supportedEfforts: OpenAIReasoningEffort[];
+};
+export type GeminiThinkingParam = "thinking_level" | "thinking_budget";
+export type GeminiThinkingValue = "low" | "medium" | "high" | number;
+export type GeminiReasoningOption = {
+  level: "low" | "medium" | "high";
+  value: GeminiThinkingValue;
+};
+export type GeminiReasoningProfile = {
+  param: GeminiThinkingParam;
+  defaultValue: GeminiThinkingValue;
+  options: GeminiReasoningOption[];
 };
 
 export type ChatParams = {
@@ -403,6 +431,148 @@ function buildResponsesTokenParam(maxTokens: number) {
   return { max_output_tokens: maxTokens };
 }
 
+export function getOpenAIReasoningProfile(
+  modelName?: string,
+): OpenAIReasoningProfile {
+  const normalizedModel = (modelName || "").trim().toLowerCase();
+
+  // GPT-5.1/5.2 defaults to no added effort unless explicitly set.
+  if (/^gpt-5\.(1|2)(\b|[.-])/.test(normalizedModel)) {
+    return {
+      defaultEffort: "none",
+      supportedEfforts: ["none", "low", "medium", "high"],
+    };
+  }
+
+  // Earlier GPT-5 variants expose a broader effort scale.
+  if (/^gpt-5(\b|[.-])/.test(normalizedModel)) {
+    return {
+      defaultEffort: "medium",
+      supportedEfforts: ["minimal", "low", "medium", "high"],
+    };
+  }
+
+  // Conservative fallback for unknown OpenAI-compatible models.
+  return {
+    defaultEffort: "medium",
+    supportedEfforts: ["medium", "high", "xhigh"],
+  };
+}
+
+function isGemini3ProFamilyModel(normalizedModel: string): boolean {
+  return (
+    normalizedModel === "gemini-3-pro" ||
+    normalizedModel === "gemini-3-pro-preview" ||
+    normalizedModel.startsWith("gemini-3-pro-preview-") ||
+    normalizedModel.startsWith("gemini-3-pro-")
+  );
+}
+
+export function getGeminiReasoningProfile(
+  modelName?: string,
+): GeminiReasoningProfile {
+  const normalizedModel = (modelName || "").trim().toLowerCase();
+  const isGemini25 = normalizedModel.startsWith("gemini-2.5");
+  const isGemini3ProFamily = isGemini3ProFamilyModel(normalizedModel);
+
+  if (isGemini25) {
+    return {
+      param: "thinking_budget",
+      defaultValue: 8192,
+      options: [
+        { level: "low", value: 1024 },
+        { level: "medium", value: 8192 },
+        { level: "high", value: 24576 },
+      ],
+    };
+  }
+
+  if (isGemini3ProFamily) {
+    return {
+      param: "thinking_level",
+      defaultValue: "high",
+      options: [
+        { level: "low", value: "low" },
+        { level: "high", value: "high" },
+      ],
+    };
+  }
+
+  return {
+    param: "thinking_level",
+    defaultValue: "medium",
+    options: [{ level: "medium", value: "medium" }],
+  };
+}
+
+function resolveOpenAIReasoningEffort(
+  level: ReasoningLevel,
+  modelName?: string,
+): OpenAIReasoningEffort | null {
+  if (level === "default") return null;
+
+  const profile = getOpenAIReasoningProfile(modelName);
+  const requested: OpenAIReasoningEffort = level;
+  if (profile.supportedEfforts.includes(requested)) {
+    return requested;
+  }
+
+  // Backward compatibility for legacy UI labels.
+  if (requested === "xhigh" && profile.supportedEfforts.includes("high")) {
+    return "high";
+  }
+  if (requested === "minimal" && profile.supportedEfforts.includes("low")) {
+    return "low";
+  }
+
+  const fallbackOrder: OpenAIReasoningEffort[] = [
+    "medium",
+    "high",
+    "low",
+    "minimal",
+    "xhigh",
+  ];
+  for (const candidate of fallbackOrder) {
+    if (profile.supportedEfforts.includes(candidate)) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
+function resolveGeminiReasoningOption(
+  level: ReasoningLevel,
+  profile: GeminiReasoningProfile,
+): GeminiReasoningOption {
+  const options = profile.options;
+  const levelMap = new Map(options.map((option) => [option.level, option]));
+  const requestedLevel =
+    level === "default"
+      ? null
+      : level === "xhigh"
+        ? "high"
+        : level === "minimal"
+          ? "low"
+          : level;
+
+  if (
+    requestedLevel === "low" ||
+    requestedLevel === "medium" ||
+    requestedLevel === "high"
+  ) {
+    const matched = levelMap.get(requestedLevel);
+    if (matched) return matched;
+  }
+
+  const byDefaultValue = options.find(
+    (option) => option.value === profile.defaultValue,
+  );
+  if (byDefaultValue) return byDefaultValue;
+
+  return options[0] || { level: "medium", value: "medium" };
+}
+
 function normalizeTemperature(temperature?: number): number {
   if (!Number.isFinite(temperature)) return DEFAULT_TEMPERATURE;
   return Math.min(2, Math.max(0, Number(temperature)));
@@ -488,62 +658,49 @@ function buildReasoningPayload(
   }
 
   if (reasoning.provider === "openai") {
-    const effort = reasoning.level === "default" ? "medium" : reasoning.level;
+    const effort = resolveOpenAIReasoningEffort(reasoning.level, modelName);
     if (useResponses) {
+      const responseReasoning: Record<string, unknown> = {
+        summary: "detailed",
+      };
+      if (effort) {
+        responseReasoning.effort = effort;
+      }
       return {
         extra: {
-          reasoning: {
-            effort,
-            summary: "detailed",
-          },
+          reasoning: responseReasoning,
         },
-        // GPT-5 reasoning modes may reject temperature when effort is enabled.
+        // GPT-5 families may reject temperature when reasoning is configured.
         omitTemperature: true,
       };
     }
     return {
-      extra: {
-        reasoning_effort: effort,
-      },
+      extra: effort ? { reasoning_effort: effort } : {},
       omitTemperature: true,
     };
   }
 
   if (reasoning.provider === "gemini") {
-    let effort: "low" | "medium" | "high" =
-      reasoning.level === "default"
-        ? "medium"
-        : reasoning.level === "xhigh"
-          ? "high"
-          : reasoning.level === "low" ||
-              reasoning.level === "medium" ||
-              reasoning.level === "high"
-            ? reasoning.level
-            : "medium";
-    const normalizedModel = (modelName || "").trim().toLowerCase();
-    const isGemini3ProFamily =
-      normalizedModel === "gemini-3-pro" ||
-      normalizedModel === "gemini-3-pro-preview" ||
-      normalizedModel.startsWith("gemini-3-pro-preview-") ||
-      normalizedModel.startsWith("gemini-3-pro-");
-    const isGemini25 = normalizedModel.startsWith("gemini-2.5");
+    const profile = getGeminiReasoningProfile(modelName);
+    const resolvedOption = resolveGeminiReasoningOption(
+      reasoning.level,
+      profile,
+    );
 
     // Keep request valid if a stale/unsupported level is selected.
-    if (isGemini3ProFamily && effort === "medium") {
-      effort = "high";
-    }
-    if (!isGemini3ProFamily && (effort === "low" || effort === "high")) {
-      effort = "medium";
-    }
-
     const thinkingConfig: Record<string, unknown> = {
       include_thoughts: true,
     };
-    if (isGemini25) {
+    if (profile.param === "thinking_budget") {
       thinkingConfig.thinking_budget =
-        effort === "low" ? 1024 : effort === "high" ? 24576 : 8192;
+        typeof resolvedOption.value === "number" ? resolvedOption.value : 8192;
     } else {
-      thinkingConfig.thinking_level = effort;
+      thinkingConfig.thinking_level =
+        resolvedOption.value === "low" ||
+        resolvedOption.value === "medium" ||
+        resolvedOption.value === "high"
+          ? resolvedOption.value
+          : "medium";
     }
 
     return {
