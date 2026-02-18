@@ -147,28 +147,85 @@ export function registerReaderSelectionTracking() {
           selectedTextPreviewExpandedCache.set(key, false);
         }
         try {
-          const mainWin = Zotero.getMainWindow();
-          const panelRoot = mainWin?.document.querySelector(
-            "#llm-main",
-          ) as HTMLDivElement | null;
-          if (!panelRoot) return;
+          const docs = new Set<Document>();
+          const pushDoc = (doc?: Document | null) => {
+            if (doc) docs.add(doc);
+          };
+          pushDoc(event.doc);
+          pushDoc(event.doc.defaultView?.top?.document || null);
+          try {
+            pushDoc(Zotero.getMainWindow()?.document || null);
+          } catch (_err) {
+            void _err;
+          }
+          try {
+            const wins = Zotero.getMainWindows?.() || [];
+            for (const win of wins) {
+              pushDoc(win?.document || null);
+            }
+          } catch (_err) {
+            void _err;
+          }
 
-          const panelItemId = Number(panelRoot.dataset.itemId || 0);
-          if (!Number.isFinite(panelItemId) || panelItemId <= 0) return;
-          if (!keys.includes(panelItemId)) return;
+          const panelRoots: HTMLDivElement[] = [];
+          const seenRoots = new Set<Element>();
+          for (const doc of docs) {
+            const roots = Array.from(
+              doc.querySelectorAll("#llm-main"),
+            ) as HTMLDivElement[];
+            for (const root of roots) {
+              if (seenRoots.has(root)) continue;
+              seenRoots.add(root);
+              panelRoots.push(root);
+            }
+          }
+          if (!panelRoots.length) return;
 
-          const panelBody = panelRoot.parentElement || panelRoot;
-          applySelectedTextPreview(panelBody, panelItemId);
+          const getPanelItemId = (root: HTMLDivElement): number | null => {
+            const parsed = Number(root.dataset.itemId || 0);
+            return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+          };
+          const isVisible = (root: HTMLElement) =>
+            root.getClientRects().length > 0;
 
-          const status = panelBody.querySelector(
-            "#llm-status",
-          ) as HTMLElement | null;
-          if (status) setStatus(status, "Selected text included", "ready");
+          const keyedRoots = panelRoots.filter((root) => {
+            const panelItemId = getPanelItemId(root);
+            return panelItemId !== null && keys.includes(panelItemId);
+          });
+          const visibleKeyedRoots = keyedRoots.filter((root) => isVisible(root));
+          const visibleRoots = panelRoots.filter((root) => isVisible(root));
+          const targetRoots =
+            visibleKeyedRoots.length > 0
+              ? visibleKeyedRoots
+              : keyedRoots.length > 0
+                ? keyedRoots
+                : visibleRoots.length > 0
+                  ? visibleRoots
+                  : panelRoots;
 
-          const inputEl = panelBody.querySelector(
-            "#llm-input",
-          ) as HTMLTextAreaElement | null;
-          inputEl?.focus({ preventScroll: true });
+          let focused = false;
+          for (const panelRoot of targetRoots) {
+            const panelItemId = getPanelItemId(panelRoot);
+            if (panelItemId === null) continue;
+
+            selectedTextCache.set(panelItemId, selectedText);
+            selectedTextPreviewExpandedCache.set(panelItemId, false);
+
+            const panelBody = panelRoot.parentElement || panelRoot;
+            applySelectedTextPreview(panelBody, panelItemId);
+
+            if (focused) continue;
+            const status = panelBody.querySelector(
+              "#llm-status",
+            ) as HTMLElement | null;
+            if (status) setStatus(status, "Selected text included", "ready");
+
+            const inputEl = panelBody.querySelector(
+              "#llm-input",
+            ) as HTMLTextAreaElement | null;
+            inputEl?.focus({ preventScroll: true });
+            focused = true;
+          }
         } catch (err) {
           ztoolkit.log("LLM: Add Text popup action failed", err);
         }
