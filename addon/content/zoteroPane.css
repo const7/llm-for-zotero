@@ -1141,6 +1141,15 @@
   box-shadow: none;
 }
 
+.llm-upload-file-btn {
+  font-size: calc(var(--llm-action-font-size) + 5px);
+  font-weight: 500;
+  line-height: 1;
+  padding-left: 2px;
+  padding-right: 2px;
+  min-width: 12px;
+}
+
 .llm-select-text-btn.llm-action-icon-only,
 .llm-screenshot-btn.llm-action-icon-only,
 .llm-upload-file-btn.llm-action-icon-only {
@@ -1150,6 +1159,14 @@
   font-family:
     "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
   font-size: var(--llm-action-icon-font-size);
+}
+
+.llm-upload-file-btn.llm-action-icon-only {
+  width: auto;
+  min-width: 12px;
+  padding: 0 2px;
+  font-family: inherit;
+  font-size: calc(var(--llm-action-font-size) + 5px);
 }
 
 .llm-select-text-btn:hover:not(:disabled),

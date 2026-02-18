@@ -444,9 +444,9 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
   });
 
   actionsLeft.append(
+    uploadSlot,
     selectTextSlot,
     screenshotSlot,
-    uploadSlot,
     modelDropdown,
     reasoningDropdown,
   );
