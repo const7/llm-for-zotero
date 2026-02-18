@@ -187,45 +187,59 @@ export function registerReaderSelectionTracking() {
           };
           const isVisible = (root: HTMLElement) =>
             root.getClientRects().length > 0;
-
-          const keyedRoots = panelRoots.filter((root) => {
-            const panelItemId = getPanelItemId(root);
-            return panelItemId !== null && keys.includes(panelItemId);
-          });
-          const visibleKeyedRoots = keyedRoots.filter((root) => isVisible(root));
-          const visibleRoots = panelRoots.filter((root) => isVisible(root));
-          const targetRoots =
-            visibleKeyedRoots.length > 0
-              ? visibleKeyedRoots
-              : keyedRoots.length > 0
-                ? keyedRoots
-                : visibleRoots.length > 0
-                  ? visibleRoots
-                  : panelRoots;
-
-          let focused = false;
-          for (const panelRoot of targetRoots) {
-            const panelItemId = getPanelItemId(panelRoot);
-            if (panelItemId === null) continue;
-
-            selectedTextCache.set(panelItemId, selectedText);
-            selectedTextPreviewExpandedCache.set(panelItemId, false);
-
-            const panelBody = panelRoot.parentElement || panelRoot;
-            applySelectedTextPreview(panelBody, panelItemId);
-
-            if (focused) continue;
-            const status = panelBody.querySelector(
-              "#llm-status",
-            ) as HTMLElement | null;
-            if (status) setStatus(status, "Selected text included", "ready");
-
-            const inputEl = panelBody.querySelector(
-              "#llm-input",
-            ) as HTMLTextAreaElement | null;
-            inputEl?.focus({ preventScroll: true });
-            focused = true;
+          const popupTopDoc = event.doc.defaultView?.top?.document || null;
+          const rootStates = panelRoots
+            .map((root) => ({
+              root,
+              panelItemId: getPanelItemId(root),
+              keyed: false,
+              visible: isVisible(root),
+              sameDoc: popupTopDoc ? root.ownerDocument === popupTopDoc : false,
+            }))
+            .filter((state) => state.panelItemId !== null);
+          if (!rootStates.length) return;
+          for (const state of rootStates) {
+            state.keyed = keys.includes(state.panelItemId as number);
           }
+
+          // Deterministic single-target ranking:
+          // 1) keyed + visible, 2) keyed, 3) same popup top-doc + visible,
+          // 4) visible, 5) any remaining.
+          const scoreState = (state: (typeof rootStates)[number]) => {
+            if (state.keyed && state.visible) return 5;
+            if (state.keyed) return 4;
+            if (state.sameDoc && state.visible) return 3;
+            if (state.visible) return 2;
+            return 1;
+          };
+          let bestState = rootStates[0];
+          let bestScore = scoreState(bestState);
+          for (const state of rootStates.slice(1)) {
+            const score = scoreState(state);
+            if (score > bestScore) {
+              bestState = state;
+              bestScore = score;
+            }
+          }
+
+          const panelRoot = bestState.root;
+          const panelItemId = bestState.panelItemId as number;
+
+          selectedTextCache.set(panelItemId, selectedText);
+          selectedTextPreviewExpandedCache.set(panelItemId, false);
+
+          const panelBody = panelRoot.parentElement || panelRoot;
+          applySelectedTextPreview(panelBody, panelItemId);
+
+          const status = panelBody.querySelector(
+            "#llm-status",
+          ) as HTMLElement | null;
+          if (status) setStatus(status, "Selected text included", "ready");
+
+          const inputEl = panelBody.querySelector(
+            "#llm-input",
+          ) as HTMLTextAreaElement | null;
+          inputEl?.focus({ preventScroll: true });
         } catch (err) {
           ztoolkit.log("LLM: Add Text popup action failed", err);
         }
