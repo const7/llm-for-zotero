@@ -6,6 +6,8 @@ export interface Message {
   timestamp: number;
   selectedText?: string;
   selectedTextExpanded?: boolean;
+  selectedTexts?: string[];
+  selectedTextExpandedIndex?: number;
   screenshotImages?: string[];
   attachments?: ChatAttachment[];
   attachmentsExpanded?: boolean;

@@ -32,8 +32,6 @@ import {
   selectedImagePreviewExpandedCache,
   selectedImagePreviewActiveIndexCache,
   selectedFilePreviewExpandedCache,
-  selectedTextCache,
-  selectedTextPreviewExpandedCache,
   setCancelledRequestId,
   currentAbortController,
   panelFontScalePercent,
@@ -48,7 +46,7 @@ import {
   sanitizeText,
   setStatus,
   clampNumber,
-  buildQuestionWithSelectedText,
+  buildQuestionWithSelectedTexts,
   buildModelPromptWithFileContext,
   resolvePromptText,
   getSelectedTextWithinBubble,
@@ -81,8 +79,13 @@ import {
 } from "./chat";
 import {
   getActiveReaderSelectionText,
+  addSelectedTextContext,
   applySelectedTextPreview,
+  getSelectedTextContexts,
+  getSelectedTextExpandedIndex,
   includeSelectedTextFromReader,
+  setSelectedTextContexts,
+  setSelectedTextExpandedIndex,
 } from "./contextResolution";
 import { captureScreenshotSelection, optimizeImageDataUrl } from "./screenshot";
 import {
@@ -164,15 +167,9 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
   const imagePreview = body.querySelector(
     "#llm-image-preview",
   ) as HTMLDivElement | null;
-  const selectedContextPanel = body.querySelector(
-    "#llm-selected-context",
+  const selectedContextList = body.querySelector(
+    "#llm-selected-context-list",
   ) as HTMLDivElement | null;
-  const selectedContextClear = body.querySelector(
-    "#llm-selected-context-clear",
-  ) as HTMLButtonElement | null;
-  const selectedContextMeta = body.querySelector(
-    "#llm-selected-context-meta",
-  ) as HTMLButtonElement | null;
   const previewStrip = body.querySelector(
     "#llm-image-preview-strip",
   ) as HTMLDivElement | null;
@@ -478,14 +475,17 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
       if (status) setStatus(status, "No assistant text selected", "error");
       return;
     }
-    selectedTextCache.set(item.id, selected);
-    selectedTextPreviewExpandedCache.set(item.id, false);
+    let added = false;
     runWithChatScrollGuard(() => {
-      applySelectedTextPreview(body, item.id);
+      added = addSelectedTextContext(body, item.id, selected, {
+        successStatusText: "Selected response text included",
+        focusInput: false,
+      });
     });
     hideSelectionPopup();
-    if (status) setStatus(status, "Selected response text included", "ready");
-    inputBox.focus({ preventScroll: true });
+    if (added) {
+      inputBox.focus({ preventScroll: true });
+    }
   };
 
   const onPanelMouseUp = (e: Event) => {
@@ -716,8 +716,8 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
   };
 
   const clearSelectedTextState = (itemId: number) => {
-    selectedTextCache.delete(itemId);
-    selectedTextPreviewExpandedCache.delete(itemId);
+    setSelectedTextContexts(itemId, []);
+    setSelectedTextExpandedIndex(itemId, null);
   };
   const runWithChatScrollGuard = (fn: () => void) => {
     withScrollGuard(chatBox, conversationKey, fn);
@@ -2164,23 +2164,24 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
   const doSend = async () => {
     if (!item) return;
     const text = inputBox.value.trim();
-    const selectedText = selectedTextCache.get(item.id) || "";
+    const selectedTexts = getSelectedTextContexts(item.id);
+    const primarySelectedText = selectedTexts[0] || "";
     const selectedFiles = selectedFileAttachmentCache.get(item.id) || [];
-    if (!text && !selectedText && !selectedFiles.length) return;
+    if (!text && !primarySelectedText && !selectedFiles.length) return;
     const promptText = resolvePromptText(
       text,
-      selectedText,
+      primarySelectedText,
       selectedFiles.length > 0,
     );
     if (!promptText) return;
-    const composedQuestionBase = selectedText
-      ? buildQuestionWithSelectedText(selectedText, promptText)
+    const composedQuestionBase = primarySelectedText
+      ? buildQuestionWithSelectedTexts(selectedTexts, promptText)
       : promptText;
     const composedQuestion = buildModelPromptWithFileContext(
       composedQuestionBase,
       selectedFiles,
     );
-    const displayQuestion = selectedText ? promptText : text || promptText;
+    const displayQuestion = primarySelectedText ? promptText : text || promptText;
     inputBox.value = "";
     const selectedProfile = getSelectedProfile();
     const activeModelName = (
@@ -2202,7 +2203,7 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
       updateFilePreviewPreservingScroll();
     }
     updateImagePreviewPreservingScroll();
-    if (selectedText) {
+    if (primarySelectedText) {
       clearSelectedTextState(item.id);
       updateSelectedTextPreviewPreservingScroll();
     }
@@ -2219,7 +2220,7 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
       selectedReasoning,
       advancedParams,
       displayQuestion,
-      selectedText || undefined,
+      selectedTexts.length ? selectedTexts : undefined,
       selectedFiles.length ? selectedFiles : undefined,
     );
   };
@@ -2757,7 +2758,7 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
       selectedImagePreviewExpandedCache.set(item.id, nextExpanded);
       if (nextExpanded) {
         selectedImagePreviewActiveIndexCache.set(item.id, 0);
-        selectedTextPreviewExpandedCache.set(item.id, false);
+        setSelectedTextExpandedIndex(item.id, null);
         selectedFilePreviewExpandedCache.set(item.id, false);
       }
       updateFilePreviewPreservingScroll();
@@ -2788,7 +2789,7 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
       const nextExpanded = !expanded;
       selectedFilePreviewExpandedCache.set(item.id, nextExpanded);
       if (nextExpanded) {
-        selectedTextPreviewExpandedCache.set(item.id, false);
+        setSelectedTextExpandedIndex(item.id, null);
         selectedImagePreviewExpandedCache.set(item.id, false);
       }
       updateSelectedTextPreview();
@@ -2815,28 +2816,52 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
     });
   }
 
-  if (selectedContextClear) {
-    selectedContextClear.addEventListener("click", (e: Event) => {
-      e.preventDefault();
-      e.stopPropagation();
+  if (selectedContextList) {
+    selectedContextList.addEventListener("click", (e: Event) => {
       if (!item) return;
-      clearSelectedTextState(item.id);
-      updateSelectedTextPreviewPreservingScroll();
-      if (status) setStatus(status, "Selected text removed", "ready");
-    });
-  }
+      const target = e.target as Element | null;
+      if (!target) return;
 
-  if (selectedContextMeta) {
-    selectedContextMeta.addEventListener("click", (e: Event) => {
+      const clearBtn = target.closest(
+        ".llm-selected-context-clear",
+      ) as HTMLButtonElement | null;
+      if (clearBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        const index = Number.parseInt(clearBtn.dataset.contextIndex || "", 10);
+        const selectedTexts = getSelectedTextContexts(item.id);
+        if (
+          !Number.isFinite(index) ||
+          index < 0 ||
+          index >= selectedTexts.length
+        ) {
+          return;
+        }
+        const nextTexts = selectedTexts.filter((_, i) => i !== index);
+        setSelectedTextContexts(item.id, nextTexts);
+        setSelectedTextExpandedIndex(item.id, null);
+        updateSelectedTextPreviewPreservingScroll();
+        if (status) setStatus(status, "Selected text removed", "ready");
+        return;
+      }
+
+      const metaBtn = target.closest(
+        ".llm-selected-context-meta",
+      ) as HTMLButtonElement | null;
+      if (!metaBtn) return;
       e.preventDefault();
       e.stopPropagation();
-      if (!item) return;
-      const selectedText = selectedTextCache.get(item.id) || "";
-      if (!selectedText) return;
-      const expanded = selectedTextPreviewExpandedCache.get(item.id) === true;
-      const nextExpanded = !expanded;
-      selectedTextPreviewExpandedCache.set(item.id, nextExpanded);
-      if (nextExpanded) {
+      const index = Number.parseInt(metaBtn.dataset.contextIndex || "", 10);
+      const selectedTexts = getSelectedTextContexts(item.id);
+      if (!Number.isFinite(index) || index < 0 || index >= selectedTexts.length)
+        return;
+      const expandedIndex = getSelectedTextExpandedIndex(
+        item.id,
+        selectedTexts.length,
+      );
+      const nextExpandedIndex = expandedIndex === index ? null : index;
+      setSelectedTextExpandedIndex(item.id, nextExpandedIndex);
+      if (nextExpandedIndex !== null) {
         selectedImagePreviewExpandedCache.set(item.id, false);
         selectedFilePreviewExpandedCache.set(item.id, false);
       }
@@ -2861,7 +2886,7 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
     if (!item) return;
     const target = e.target as Node | null;
     const clickedInsideTextPanel = Boolean(
-      selectedContextPanel && target && selectedContextPanel.contains(target),
+      selectedContextList && target && selectedContextList.contains(target),
     );
     const clickedInsideFigurePanel = Boolean(
       imagePreview && target && imagePreview.contains(target),
@@ -2876,13 +2901,15 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
     )
       return;
 
-    const textPinned = selectedTextPreviewExpandedCache.get(item.id) === true;
+    const textPinned =
+      getSelectedTextExpandedIndex(item.id, getSelectedTextContexts(item.id).length) >=
+      0;
     const figurePinned =
       selectedImagePreviewExpandedCache.get(item.id) === true;
     const filePinned = selectedFilePreviewExpandedCache.get(item.id) === true;
     if (!textPinned && !figurePinned && !filePinned) return;
 
-    selectedTextPreviewExpandedCache.set(item.id, false);
+    setSelectedTextExpandedIndex(item.id, null);
     selectedImagePreviewExpandedCache.set(item.id, false);
     selectedFilePreviewExpandedCache.set(item.id, false);
     updateFilePreviewPreservingScroll();

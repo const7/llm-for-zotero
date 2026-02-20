@@ -206,72 +206,16 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
   const contextPreviews = createElement(doc, "div", "llm-context-previews", {
     id: "llm-context-previews",
   });
-  const selectedContext = createElement(doc, "div", "llm-selected-context", {
-    id: "llm-selected-context",
-  });
-  selectedContext.style.display = "none";
-  const selectedContextHeader = createElement(
+  const selectedContextList = createElement(
     doc,
     "div",
-    "llm-image-preview-header llm-selected-context-header",
+    "llm-selected-context-list",
     {
-      id: "llm-selected-context-header",
+      id: "llm-selected-context-list",
     },
   );
-  const selectedContextMeta = createElement(
-    doc,
-    "button",
-    "llm-image-preview-meta llm-selected-context-meta",
-    {
-      id: "llm-selected-context-meta",
-      type: "button",
-      textContent: "Text Context",
-      title: "Expand text context",
-    },
-  );
-  const selectedContextClear = createElement(
-    doc,
-    "button",
-    "llm-remove-img-btn llm-selected-context-clear",
-    {
-      id: "llm-selected-context-clear",
-      type: "button",
-      textContent: "×",
-      title: "Clear selected context",
-    },
-  );
-  selectedContextClear.setAttribute("aria-label", "Clear selected context");
-  selectedContextHeader.append(selectedContextMeta, selectedContextClear);
-
-  const selectedContextExpanded = createElement(
-    doc,
-    "div",
-    "llm-image-preview-expanded llm-selected-context-expanded",
-    {
-      id: "llm-selected-context-expanded",
-    },
-  );
-  const selectedContextText = createElement(
-    doc,
-    "div",
-    "llm-selected-context-text",
-    {
-      id: "llm-selected-context-text",
-    },
-  );
-  const selectedContextWarning = createElement(
-    doc,
-    "div",
-    "llm-selected-context-warning",
-    {
-      id: "llm-selected-context-warning",
-      textContent: "Recommend to use screenshots option for corrupted text",
-    },
-  );
-  selectedContextWarning.style.display = "none";
-  selectedContextExpanded.append(selectedContextText, selectedContextWarning);
-  selectedContext.append(selectedContextHeader, selectedContextExpanded);
-  contextPreviews.appendChild(selectedContext);
+  selectedContextList.style.display = "none";
+  contextPreviews.appendChild(selectedContextList);
 
   // Image preview area (shows selected screenshot)
   const imagePreview = createElement(doc, "div", "llm-image-preview", {

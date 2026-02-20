@@ -4,6 +4,7 @@ import {
   isLikelyCorruptedSelectedText,
   setStatus,
 } from "./textUtils";
+import { MAX_SELECTED_TEXT_CONTEXTS } from "./constants";
 import {
   selectedTextCache,
   selectedTextPreviewExpandedCache,
@@ -379,58 +380,201 @@ export function getActiveReaderSelectionText(
   return "";
 }
 
+function normalizeSelectedTextContexts(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value
+      .map((entry) => normalizeSelectedText(typeof entry === "string" ? entry : ""))
+      .filter(Boolean);
+  }
+  if (typeof value === "string") {
+    const normalized = normalizeSelectedText(value);
+    return normalized ? [normalized] : [];
+  }
+  return [];
+}
+
+export function getSelectedTextContexts(itemId: number): string[] {
+  const raw = selectedTextCache.get(itemId);
+  return normalizeSelectedTextContexts(raw);
+}
+
+export function setSelectedTextContexts(itemId: number, texts: string[]): void {
+  const normalized = normalizeSelectedTextContexts(texts);
+  if (!normalized.length) {
+    selectedTextCache.delete(itemId);
+    selectedTextPreviewExpandedCache.delete(itemId);
+    return;
+  }
+  selectedTextCache.set(itemId, normalized);
+}
+
+export function appendSelectedTextContextForItem(
+  itemId: number,
+  text: string,
+): boolean {
+  const normalizedText = normalizeSelectedText(text || "");
+  if (!normalizedText) return false;
+  const existingTexts = getSelectedTextContexts(itemId);
+  if (existingTexts.length >= MAX_SELECTED_TEXT_CONTEXTS) return false;
+  setSelectedTextContexts(itemId, [...existingTexts, normalizedText]);
+  selectedTextPreviewExpandedCache.delete(itemId);
+  return true;
+}
+
+export function getSelectedTextExpandedIndex(
+  itemId: number,
+  count: number,
+): number {
+  const raw = selectedTextPreviewExpandedCache.get(itemId) as unknown;
+  const normalized = (() => {
+    if (typeof raw === "number" && Number.isFinite(raw)) {
+      return Math.floor(raw);
+    }
+    if (raw === true) return 0;
+    return -1;
+  })();
+  if (normalized < 0 || normalized >= count) {
+    selectedTextPreviewExpandedCache.delete(itemId);
+    return -1;
+  }
+  return normalized;
+}
+
+export function setSelectedTextExpandedIndex(
+  itemId: number,
+  index: number | null,
+): void {
+  if (index === null || index < 0 || !Number.isFinite(index)) {
+    selectedTextPreviewExpandedCache.delete(itemId);
+    return;
+  }
+  selectedTextPreviewExpandedCache.set(itemId, Math.floor(index));
+}
+
+type AddSelectedTextContextOptions = {
+  noSelectionStatusText?: string;
+  successStatusText?: string;
+  focusInput?: boolean;
+};
+
+export function addSelectedTextContext(
+  body: Element,
+  itemId: number,
+  text: string,
+  options: AddSelectedTextContextOptions = {},
+): boolean {
+  const normalizedText = normalizeSelectedText(text || "");
+  const status = body.querySelector("#llm-status") as HTMLElement | null;
+  if (!normalizedText) {
+    if (status && options.noSelectionStatusText) {
+      setStatus(status, options.noSelectionStatusText, "error");
+    }
+    return false;
+  }
+
+  const appended = appendSelectedTextContextForItem(itemId, normalizedText);
+  if (!appended) {
+    if (status) setStatus(status, "Text Context up to 5", "error");
+    return false;
+  }
+  applySelectedTextPreview(body, itemId);
+  if (status && options.successStatusText) {
+    setStatus(status, options.successStatusText, "ready");
+  }
+  if (options.focusInput !== false) {
+    const inputEl = body.querySelector("#llm-input") as HTMLTextAreaElement | null;
+    inputEl?.focus({ preventScroll: true });
+  }
+  return true;
+}
+
 export function applySelectedTextPreview(body: Element, itemId: number) {
-  const previewBox = body.querySelector(
-    "#llm-selected-context",
-  ) as HTMLDivElement | null;
-  const previewMeta = body.querySelector(
-    "#llm-selected-context-meta",
-  ) as HTMLButtonElement | null;
-  const previewExpanded = body.querySelector(
-    "#llm-selected-context-expanded",
-  ) as HTMLDivElement | null;
-  const previewText = body.querySelector(
-    "#llm-selected-context-text",
-  ) as HTMLDivElement | null;
-  const previewWarning = body.querySelector(
-    "#llm-selected-context-warning",
+  const previewList = body.querySelector(
+    "#llm-selected-context-list",
   ) as HTMLDivElement | null;
   const selectTextBtn = body.querySelector(
     "#llm-select-text",
   ) as HTMLButtonElement | null;
-  if (!previewBox || !previewMeta || !previewExpanded || !previewText) return;
-  const selectedText = selectedTextCache.get(itemId) || "";
-  if (!selectedText) {
-    previewBox.style.display = "none";
-    previewBox.classList.remove("expanded", "collapsed");
-    previewMeta.classList.remove("expanded");
-    previewMeta.setAttribute("aria-expanded", "false");
-    previewMeta.title = "Pin text context";
-    previewExpanded.hidden = true;
-    previewExpanded.style.display = "none";
-    previewText.textContent = "";
+  if (!previewList) return;
+
+  const selectedTexts = getSelectedTextContexts(itemId);
+  if (!selectedTexts.length) {
+    previewList.style.display = "none";
+    previewList.innerHTML = "";
     selectedTextPreviewExpandedCache.delete(itemId);
-    if (previewWarning) previewWarning.style.display = "none";
     if (selectTextBtn) {
       selectTextBtn.classList.remove("llm-action-btn-active");
     }
     return;
   }
-  const expanded = selectedTextPreviewExpandedCache.get(itemId) === true;
-  previewBox.style.display = "flex";
-  previewBox.classList.toggle("expanded", expanded);
-  previewBox.classList.toggle("collapsed", !expanded);
-  previewMeta.classList.toggle("expanded", expanded);
-  previewMeta.setAttribute("aria-expanded", expanded ? "true" : "false");
-  previewMeta.title = expanded ? "Unpin text context" : "Pin text context";
-  previewExpanded.hidden = false;
-  previewExpanded.style.display = "flex";
-  previewText.textContent = selectedText;
-  if (previewWarning) {
-    previewWarning.style.display = isLikelyCorruptedSelectedText(selectedText)
-      ? "block"
-      : "none";
+
+  const ownerDoc = body.ownerDocument;
+  if (!ownerDoc) return;
+
+  const expandedIndex = getSelectedTextExpandedIndex(itemId, selectedTexts.length);
+  previewList.style.display = "contents";
+  previewList.innerHTML = "";
+
+  for (const [index, selectedText] of selectedTexts.entries()) {
+    const isExpanded = expandedIndex === index;
+    const contextLabel =
+      selectedTexts.length > 1 && index > 0
+        ? `Text Context (${index + 1})`
+        : "Text Context";
+
+    const previewBox = ownerDoc.createElement("div");
+    previewBox.className = "llm-selected-context";
+    previewBox.dataset.contextIndex = `${index}`;
+    previewBox.classList.toggle("expanded", isExpanded);
+    previewBox.classList.toggle("collapsed", !isExpanded);
+
+    const previewHeader = ownerDoc.createElement("div");
+    previewHeader.className = "llm-image-preview-header llm-selected-context-header";
+
+    const previewMeta = ownerDoc.createElement("button");
+    previewMeta.type = "button";
+    previewMeta.className = "llm-image-preview-meta llm-selected-context-meta";
+    previewMeta.dataset.contextIndex = `${index}`;
+    previewMeta.textContent = contextLabel;
+    const isCorrupted = isLikelyCorruptedSelectedText(selectedText);
+    previewMeta.classList.toggle(
+      "llm-selected-context-meta-corrupted",
+      isCorrupted,
+    );
+    previewMeta.title = isExpanded ? "Unpin text context" : "Pin text context";
+    previewMeta.setAttribute("aria-expanded", isExpanded ? "true" : "false");
+
+    const previewClear = ownerDoc.createElement("button");
+    previewClear.type = "button";
+    previewClear.className = "llm-remove-img-btn llm-selected-context-clear";
+    previewClear.dataset.contextIndex = `${index}`;
+    previewClear.textContent = "×";
+    previewClear.title = "Clear selected context";
+    previewClear.setAttribute("aria-label", "Clear selected context");
+
+    previewHeader.append(previewMeta, previewClear);
+
+    const previewExpanded = ownerDoc.createElement("div");
+    previewExpanded.className =
+      "llm-image-preview-expanded llm-selected-context-expanded";
+    previewExpanded.hidden = false;
+    previewExpanded.style.display = "flex";
+
+    const previewText = ownerDoc.createElement("div");
+    previewText.className = "llm-selected-context-text";
+    previewText.textContent = selectedText;
+
+    const previewWarning = ownerDoc.createElement("div");
+    previewWarning.className = "llm-selected-context-warning";
+    previewWarning.textContent =
+      "Recommend to use screenshots option for corrupted text";
+    previewWarning.style.display = isCorrupted ? "block" : "none";
+
+    previewExpanded.append(previewText, previewWarning);
+    previewBox.append(previewHeader, previewExpanded);
+    previewList.appendChild(previewBox);
   }
+
   if (selectTextBtn) {
     selectTextBtn.classList.add("llm-action-btn-active");
   }
@@ -444,18 +588,9 @@ export function includeSelectedTextFromReader(
   const selectedText =
     normalizeSelectedText(prefetchedText || "") ||
     getActiveReaderSelectionText(body.ownerDocument as Document, item);
-  const status = body.querySelector("#llm-status") as HTMLElement | null;
-  if (!selectedText) {
-    if (status) setStatus(status, "No text selected in reader", "error");
-    return false;
-  }
-  selectedTextCache.set(item.id, selectedText);
-  selectedTextPreviewExpandedCache.set(item.id, false);
-  applySelectedTextPreview(body, item.id);
-  if (status) setStatus(status, "Selected text included", "ready");
-  const inputEl = body.querySelector(
-    "#llm-input",
-  ) as HTMLTextAreaElement | null;
-  inputEl?.focus({ preventScroll: true });
-  return true;
+  return addSelectedTextContext(body, item.id, selectedText, {
+    noSelectionStatusText: "No text selected in reader",
+    successStatusText: "Selected text included",
+    focusInput: true,
+  });
 }

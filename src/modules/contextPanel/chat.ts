@@ -49,7 +49,7 @@ import {
   setStatus,
   getSelectedTextWithinBubble,
   getAttachmentTypeLabel,
-  buildQuestionWithSelectedText,
+  buildQuestionWithSelectedTexts,
   buildModelPromptWithFileContext,
   resolvePromptText,
 } from "./textUtils";
@@ -82,6 +82,39 @@ function appendReasoningPart(base: string | undefined, next?: string): string {
   const chunk = sanitizeText(next || "");
   if (!chunk) return base || "";
   return `${base || ""}${chunk}`;
+}
+
+function normalizeSelectedTexts(
+  selectedTexts: unknown,
+  legacySelectedText?: unknown,
+): string[] {
+  const normalize = (value: unknown): string => {
+    if (typeof value !== "string") return "";
+    return sanitizeText(value).trim();
+  };
+  if (Array.isArray(selectedTexts)) {
+    return selectedTexts.map((value) => normalize(value)).filter(Boolean);
+  }
+  const legacy = normalize(legacySelectedText);
+  return legacy ? [legacy] : [];
+}
+
+function getMessageSelectedTexts(message: Message): string[] {
+  return normalizeSelectedTexts(message.selectedTexts, message.selectedText);
+}
+
+function getMessageSelectedTextExpandedIndex(
+  message: Message,
+  count: number,
+): number {
+  if (count <= 0) return -1;
+  const rawIndex = message.selectedTextExpandedIndex;
+  if (typeof rawIndex === "number" && Number.isFinite(rawIndex)) {
+    const normalized = Math.floor(rawIndex);
+    if (normalized >= 0 && normalized < count) return normalized;
+  }
+  if (message.selectedTextExpanded === true) return 0;
+  return -1;
 }
 
 export function getConversationKey(item: Zotero.Item): number {
@@ -324,12 +357,18 @@ function toPanelMessage(message: StoredChatMessage): Message {
           Boolean(entry.name.trim()),
       )
     : undefined;
+  const selectedTexts = normalizeSelectedTexts(
+    message.selectedTexts,
+    message.selectedText,
+  );
   return {
     role: message.role,
     text: message.text,
     timestamp: message.timestamp,
-    selectedText: message.selectedText,
+    selectedText: selectedTexts[0] || message.selectedText,
     selectedTextExpanded: false,
+    selectedTexts: selectedTexts.length ? selectedTexts : undefined,
+    selectedTextExpandedIndex: -1,
     screenshotImages,
     attachments,
     attachmentsExpanded: false,
@@ -590,7 +629,8 @@ function reconstructRetryPayload(userMessage: Message): {
   question: string;
   screenshotImages: string[];
 } {
-  const selectedText = sanitizeText(userMessage.selectedText || "").trim();
+  const selectedTexts = getMessageSelectedTexts(userMessage);
+  const primarySelectedText = selectedTexts[0] || "";
   const fileAttachments = (
     Array.isArray(userMessage.attachments)
       ? userMessage.attachments.filter(
@@ -606,11 +646,11 @@ function reconstructRetryPayload(userMessage: Message): {
   ) as ChatAttachment[];
   const promptText = resolvePromptText(
     sanitizeText(userMessage.text || ""),
-    selectedText,
+    primarySelectedText,
     fileAttachments.length > 0,
   );
-  const composedQuestionBase = selectedText
-    ? buildQuestionWithSelectedText(selectedText, promptText)
+  const composedQuestionBase = primarySelectedText
+    ? buildQuestionWithSelectedTexts(selectedTexts, promptText)
     : promptText;
   const question = buildModelPromptWithFileContext(
     composedQuestionBase,
@@ -864,7 +904,7 @@ export async function sendQuestion(
   reasoning?: LLMReasoningConfig,
   advanced?: AdvancedModelParams,
   displayQuestion?: string,
-  selectedText?: string,
+  selectedTexts?: string[],
   attachments?: ChatAttachment[],
 ) {
   const inputBox = body.querySelector(
@@ -928,7 +968,8 @@ export async function sendQuestion(
   const effectiveAdvanced =
     advanced || getAdvancedModelParamsForProfile(fallbackProfile.key);
   const shownQuestion = displayQuestion || question;
-  const selectedTextForMessage = sanitizeText(selectedText || "").trim();
+  const selectedTextsForMessage = normalizeSelectedTexts(selectedTexts);
+  const selectedTextForMessage = selectedTextsForMessage[0] || "";
   const screenshotImagesForMessage = Array.isArray(images)
     ? images
         .filter((entry): entry is string => typeof entry === "string")
@@ -944,6 +985,10 @@ export async function sendQuestion(
     timestamp: Date.now(),
     selectedText: selectedTextForMessage || undefined,
     selectedTextExpanded: false,
+    selectedTexts: selectedTextsForMessage.length
+      ? selectedTextsForMessage
+      : undefined,
+    selectedTextExpandedIndex: -1,
     screenshotImages: screenshotImagesForMessage.length
       ? screenshotImagesForMessage
       : undefined,
@@ -957,6 +1002,7 @@ export async function sendQuestion(
     text: userMessage.text,
     timestamp: userMessage.timestamp,
     selectedText: userMessage.selectedText,
+    selectedTexts: userMessage.selectedTexts,
     screenshotImages: userMessage.screenshotImages,
     attachments: userMessage.attachments,
   });
@@ -1185,9 +1231,9 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
         : [];
       let screenshotExpanded: HTMLDivElement | null = null;
       let filesExpanded: HTMLDivElement | null = null;
-      const selectedText = sanitizeText(msg.selectedText || "").trim();
+      const selectedTexts = getMessageSelectedTexts(msg);
       const hasScreenshotContext = screenshotImages.length > 0;
-      const hasSelectedTextContext = Boolean(selectedText);
+      const hasSelectedTextContext = selectedTexts.length > 0;
       hasUserContext = hasScreenshotContext || hasSelectedTextContext;
       if (hasScreenshotContext) {
         const screenshotBar = doc.createElement("button") as HTMLButtonElement;
@@ -1420,62 +1466,83 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
       }
 
       if (hasSelectedTextContext) {
-        const selectedBar = doc.createElement("button") as HTMLButtonElement;
-        selectedBar.type = "button";
-        selectedBar.className = "llm-user-selected-text";
-
-        const selectedIcon = doc.createElement("span") as HTMLSpanElement;
-        selectedIcon.className = "llm-user-selected-text-icon";
-        selectedIcon.textContent = "↳";
-
-        const selectedContent = doc.createElement("span") as HTMLSpanElement;
-        selectedContent.className = "llm-user-selected-text-content";
-        selectedContent.textContent = selectedText;
-
-        const selectedExpanded = doc.createElement("div") as HTMLDivElement;
-        selectedExpanded.className = "llm-user-selected-text-expanded";
-        selectedExpanded.textContent = selectedText;
-
-        selectedBar.append(selectedIcon, selectedContent);
-        const applySelectedTextState = () => {
-          const expanded = Boolean(msg.selectedTextExpanded);
-          selectedBar.classList.toggle("expanded", expanded);
-          selectedBar.setAttribute(
-            "aria-expanded",
-            expanded ? "true" : "false",
-          );
-          selectedExpanded.hidden = !expanded;
-          selectedExpanded.style.display = expanded ? "block" : "none";
-          selectedBar.title = expanded
-            ? "Collapse selected text"
-            : "Expand selected text";
+        let selectedTextExpandedIndex = getMessageSelectedTextExpandedIndex(
+          msg,
+          selectedTexts.length,
+        );
+        const syncSelectedTextExpandedState = () => {
+          msg.selectedTextExpandedIndex = selectedTextExpandedIndex;
+          msg.selectedTextExpanded = selectedTextExpandedIndex === 0;
         };
-        const toggleSelectedTextExpanded = () => {
-          mutateChatWithScrollGuard(() => {
-            msg.selectedTextExpanded = !msg.selectedTextExpanded;
-            applySelectedTextState();
+        syncSelectedTextExpandedState();
+        const applySelectedTextStates: Array<() => void> = [];
+        const renderSelectedTextStates = () => {
+          for (const applyState of applySelectedTextStates) {
+            applyState();
+          }
+        };
+
+        selectedTexts.forEach((selectedText, contextIndex) => {
+          const selectedBar = doc.createElement("button") as HTMLButtonElement;
+          selectedBar.type = "button";
+          selectedBar.className = "llm-user-selected-text";
+
+          const selectedIcon = doc.createElement("span") as HTMLSpanElement;
+          selectedIcon.className = "llm-user-selected-text-icon";
+          selectedIcon.textContent = "↳";
+
+          const selectedContent = doc.createElement("span") as HTMLSpanElement;
+          selectedContent.className = "llm-user-selected-text-content";
+          selectedContent.textContent = selectedText;
+
+          const selectedExpanded = doc.createElement("div") as HTMLDivElement;
+          selectedExpanded.className = "llm-user-selected-text-expanded";
+          selectedExpanded.textContent = selectedText;
+
+          selectedBar.append(selectedIcon, selectedContent);
+          const applySelectedTextState = () => {
+            const expanded = selectedTextExpandedIndex === contextIndex;
+            selectedBar.classList.toggle("expanded", expanded);
+            selectedBar.setAttribute(
+              "aria-expanded",
+              expanded ? "true" : "false",
+            );
+            selectedExpanded.hidden = !expanded;
+            selectedExpanded.style.display = expanded ? "block" : "none";
+            selectedBar.title = expanded
+              ? "Collapse selected text"
+              : "Expand selected text";
+          };
+          const toggleSelectedTextExpanded = () => {
+            mutateChatWithScrollGuard(() => {
+              selectedTextExpandedIndex =
+                selectedTextExpandedIndex === contextIndex ? -1 : contextIndex;
+              syncSelectedTextExpandedState();
+              renderSelectedTextStates();
+            });
+          };
+          applySelectedTextStates.push(applySelectedTextState);
+          selectedBar.addEventListener("mousedown", (e: Event) => {
+            const mouse = e as MouseEvent;
+            if (mouse.button !== 0) return;
+            mouse.preventDefault();
+            mouse.stopPropagation();
+            toggleSelectedTextExpanded();
           });
-        };
-        applySelectedTextState();
-        selectedBar.addEventListener("mousedown", (e: Event) => {
-          const mouse = e as MouseEvent;
-          if (mouse.button !== 0) return;
-          mouse.preventDefault();
-          mouse.stopPropagation();
-          toggleSelectedTextExpanded();
+          selectedBar.addEventListener("click", (e: Event) => {
+            e.preventDefault();
+            e.stopPropagation();
+          });
+          selectedBar.addEventListener("keydown", (e: KeyboardEvent) => {
+            if (e.key !== "Enter" && e.key !== " ") return;
+            e.preventDefault();
+            e.stopPropagation();
+            toggleSelectedTextExpanded();
+          });
+          wrapper.appendChild(selectedBar);
+          wrapper.appendChild(selectedExpanded);
         });
-        selectedBar.addEventListener("click", (e: Event) => {
-          e.preventDefault();
-          e.stopPropagation();
-        });
-        selectedBar.addEventListener("keydown", (e: KeyboardEvent) => {
-          if (e.key !== "Enter" && e.key !== " ") return;
-          e.preventDefault();
-          e.stopPropagation();
-          toggleSelectedTextExpanded();
-        });
-        wrapper.appendChild(selectedBar);
-        wrapper.appendChild(selectedExpanded);
+        renderSelectedTextStates();
       }
       bubble.textContent = sanitizeText(msg.text || "");
     } else {

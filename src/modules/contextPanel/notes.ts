@@ -89,12 +89,29 @@ function formatFileEmbeddedLabel(files: ChatAttachment[]): string {
   return `Files (${names.length}): ${names.join(", ")}`;
 }
 
-function formatSelectedTextQuoteMarkdown(selectedText: string): string {
+function formatSelectedTextQuoteMarkdown(
+  selectedText: string,
+  label = "Selected text",
+): string {
   const quoted = selectedText
     .split(/\r?\n/)
     .map((line) => `> ${line}`)
     .join("\n");
-  return `Selected text:\n${quoted}`;
+  return `${label}:\n${quoted}`;
+}
+
+function normalizeSelectedTextsForNote(
+  selectedTexts: unknown,
+  selectedText: unknown,
+): string[] {
+  if (Array.isArray(selectedTexts)) {
+    return selectedTexts
+      .map((entry) => sanitizeText(typeof entry === "string" ? entry : "").trim())
+      .filter(Boolean);
+  }
+  const legacy =
+    typeof selectedText === "string" ? sanitizeText(selectedText).trim() : "";
+  return legacy ? [legacy] : [];
 }
 
 function buildScreenshotImagesHtmlForNote(images: string[]): string {
@@ -183,22 +200,38 @@ export function buildChatHistoryNotePayload(messages: Message[]): {
   const htmlBlocks: string[] = [];
   for (const msg of messages) {
     const text = sanitizeText(msg.text || "").trim();
-    const selectedText = sanitizeText(msg.selectedText || "").trim();
+    const selectedTexts = normalizeSelectedTextsForNote(
+      msg.selectedTexts,
+      msg.selectedText,
+    );
     const screenshotImages = normalizeScreenshotImagesForNote(
       msg.screenshotImages,
     );
     const fileAttachments = normalizeFileAttachmentsForNote(msg.attachments);
     const screenshotCount = screenshotImages.length;
-    if (!text && !selectedText && !screenshotCount && !fileAttachments.length)
+    if (
+      !text &&
+      !selectedTexts.length &&
+      !screenshotCount &&
+      !fileAttachments.length
+    )
       continue;
     let textWithContext = text;
     let htmlTextWithContext = text;
     if (msg.role === "user") {
       const userBlocks: string[] = [];
       const userHtmlBlocks: string[] = [];
-      if (selectedText) {
-        userBlocks.push(formatSelectedTextQuoteMarkdown(selectedText));
-        userHtmlBlocks.push(formatSelectedTextQuoteMarkdown(selectedText));
+      if (selectedTexts.length === 1) {
+        userBlocks.push(formatSelectedTextQuoteMarkdown(selectedTexts[0]));
+        userHtmlBlocks.push(formatSelectedTextQuoteMarkdown(selectedTexts[0]));
+      } else if (selectedTexts.length > 1) {
+        selectedTexts.forEach((selectedText, index) => {
+          const label = `Selected text (${index + 1})`;
+          userBlocks.push(formatSelectedTextQuoteMarkdown(selectedText, label));
+          userHtmlBlocks.push(
+            formatSelectedTextQuoteMarkdown(selectedText, label),
+          );
+        });
       }
       if (screenshotCount) {
         userBlocks.push(formatScreenshotEmbeddedLabel(screenshotCount));

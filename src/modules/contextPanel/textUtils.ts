@@ -56,6 +56,7 @@ export function isLikelyCorruptedSelectedText(text: string): boolean {
 
   // Most common hard signal of broken extraction/encoding.
   if (sample.includes("\uFFFD") || sample.includes("�")) return true;
+  if (/[□▢▣▤▥▦▧▨▩▯]/u.test(sample)) return true;
 
   // Typical UTF-8/Latin-1 mojibake markers.
   if (/Ã.|Â.|â(?:€|€™|€œ|€|€˜|€¦)/.test(sample)) return true;
@@ -70,7 +71,8 @@ export function isLikelyCorruptedSelectedText(text: string): boolean {
     sample.match(
       /[\u1100-\u11FF\u3130-\u318F\uAC00-\uD7AF\u3040-\u30FF\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF]/gu,
     ) || [];
-  const cjkLikeCount = cjkLikeMatches.length;
+  const hanMatches = sample.match(/\p{Script=Han}/gu) || [];
+  const cjkLikeCount = Math.max(cjkLikeMatches.length, hanMatches.length);
 
   if (
     hasMathLikeContext &&
@@ -79,6 +81,35 @@ export function isLikelyCorruptedSelectedText(text: string): boolean {
     cjkLikeCount < latinCount
   ) {
     return true;
+  }
+
+  // Heuristic: runs like "� � � �" in math context are typically broken
+  // glyph extraction from PDFs, not intentional math operators.
+  if (hasMathLikeContext) {
+    const suspiciousSymbolRun =
+      /(?:^|\s)(?:[^\p{L}\p{N}\s])(?:\s+[^\p{L}\p{N}\s]){2,}(?=\s|$)/u;
+    if (suspiciousSymbolRun.test(sample)) {
+      return true;
+    }
+
+    // Mixed CJK and Latin variable fragments near math operators are a
+    // common artifact of broken PDF extraction (e.g. "Φ(刺j, 组 + Bj, 组)").
+    const mixedToken =
+      /(?:\p{Script=Han}[A-Za-z]|[A-Za-z]\p{Script=Han})/u.test(sample);
+    const cjkNearMath =
+      /\p{Script=Han}[^A-Za-z0-9]{0,2}[+\-*/=,()ΣΦΠ∑]/u.test(sample) ||
+      /[+\-*/=,()ΣΦΠ∑][^A-Za-z0-9]{0,2}\p{Script=Han}/u.test(sample);
+    const greekWithMixedContext =
+      /[ΣΦΠ∑]/u.test(sample) &&
+      cjkLikeCount >= 1 &&
+      latinCount >= 2 &&
+      (mixedToken || cjkNearMath);
+    if (
+      ((mixedToken || cjkNearMath) && cjkLikeCount >= 1 && latinCount >= 2) ||
+      greekWithMixedContext
+    ) {
+      return true;
+    }
   }
 
   return false;
@@ -90,6 +121,28 @@ export function buildQuestionWithSelectedText(
 ): string {
   const normalizedPrompt = userPrompt.trim() || DEFAULT_SELECTED_TEXT_PROMPT;
   return `Selected text from the PDF reader:\n"""\n${selectedText}\n"""\n\nUser question:\n${normalizedPrompt}`;
+}
+
+export function buildQuestionWithSelectedTexts(
+  selectedTexts: string[],
+  userPrompt: string,
+): string {
+  const normalizedPrompt = userPrompt.trim() || DEFAULT_SELECTED_TEXT_PROMPT;
+  const normalizedTexts = selectedTexts
+    .map((text) => sanitizeText(text).trim())
+    .filter(Boolean);
+  if (!normalizedTexts.length) {
+    return `User question:\n${normalizedPrompt}`;
+  }
+  if (normalizedTexts.length === 1) {
+    return buildQuestionWithSelectedText(normalizedTexts[0], normalizedPrompt);
+  }
+  const contextBlocks = normalizedTexts.map((text, index) => {
+    return `Text Context ${index + 1}:\n"""\n${text}\n"""`;
+  });
+  return `Selected text contexts from the PDF reader:\n${contextBlocks.join(
+    "\n\n",
+  )}\n\nUser question:\n${normalizedPrompt}`;
 }
 
 export function resolvePromptText(

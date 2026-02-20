@@ -30,8 +30,6 @@ import {
   readerContextPanelRegistered,
   setReaderContextPanelRegistered,
   recentReaderSelectionCache,
-  selectedTextCache,
-  selectedTextPreviewExpandedCache,
 } from "./state";
 import { clearConversation as clearStoredConversation } from "../../utils/chatStore";
 import { normalizeSelectedText, setStatus } from "./textUtils";
@@ -46,6 +44,7 @@ import { refreshChat } from "./chat";
 import {
   getActiveContextAttachmentFromTabs,
   getItemSelectionCacheKeys,
+  appendSelectedTextContextForItem,
   applySelectedTextPreview,
 } from "./contextResolution";
 import { ensurePDFTextCached } from "./pdfContext";
@@ -123,9 +122,37 @@ export function registerReaderSelectionTracking() {
   const handler: _ZoteroTypes.Reader.EventHandler<
     "renderTextSelectionPopup"
   > = (event) => {
-    const selectedText = normalizeSelectedText(
-      event.params?.annotation?.text || "",
-    );
+    const selectionFrom = (doc?: Document | null): string => {
+      if (!doc) return "";
+      const raw = doc.defaultView?.getSelection?.()?.toString() || "";
+      return normalizeSelectedText(raw);
+    };
+    const selectedText = (() => {
+      const fromAnnotation = normalizeSelectedText(
+        event.params?.annotation?.text || "",
+      );
+      if (fromAnnotation) return fromAnnotation;
+      const fromPopupDoc = selectionFrom(event.doc);
+      if (fromPopupDoc) return fromPopupDoc;
+      const reader = event.reader as any;
+      const readerDoc =
+        (reader?._iframeWindow?.document as Document | undefined) ||
+        (reader?._iframe?.contentDocument as Document | undefined) ||
+        (reader?._window?.document as Document | undefined);
+      const fromReaderDoc = selectionFrom(readerDoc);
+      if (fromReaderDoc) return fromReaderDoc;
+      const internalReader = reader?._internalReader;
+      const views = [internalReader?._primaryView, internalReader?._secondaryView];
+      for (const view of views) {
+        if (!view) continue;
+        const viewDoc =
+          (view._iframeWindow?.document as Document | undefined) ||
+          (view._iframe?.contentDocument as Document | undefined);
+        const fromView = selectionFrom(viewDoc);
+        if (fromView) return fromView;
+      }
+      return "";
+    })();
     const itemId = event.reader?._item?.id || event.reader?.itemID;
     if (typeof itemId !== "number") return;
     const item = Zotero.Items.get(itemId) || null;
@@ -142,9 +169,9 @@ export function registerReaderSelectionTracking() {
     if (selectedText) {
       let popupSentinelEl: HTMLElement | null = null;
       const addTextToPanel = () => {
+        const appendByKey = new Map<number, boolean>();
         for (const key of keys) {
-          selectedTextCache.set(key, selectedText);
-          selectedTextPreviewExpandedCache.set(key, false);
+          appendByKey.set(key, appendSelectedTextContextForItem(key, selectedText));
         }
         try {
           const docs = new Set<Document>();
@@ -195,26 +222,52 @@ export function registerReaderSelectionTracking() {
               keyed: false,
               visible: isVisible(root),
               sameDoc: popupTopDoc ? root.ownerDocument === popupTopDoc : false,
+              matchesReaderItem: false,
             }))
             .filter((state) => state.panelItemId !== null);
           if (!rootStates.length) return;
           for (const state of rootStates) {
             state.keyed = keys.includes(state.panelItemId as number);
+            state.matchesReaderItem = state.panelItemId === itemId;
           }
 
-          // Deterministic single-target ranking:
-          // 1) keyed + visible, 2) keyed, 3) same popup top-doc + visible,
-          // 4) visible, 5) any remaining.
-          const scoreState = (state: (typeof rootStates)[number]) => {
-            if (state.keyed && state.visible) return 5;
-            if (state.keyed) return 4;
-            if (state.sameDoc && state.visible) return 3;
-            if (state.visible) return 2;
-            return 1;
+          const refreshedPanelItemIds = new Set<number>();
+          for (const state of rootStates) {
+            if (!state.visible || !state.keyed) continue;
+            const panelItemId = state.panelItemId as number;
+            const panelBody = state.root.parentElement || state.root;
+            applySelectedTextPreview(panelBody, panelItemId);
+            refreshedPanelItemIds.add(panelItemId);
+          }
+
+          const statusCandidates = rootStates.filter((state) => state.keyed);
+          const rankedStates = statusCandidates.length
+            ? statusCandidates
+            : rootStates;
+
+          // Deterministic status/focus target ranking:
+          // 1) same doc + visible + exact reader item
+          // 2) same doc + visible
+          // 3) visible + exact reader item
+          // 4) visible + keyed
+          // 5) visible
+          // 6) same doc
+          // 7) keyed
+          const scoreState = (state: (typeof rankedStates)[number]) => {
+            if (state.sameDoc && state.visible && state.matchesReaderItem) {
+              return 7;
+            }
+            if (state.sameDoc && state.visible) return 6;
+            if (state.visible && state.matchesReaderItem) return 5;
+            if (state.visible && state.keyed) return 4;
+            if (state.visible) return 3;
+            if (state.sameDoc) return 2;
+            if (state.keyed) return 1;
+            return 0;
           };
-          let bestState = rootStates[0];
+          let bestState = rankedStates[0];
           let bestScore = scoreState(bestState);
-          for (const state of rootStates.slice(1)) {
+          for (const state of rankedStates.slice(1)) {
             const score = scoreState(state);
             if (score > bestScore) {
               bestState = state;
@@ -224,22 +277,34 @@ export function registerReaderSelectionTracking() {
 
           const panelRoot = bestState.root;
           const panelItemId = bestState.panelItemId as number;
-
-          selectedTextCache.set(panelItemId, selectedText);
-          selectedTextPreviewExpandedCache.set(panelItemId, false);
+          if (!appendByKey.has(panelItemId)) {
+            appendByKey.set(
+              panelItemId,
+              appendSelectedTextContextForItem(panelItemId, selectedText),
+            );
+          }
 
           const panelBody = panelRoot.parentElement || panelRoot;
-          applySelectedTextPreview(panelBody, panelItemId);
-
+          if (!refreshedPanelItemIds.has(panelItemId)) {
+            applySelectedTextPreview(panelBody, panelItemId);
+          }
+          const added = appendByKey.get(panelItemId) === true;
           const status = panelBody.querySelector(
             "#llm-status",
           ) as HTMLElement | null;
-          if (status) setStatus(status, "Selected text included", "ready");
-
-          const inputEl = panelBody.querySelector(
-            "#llm-input",
-          ) as HTMLTextAreaElement | null;
-          inputEl?.focus({ preventScroll: true });
+          if (status) {
+            setStatus(
+              status,
+              added ? "Selected text included" : "Text Context up to 5",
+              added ? "ready" : "error",
+            );
+          }
+          if (added) {
+            const inputEl = panelBody.querySelector(
+              "#llm-input",
+            ) as HTMLTextAreaElement | null;
+            inputEl?.focus({ preventScroll: true });
+          }
         } catch (err) {
           ztoolkit.log("LLM: Add Text popup action failed", err);
         }
