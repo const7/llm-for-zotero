@@ -29,6 +29,7 @@ import type {
   ReasoningLevelSelection,
   AdvancedModelParams,
   ChatAttachment,
+  SelectedTextSource,
 } from "./types";
 import {
   chatHistory,
@@ -49,8 +50,10 @@ import {
   setStatus,
   getSelectedTextWithinBubble,
   getAttachmentTypeLabel,
-  buildQuestionWithSelectedTexts,
+  buildQuestionWithSelectedTextContexts,
   buildModelPromptWithFileContext,
+  getSelectedTextSourceIcon,
+  normalizeSelectedTextSource,
   resolvePromptText,
 } from "./textUtils";
 import { positionMenuAtPointer } from "./menuPositioning";
@@ -97,6 +100,19 @@ function normalizeSelectedTexts(
   }
   const legacy = normalize(legacySelectedText);
   return legacy ? [legacy] : [];
+}
+
+function normalizeSelectedTextSources(
+  selectedTextSources: unknown,
+  count: number,
+): SelectedTextSource[] {
+  if (count <= 0) return [];
+  const raw = Array.isArray(selectedTextSources) ? selectedTextSources : [];
+  const out: SelectedTextSource[] = [];
+  for (let index = 0; index < count; index++) {
+    out.push(normalizeSelectedTextSource(raw[index]));
+  }
+  return out;
 }
 
 function getMessageSelectedTexts(message: Message): string[] {
@@ -361,6 +377,10 @@ function toPanelMessage(message: StoredChatMessage): Message {
     message.selectedTexts,
     message.selectedText,
   );
+  const selectedTextSources = normalizeSelectedTextSources(
+    message.selectedTextSources,
+    selectedTexts.length,
+  );
   return {
     role: message.role,
     text: message.text,
@@ -368,6 +388,9 @@ function toPanelMessage(message: StoredChatMessage): Message {
     selectedText: selectedTexts[0] || message.selectedText,
     selectedTextExpanded: false,
     selectedTexts: selectedTexts.length ? selectedTexts : undefined,
+    selectedTextSources: selectedTextSources.length
+      ? selectedTextSources
+      : undefined,
     selectedTextExpandedIndex: -1,
     screenshotImages,
     attachments,
@@ -630,6 +653,10 @@ function reconstructRetryPayload(userMessage: Message): {
   screenshotImages: string[];
 } {
   const selectedTexts = getMessageSelectedTexts(userMessage);
+  const selectedTextSources = normalizeSelectedTextSources(
+    userMessage.selectedTextSources,
+    selectedTexts.length,
+  );
   const primarySelectedText = selectedTexts[0] || "";
   const fileAttachments = (
     Array.isArray(userMessage.attachments)
@@ -650,7 +677,11 @@ function reconstructRetryPayload(userMessage: Message): {
     fileAttachments.length > 0,
   );
   const composedQuestionBase = primarySelectedText
-    ? buildQuestionWithSelectedTexts(selectedTexts, promptText)
+    ? buildQuestionWithSelectedTextContexts(
+        selectedTexts,
+        selectedTextSources,
+        promptText,
+      )
     : promptText;
   const question = buildModelPromptWithFileContext(
     composedQuestionBase,
@@ -905,6 +936,7 @@ export async function sendQuestion(
   advanced?: AdvancedModelParams,
   displayQuestion?: string,
   selectedTexts?: string[],
+  selectedTextSources?: SelectedTextSource[],
   attachments?: ChatAttachment[],
 ) {
   const inputBox = body.querySelector(
@@ -969,6 +1001,10 @@ export async function sendQuestion(
     advanced || getAdvancedModelParamsForProfile(fallbackProfile.key);
   const shownQuestion = displayQuestion || question;
   const selectedTextsForMessage = normalizeSelectedTexts(selectedTexts);
+  const selectedTextSourcesForMessage = normalizeSelectedTextSources(
+    selectedTextSources,
+    selectedTextsForMessage.length,
+  );
   const selectedTextForMessage = selectedTextsForMessage[0] || "";
   const screenshotImagesForMessage = Array.isArray(images)
     ? images
@@ -988,6 +1024,9 @@ export async function sendQuestion(
     selectedTexts: selectedTextsForMessage.length
       ? selectedTextsForMessage
       : undefined,
+    selectedTextSources: selectedTextSourcesForMessage.length
+      ? selectedTextSourcesForMessage
+      : undefined,
     selectedTextExpandedIndex: -1,
     screenshotImages: screenshotImagesForMessage.length
       ? screenshotImagesForMessage
@@ -1003,6 +1042,7 @@ export async function sendQuestion(
     timestamp: userMessage.timestamp,
     selectedText: userMessage.selectedText,
     selectedTexts: userMessage.selectedTexts,
+    selectedTextSources: userMessage.selectedTextSources,
     screenshotImages: userMessage.screenshotImages,
     attachments: userMessage.attachments,
   });
@@ -1232,6 +1272,10 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
       let screenshotExpanded: HTMLDivElement | null = null;
       let filesExpanded: HTMLDivElement | null = null;
       const selectedTexts = getMessageSelectedTexts(msg);
+      const selectedTextSources = normalizeSelectedTextSources(
+        msg.selectedTextSources,
+        selectedTexts.length,
+      );
       const hasScreenshotContext = screenshotImages.length > 0;
       const hasSelectedTextContext = selectedTexts.length > 0;
       hasUserContext = hasScreenshotContext || hasSelectedTextContext;
@@ -1483,13 +1527,15 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
         };
 
         selectedTexts.forEach((selectedText, contextIndex) => {
+          const selectedSource = selectedTextSources[contextIndex] || "pdf";
           const selectedBar = doc.createElement("button") as HTMLButtonElement;
           selectedBar.type = "button";
           selectedBar.className = "llm-user-selected-text";
+          selectedBar.dataset.contextSource = selectedSource;
 
           const selectedIcon = doc.createElement("span") as HTMLSpanElement;
           selectedIcon.className = "llm-user-selected-text-icon";
-          selectedIcon.textContent = "↳";
+          selectedIcon.textContent = getSelectedTextSourceIcon(selectedSource);
 
           const selectedContent = doc.createElement("span") as HTMLSpanElement;
           selectedContent.className = "llm-user-selected-text-content";

@@ -46,7 +46,7 @@ import {
   sanitizeText,
   setStatus,
   clampNumber,
-  buildQuestionWithSelectedTexts,
+  buildQuestionWithSelectedTextContexts,
   buildModelPromptWithFileContext,
   resolvePromptText,
   getSelectedTextWithinBubble,
@@ -81,9 +81,11 @@ import {
   getActiveReaderSelectionText,
   addSelectedTextContext,
   applySelectedTextPreview,
+  getSelectedTextContextEntries,
   getSelectedTextContexts,
   getSelectedTextExpandedIndex,
   includeSelectedTextFromReader,
+  setSelectedTextContextEntries,
   setSelectedTextContexts,
   setSelectedTextExpandedIndex,
 } from "./contextResolution";
@@ -480,6 +482,7 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
       added = addSelectedTextContext(body, item.id, selected, {
         successStatusText: "Selected response text included",
         focusInput: false,
+        source: "model",
       });
     });
     hideSelectionPopup();
@@ -2164,7 +2167,9 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
   const doSend = async () => {
     if (!item) return;
     const text = inputBox.value.trim();
-    const selectedTexts = getSelectedTextContexts(item.id);
+    const selectedContexts = getSelectedTextContextEntries(item.id);
+    const selectedTexts = selectedContexts.map((entry) => entry.text);
+    const selectedTextSources = selectedContexts.map((entry) => entry.source);
     const primarySelectedText = selectedTexts[0] || "";
     const selectedFiles = selectedFileAttachmentCache.get(item.id) || [];
     if (!text && !primarySelectedText && !selectedFiles.length) return;
@@ -2175,7 +2180,11 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
     );
     if (!promptText) return;
     const composedQuestionBase = primarySelectedText
-      ? buildQuestionWithSelectedTexts(selectedTexts, promptText)
+      ? buildQuestionWithSelectedTextContexts(
+          selectedTexts,
+          selectedTextSources,
+          promptText,
+        )
       : promptText;
     const composedQuestion = buildModelPromptWithFileContext(
       composedQuestionBase,
@@ -2221,6 +2230,7 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
       advancedParams,
       displayQuestion,
       selectedTexts.length ? selectedTexts : undefined,
+      selectedTexts.length ? selectedTextSources : undefined,
       selectedFiles.length ? selectedFiles : undefined,
     );
   };
@@ -2829,16 +2839,16 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
         e.preventDefault();
         e.stopPropagation();
         const index = Number.parseInt(clearBtn.dataset.contextIndex || "", 10);
-        const selectedTexts = getSelectedTextContexts(item.id);
+        const selectedContexts = getSelectedTextContextEntries(item.id);
         if (
           !Number.isFinite(index) ||
           index < 0 ||
-          index >= selectedTexts.length
+          index >= selectedContexts.length
         ) {
           return;
         }
-        const nextTexts = selectedTexts.filter((_, i) => i !== index);
-        setSelectedTextContexts(item.id, nextTexts);
+        const nextContexts = selectedContexts.filter((_, i) => i !== index);
+        setSelectedTextContextEntries(item.id, nextContexts);
         setSelectedTextExpandedIndex(item.id, null);
         updateSelectedTextPreviewPreservingScroll();
         if (status) setStatus(status, "Selected text removed", "ready");
@@ -2852,12 +2862,16 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
       e.preventDefault();
       e.stopPropagation();
       const index = Number.parseInt(metaBtn.dataset.contextIndex || "", 10);
-      const selectedTexts = getSelectedTextContexts(item.id);
-      if (!Number.isFinite(index) || index < 0 || index >= selectedTexts.length)
+      const selectedContexts = getSelectedTextContextEntries(item.id);
+      if (
+        !Number.isFinite(index) ||
+        index < 0 ||
+        index >= selectedContexts.length
+      )
         return;
       const expandedIndex = getSelectedTextExpandedIndex(
         item.id,
-        selectedTexts.length,
+        selectedContexts.length,
       );
       const nextExpandedIndex = expandedIndex === index ? null : index;
       setSelectedTextExpandedIndex(item.id, nextExpandedIndex);

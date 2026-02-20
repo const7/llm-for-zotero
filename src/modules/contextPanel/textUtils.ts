@@ -2,10 +2,19 @@ import {
   SELECTED_TEXT_MAX_LENGTH,
   SELECTED_TEXT_PREVIEW_LENGTH,
 } from "./constants";
+import type { SelectedTextSource } from "./types";
 
 export const DEFAULT_SELECTED_TEXT_PROMPT =
   "Please explain this selected text.";
 export const DEFAULT_FILE_ANALYSIS_PROMPT = "Please analyze attached files.";
+
+export function normalizeSelectedTextSource(value: unknown): SelectedTextSource {
+  return value === "model" ? "model" : "pdf";
+}
+
+export function getSelectedTextSourceIcon(source: SelectedTextSource): string {
+  return source === "model" ? "🧠" : "📋";
+}
 
 export function sanitizeText(text: string) {
   let out = "";
@@ -141,6 +150,35 @@ export function buildQuestionWithSelectedTexts(
     return `Text Context ${index + 1}:\n"""\n${text}\n"""`;
   });
   return `Selected text contexts from the PDF reader:\n${contextBlocks.join(
+    "\n\n",
+  )}\n\nUser question:\n${normalizedPrompt}`;
+}
+
+export function buildQuestionWithSelectedTextContexts(
+  selectedTexts: string[],
+  selectedTextSources: SelectedTextSource[] | undefined,
+  userPrompt: string,
+): string {
+  const normalizedPrompt = userPrompt.trim() || DEFAULT_SELECTED_TEXT_PROMPT;
+  const normalizedTexts = selectedTexts
+    .map((text) => sanitizeText(text).trim())
+    .filter(Boolean);
+  if (!normalizedTexts.length) {
+    return `User question:\n${normalizedPrompt}`;
+  }
+  const normalizedSources = normalizedTexts.map((_, index) =>
+    normalizeSelectedTextSource(selectedTextSources?.[index]),
+  );
+  if (normalizedTexts.length === 1 && normalizedSources[0] === "pdf") {
+    return buildQuestionWithSelectedText(normalizedTexts[0], normalizedPrompt);
+  }
+  const contextBlocks = normalizedTexts.map((text, index) => {
+    const source = normalizedSources[index];
+    const sourceLabel =
+      source === "model" ? "model_response 🧠" : "pdf_reader 📋";
+    return `Text Context ${index + 1} [source=${sourceLabel}]:\n"""\n${text}\n"""`;
+  });
+  return `Selected text contexts with explicit sources:\n${contextBlocks.join(
     "\n\n",
   )}\n\nUser question:\n${normalizedPrompt}`;
 }

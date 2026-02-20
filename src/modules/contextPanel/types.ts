@@ -1,5 +1,11 @@
 import type { ReasoningLevel as LLMReasoningLevel } from "../../utils/llmClient";
 
+export type SelectedTextSource = "pdf" | "model";
+export type SelectedTextContext = {
+  text: string;
+  source: SelectedTextSource;
+};
+
 export interface Message {
   role: "user" | "assistant";
   text: string;
@@ -7,6 +13,7 @@ export interface Message {
   selectedText?: string;
   selectedTextExpanded?: boolean;
   selectedTexts?: string[];
+  selectedTextSources?: SelectedTextSource[];
   selectedTextExpandedIndex?: number;
   screenshotImages?: string[];
   attachments?: ChatAttachment[];

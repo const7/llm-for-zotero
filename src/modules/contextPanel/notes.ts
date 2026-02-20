@@ -3,6 +3,8 @@ import {
   sanitizeText,
   escapeNoteHtml,
   getCurrentLocalTimestamp,
+  getSelectedTextSourceIcon,
+  normalizeSelectedTextSource,
 } from "./textUtils";
 import { MAX_SELECTED_IMAGES } from "./constants";
 import {
@@ -11,7 +13,7 @@ import {
   rememberAssistantNoteForParent,
 } from "./prefHelpers";
 import { copyAttachmentFileToNoteDir, toFileUrl } from "./attachmentStorage";
-import type { ChatAttachment, Message } from "./types";
+import type { ChatAttachment, Message, SelectedTextSource } from "./types";
 
 function resolveParentItemForNote(item: Zotero.Item): Zotero.Item | null {
   if (item.isAttachment() && item.parentID) {
@@ -103,15 +105,36 @@ function formatSelectedTextQuoteMarkdown(
 function normalizeSelectedTextsForNote(
   selectedTexts: unknown,
   selectedText: unknown,
-): string[] {
-  if (Array.isArray(selectedTexts)) {
-    return selectedTexts
-      .map((entry) => sanitizeText(typeof entry === "string" ? entry : "").trim())
-      .filter(Boolean);
-  }
-  const legacy =
-    typeof selectedText === "string" ? sanitizeText(selectedText).trim() : "";
-  return legacy ? [legacy] : [];
+  selectedTextSources: unknown,
+): Array<{ text: string; source: SelectedTextSource }> {
+  const normalizedTexts = (() => {
+    if (Array.isArray(selectedTexts)) {
+      return selectedTexts
+        .map((entry) =>
+          sanitizeText(typeof entry === "string" ? entry : "").trim(),
+        )
+        .filter(Boolean);
+    }
+    const legacy =
+      typeof selectedText === "string" ? sanitizeText(selectedText).trim() : "";
+    return legacy ? [legacy] : [];
+  })();
+  if (!normalizedTexts.length) return [];
+  const rawSources = Array.isArray(selectedTextSources) ? selectedTextSources : [];
+  return normalizedTexts.map((text, index) => ({
+    text,
+    source: normalizeSelectedTextSource(rawSources[index]),
+  }));
+}
+
+function formatSelectedTextLabel(
+  source: SelectedTextSource,
+  index: number,
+  total: number,
+): string {
+  const icon = getSelectedTextSourceIcon(source);
+  if (total === 1) return `${icon} Selected text`;
+  return `${icon} Selected text (${index + 1})`;
 }
 
 function buildScreenshotImagesHtmlForNote(images: string[]): string {
@@ -200,9 +223,10 @@ export function buildChatHistoryNotePayload(messages: Message[]): {
   const htmlBlocks: string[] = [];
   for (const msg of messages) {
     const text = sanitizeText(msg.text || "").trim();
-    const selectedTexts = normalizeSelectedTextsForNote(
+    const selectedTextContexts = normalizeSelectedTextsForNote(
       msg.selectedTexts,
       msg.selectedText,
+      msg.selectedTextSources,
     );
     const screenshotImages = normalizeScreenshotImagesForNote(
       msg.screenshotImages,
@@ -211,7 +235,7 @@ export function buildChatHistoryNotePayload(messages: Message[]): {
     const screenshotCount = screenshotImages.length;
     if (
       !text &&
-      !selectedTexts.length &&
+      !selectedTextContexts.length &&
       !screenshotCount &&
       !fileAttachments.length
     )
@@ -221,15 +245,25 @@ export function buildChatHistoryNotePayload(messages: Message[]): {
     if (msg.role === "user") {
       const userBlocks: string[] = [];
       const userHtmlBlocks: string[] = [];
-      if (selectedTexts.length === 1) {
-        userBlocks.push(formatSelectedTextQuoteMarkdown(selectedTexts[0]));
-        userHtmlBlocks.push(formatSelectedTextQuoteMarkdown(selectedTexts[0]));
-      } else if (selectedTexts.length > 1) {
-        selectedTexts.forEach((selectedText, index) => {
-          const label = `Selected text (${index + 1})`;
-          userBlocks.push(formatSelectedTextQuoteMarkdown(selectedText, label));
+      if (selectedTextContexts.length === 1) {
+        const entry = selectedTextContexts[0];
+        const label = formatSelectedTextLabel(
+          entry.source,
+          0,
+          selectedTextContexts.length,
+        );
+        userBlocks.push(formatSelectedTextQuoteMarkdown(entry.text, label));
+        userHtmlBlocks.push(formatSelectedTextQuoteMarkdown(entry.text, label));
+      } else if (selectedTextContexts.length > 1) {
+        selectedTextContexts.forEach((entry, index) => {
+          const label = formatSelectedTextLabel(
+            entry.source,
+            index,
+            selectedTextContexts.length,
+          );
+          userBlocks.push(formatSelectedTextQuoteMarkdown(entry.text, label));
           userHtmlBlocks.push(
-            formatSelectedTextQuoteMarkdown(selectedText, label),
+            formatSelectedTextQuoteMarkdown(entry.text, label),
           );
         });
       }

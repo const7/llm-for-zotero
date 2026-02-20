@@ -5,6 +5,7 @@ import type {
   ReasoningLevelSelection,
   CustomShortcut,
   ChatAttachment,
+  SelectedTextContext,
 } from "./types";
 
 // =============================================================================
@@ -67,7 +68,7 @@ export const selectedImagePinnedCache = new Map<number, boolean[]>();
 export const selectedFileAttachmentCache = new Map<number, ChatAttachment[]>();
 export const selectedFilePinnedCache = new Map<number, boolean[]>();
 export const selectedFilePreviewExpandedCache = new Map<number, boolean>();
-export const selectedTextCache = new Map<number, string[]>();
+export const selectedTextCache = new Map<number, SelectedTextContext[]>();
 export const selectedTextPreviewExpandedCache = new Map<number, number>();
 export const selectedImagePreviewExpandedCache = new Map<number, boolean>();
 export const selectedImagePreviewActiveIndexCache = new Map<number, number>();

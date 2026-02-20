@@ -10,7 +10,12 @@ import {
   selectedTextPreviewExpandedCache,
   recentReaderSelectionCache,
 } from "./state";
-import type { ZoteroTabsState, ResolvedContextSource } from "./types";
+import type {
+  ZoteroTabsState,
+  ResolvedContextSource,
+  SelectedTextContext,
+  SelectedTextSource,
+} from "./types";
 
 function getActiveReaderForSelectedTab(): any | null {
   const tabs = getZoteroTabsState();
@@ -380,26 +385,64 @@ export function getActiveReaderSelectionText(
   return "";
 }
 
-function normalizeSelectedTextContexts(value: unknown): string[] {
+function normalizeSelectedTextSource(value: unknown): SelectedTextSource {
+  return value === "model" ? "model" : "pdf";
+}
+
+function normalizeSelectedTextContexts(value: unknown): SelectedTextContext[] {
   if (Array.isArray(value)) {
-    return value
-      .map((entry) => normalizeSelectedText(typeof entry === "string" ? entry : ""))
-      .filter(Boolean);
+    const out: SelectedTextContext[] = [];
+    for (const entry of value) {
+      if (typeof entry === "string") {
+        const normalizedText = normalizeSelectedText(entry);
+        if (!normalizedText) continue;
+        out.push({ text: normalizedText, source: "pdf" });
+        continue;
+      }
+      if (!entry || typeof entry !== "object") continue;
+      const typed = entry as { text?: unknown; source?: unknown };
+      const normalizedText = normalizeSelectedText(
+        typeof typed.text === "string" ? typed.text : "",
+      );
+      if (!normalizedText) continue;
+      out.push({
+        text: normalizedText,
+        source: normalizeSelectedTextSource(typed.source),
+      });
+    }
+    return out;
   }
   if (typeof value === "string") {
     const normalized = normalizeSelectedText(value);
-    return normalized ? [normalized] : [];
+    return normalized ? [{ text: normalized, source: "pdf" }] : [];
   }
   return [];
 }
 
 export function getSelectedTextContexts(itemId: number): string[] {
+  return getSelectedTextContextEntries(itemId).map((entry) => entry.text);
+}
+
+export function getSelectedTextContextEntries(
+  itemId: number,
+): SelectedTextContext[] {
   const raw = selectedTextCache.get(itemId);
   return normalizeSelectedTextContexts(raw);
 }
 
 export function setSelectedTextContexts(itemId: number, texts: string[]): void {
-  const normalized = normalizeSelectedTextContexts(texts);
+  const normalized = texts
+    .map((text) => normalizeSelectedText(text))
+    .filter(Boolean)
+    .map((text) => ({ text, source: "pdf" as const }));
+  setSelectedTextContextEntries(itemId, normalized);
+}
+
+export function setSelectedTextContextEntries(
+  itemId: number,
+  contexts: SelectedTextContext[],
+): void {
+  const normalized = normalizeSelectedTextContexts(contexts);
   if (!normalized.length) {
     selectedTextCache.delete(itemId);
     selectedTextPreviewExpandedCache.delete(itemId);
@@ -411,12 +454,19 @@ export function setSelectedTextContexts(itemId: number, texts: string[]): void {
 export function appendSelectedTextContextForItem(
   itemId: number,
   text: string,
+  source: SelectedTextSource = "pdf",
 ): boolean {
   const normalizedText = normalizeSelectedText(text || "");
   if (!normalizedText) return false;
-  const existingTexts = getSelectedTextContexts(itemId);
-  if (existingTexts.length >= MAX_SELECTED_TEXT_CONTEXTS) return false;
-  setSelectedTextContexts(itemId, [...existingTexts, normalizedText]);
+  const existingContexts = getSelectedTextContextEntries(itemId);
+  if (existingContexts.length >= MAX_SELECTED_TEXT_CONTEXTS) return false;
+  setSelectedTextContextEntries(itemId, [
+    ...existingContexts,
+    {
+      text: normalizedText,
+      source: normalizeSelectedTextSource(source),
+    },
+  ]);
   selectedTextPreviewExpandedCache.delete(itemId);
   return true;
 }
@@ -455,6 +505,7 @@ type AddSelectedTextContextOptions = {
   noSelectionStatusText?: string;
   successStatusText?: string;
   focusInput?: boolean;
+  source?: SelectedTextSource;
 };
 
 export function addSelectedTextContext(
@@ -472,7 +523,11 @@ export function addSelectedTextContext(
     return false;
   }
 
-  const appended = appendSelectedTextContextForItem(itemId, normalizedText);
+  const appended = appendSelectedTextContextForItem(
+    itemId,
+    normalizedText,
+    options.source || "pdf",
+  );
   if (!appended) {
     if (status) setStatus(status, "Text Context up to 5", "error");
     return false;
@@ -497,8 +552,8 @@ export function applySelectedTextPreview(body: Element, itemId: number) {
   ) as HTMLButtonElement | null;
   if (!previewList) return;
 
-  const selectedTexts = getSelectedTextContexts(itemId);
-  if (!selectedTexts.length) {
+  const selectedContexts = getSelectedTextContextEntries(itemId);
+  if (!selectedContexts.length) {
     previewList.style.display = "none";
     previewList.innerHTML = "";
     selectedTextPreviewExpandedCache.delete(itemId);
@@ -511,22 +566,36 @@ export function applySelectedTextPreview(body: Element, itemId: number) {
   const ownerDoc = body.ownerDocument;
   if (!ownerDoc) return;
 
-  const expandedIndex = getSelectedTextExpandedIndex(itemId, selectedTexts.length);
+  const expandedIndex = getSelectedTextExpandedIndex(
+    itemId,
+    selectedContexts.length,
+  );
   previewList.style.display = "contents";
   previewList.innerHTML = "";
 
-  for (const [index, selectedText] of selectedTexts.entries()) {
+  for (const [index, selectedContext] of selectedContexts.entries()) {
+    const selectedText = selectedContext.text;
+    const selectedSource = selectedContext.source;
     const isExpanded = expandedIndex === index;
     const contextLabel =
-      selectedTexts.length > 1 && index > 0
+      selectedContexts.length > 1 && index > 0
         ? `Text Context (${index + 1})`
         : "Text Context";
 
     const previewBox = ownerDoc.createElement("div");
     previewBox.className = "llm-selected-context";
     previewBox.dataset.contextIndex = `${index}`;
+    previewBox.dataset.contextSource = selectedSource;
     previewBox.classList.toggle("expanded", isExpanded);
     previewBox.classList.toggle("collapsed", !isExpanded);
+    previewBox.classList.toggle(
+      "llm-selected-context-source-pdf",
+      selectedSource === "pdf",
+    );
+    previewBox.classList.toggle(
+      "llm-selected-context-source-model",
+      selectedSource === "model",
+    );
 
     const previewHeader = ownerDoc.createElement("div");
     previewHeader.className = "llm-image-preview-header llm-selected-context-header";
@@ -535,6 +604,15 @@ export function applySelectedTextPreview(body: Element, itemId: number) {
     previewMeta.type = "button";
     previewMeta.className = "llm-image-preview-meta llm-selected-context-meta";
     previewMeta.dataset.contextIndex = `${index}`;
+    previewMeta.dataset.contextSource = selectedSource;
+    previewMeta.classList.toggle(
+      "llm-selected-context-source-pdf",
+      selectedSource === "pdf",
+    );
+    previewMeta.classList.toggle(
+      "llm-selected-context-source-model",
+      selectedSource === "model",
+    );
     previewMeta.textContent = contextLabel;
     const isCorrupted = isLikelyCorruptedSelectedText(selectedText);
     previewMeta.classList.toggle(
@@ -592,5 +670,6 @@ export function includeSelectedTextFromReader(
     noSelectionStatusText: "No text selected in reader",
     successStatusText: "Selected text included",
     focusInput: true,
+    source: "pdf",
   });
 }

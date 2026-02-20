@@ -1203,8 +1203,12 @@
   max-width: 100%;
 }
 
-.llm-image-preview-meta.llm-selected-context-meta::before {
+.llm-image-preview-meta.llm-selected-context-meta.llm-selected-context-source-pdf::before {
   content: "📋";
+}
+
+.llm-image-preview-meta.llm-selected-context-meta.llm-selected-context-source-model::before {
+  content: "🧠";
 }
 
 .llm-image-preview-meta.llm-selected-context-meta.llm-selected-context-meta-corrupted::after {

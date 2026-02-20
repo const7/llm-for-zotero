@@ -1,9 +1,12 @@
+import type { SelectedTextSource } from "../modules/contextPanel/types";
+
 export type StoredChatMessage = {
   role: "user" | "assistant";
   text: string;
   timestamp: number;
   selectedText?: string;
   selectedTexts?: string[];
+  selectedTextSources?: SelectedTextSource[];
   screenshotImages?: string[];
   attachments?: Array<{
     id: string;
@@ -24,6 +27,10 @@ const CHAT_MESSAGES_TABLE = "llm_for_zotero_chat_messages";
 const CHAT_MESSAGES_INDEX = "llm_for_zotero_chat_messages_conversation_idx";
 const LEGACY_CHAT_MESSAGES_TABLE = "zoterollm_chat_messages";
 const LEGACY_CHAT_MESSAGES_INDEX = "zoterollm_chat_messages_conversation_idx";
+
+function normalizeSelectedTextSource(value: unknown): SelectedTextSource {
+  return value === "model" ? "model" : "pdf";
+}
 
 async function tableExists(tableName: string): Promise<boolean> {
   const rows = (await Zotero.DB.queryAsync(
@@ -101,6 +108,7 @@ export async function initChatStore(): Promise<void> {
         timestamp INTEGER NOT NULL,
         selected_text TEXT,
         selected_texts_json TEXT,
+        selected_text_sources_json TEXT,
         screenshot_images TEXT,
         attachments_json TEXT,
         model_name TEXT,
@@ -137,6 +145,15 @@ export async function initChatStore(): Promise<void> {
       await Zotero.DB.queryAsync(
         `ALTER TABLE ${CHAT_MESSAGES_TABLE}
          ADD COLUMN selected_texts_json TEXT`,
+      );
+    }
+    const hasSelectedTextSourcesJsonColumn = Boolean(
+      columns?.some((column) => column?.name === "selected_text_sources_json"),
+    );
+    if (!hasSelectedTextSourcesJsonColumn) {
+      await Zotero.DB.queryAsync(
+        `ALTER TABLE ${CHAT_MESSAGES_TABLE}
+         ADD COLUMN selected_text_sources_json TEXT`,
       );
     }
     const hasScreenshotImagesColumn = Boolean(
@@ -179,6 +196,7 @@ export async function loadConversation(
             timestamp,
             selected_text AS selectedText,
             selected_texts_json AS selectedTextsJson,
+            selected_text_sources_json AS selectedTextSourcesJson,
             screenshot_images AS screenshotImages,
             attachments_json AS attachmentsJson,
             model_name AS modelName,
@@ -196,6 +214,7 @@ export async function loadConversation(
         timestamp: unknown;
         selectedText?: unknown;
         selectedTextsJson?: unknown;
+        selectedTextSourcesJson?: unknown;
         screenshotImages?: unknown;
         attachmentsJson?: unknown;
         modelName?: unknown;
@@ -232,6 +251,22 @@ export async function loadConversation(
         }
       } catch (_err) {
         selectedTexts = undefined;
+      }
+    }
+    let selectedTextSources: SelectedTextSource[] | undefined;
+    if (
+      typeof row.selectedTextSourcesJson === "string" &&
+      row.selectedTextSourcesJson
+    ) {
+      try {
+        const parsed = JSON.parse(row.selectedTextSourcesJson) as unknown;
+        if (Array.isArray(parsed)) {
+          selectedTextSources = parsed.map((entry) =>
+            normalizeSelectedTextSource(entry),
+          );
+        }
+      } catch (_err) {
+        selectedTextSources = undefined;
       }
     }
     let screenshotImages: string[] | undefined;
@@ -331,12 +366,27 @@ export async function loadConversation(
       timestamp: Number.isFinite(timestamp) ? timestamp : Date.now(),
       selectedText:
         typeof row.selectedText === "string" ? row.selectedText : undefined,
-      selectedTexts:
-        selectedTexts?.length
-          ? selectedTexts
-          : typeof row.selectedText === "string" && row.selectedText.trim()
-            ? [row.selectedText]
-            : undefined,
+      selectedTexts: (() => {
+        const normalizedTexts =
+          selectedTexts?.length
+            ? selectedTexts
+            : typeof row.selectedText === "string" && row.selectedText.trim()
+              ? [row.selectedText]
+              : [];
+        return normalizedTexts.length ? normalizedTexts : undefined;
+      })(),
+      selectedTextSources: (() => {
+        const normalizedTexts =
+          selectedTexts?.length
+            ? selectedTexts
+            : typeof row.selectedText === "string" && row.selectedText.trim()
+              ? [row.selectedText]
+              : [];
+        if (!normalizedTexts.length) return undefined;
+        return normalizedTexts.map((_, index) =>
+          normalizeSelectedTextSource(selectedTextSources?.[index]),
+        );
+      })(),
       screenshotImages,
       attachments,
       modelName: typeof row.modelName === "string" ? row.modelName : undefined,
@@ -370,6 +420,9 @@ export async function appendMessage(
     : typeof message.selectedText === "string" && message.selectedText.trim()
       ? [message.selectedText.trim()]
       : [];
+  const selectedTextSources = selectedTexts.map((_, index) =>
+    normalizeSelectedTextSource(message.selectedTextSources?.[index]),
+  );
   const screenshotImages = Array.isArray(message.screenshotImages)
     ? message.screenshotImages.filter((entry) => Boolean(entry))
     : [];
@@ -380,8 +433,8 @@ export async function appendMessage(
     : [];
   await Zotero.DB.queryAsync(
     `INSERT INTO ${CHAT_MESSAGES_TABLE}
-      (conversation_key, role, text, timestamp, selected_text, selected_texts_json, screenshot_images, attachments_json, model_name, reasoning_summary, reasoning_details)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      (conversation_key, role, text, timestamp, selected_text, selected_texts_json, selected_text_sources_json, screenshot_images, attachments_json, model_name, reasoning_summary, reasoning_details)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       normalizedKey,
       message.role,
@@ -389,6 +442,7 @@ export async function appendMessage(
       Number.isFinite(timestamp) ? Math.floor(timestamp) : Date.now(),
       selectedTexts[0] || message.selectedText || null,
       selectedTexts.length ? JSON.stringify(selectedTexts) : null,
+      selectedTextSources.length ? JSON.stringify(selectedTextSources) : null,
       screenshotImages.length ? JSON.stringify(screenshotImages) : null,
       attachments.length ? JSON.stringify(attachments) : null,
       message.modelName || null,

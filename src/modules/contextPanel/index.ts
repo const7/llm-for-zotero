@@ -171,7 +171,10 @@ export function registerReaderSelectionTracking() {
       const addTextToPanel = () => {
         const appendByKey = new Map<number, boolean>();
         for (const key of keys) {
-          appendByKey.set(key, appendSelectedTextContextForItem(key, selectedText));
+          appendByKey.set(
+            key,
+            appendSelectedTextContextForItem(key, selectedText, "pdf"),
+          );
         }
         try {
           const docs = new Set<Document>();
@@ -280,7 +283,7 @@ export function registerReaderSelectionTracking() {
           if (!appendByKey.has(panelItemId)) {
             appendByKey.set(
               panelItemId,
-              appendSelectedTextContextForItem(panelItemId, selectedText),
+              appendSelectedTextContextForItem(panelItemId, selectedText, "pdf"),
             );
           }
 
