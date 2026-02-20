@@ -68,6 +68,7 @@ import {
   resolveContextSourceItem,
 } from "./contextResolution";
 import { buildChatHistoryNotePayload } from "./notes";
+import { toFileUrl } from "./attachmentStorage";
 
 /** Get AbortController constructor from global scope */
 function getAbortController(): new () => AbortController {
@@ -85,6 +86,34 @@ function appendReasoningPart(base: string | undefined, next?: string): string {
   const chunk = sanitizeText(next || "");
   if (!chunk) return base || "";
   return `${base || ""}${chunk}`;
+}
+
+function openStoredAttachmentFromMessage(attachment: ChatAttachment): boolean {
+  const fileUrl = toFileUrl(attachment.storedPath);
+  if (!fileUrl) return false;
+  try {
+    const launch = (Zotero as any).launchURL as
+      | ((url: string) => void)
+      | undefined;
+    if (typeof launch === "function") {
+      launch(fileUrl);
+      return true;
+    }
+  } catch (_err) {
+    void _err;
+  }
+  try {
+    const win = Zotero.getMainWindow?.() as
+      | (Window & { open?: (url?: string, target?: string) => unknown })
+      | null;
+    if (win?.open) {
+      win.open(fileUrl, "_blank");
+      return true;
+    }
+  } catch (_err) {
+    void _err;
+  }
+  return false;
 }
 
 function normalizeSelectedTexts(
@@ -131,6 +160,42 @@ function getMessageSelectedTextExpandedIndex(
   }
   if (message.selectedTextExpanded === true) return 0;
   return -1;
+}
+
+function getUserBubbleElement(
+  wrapper: HTMLElement,
+): HTMLDivElement | null {
+  const children = Array.from(wrapper.children) as HTMLElement[];
+  for (const child of children) {
+    if (
+      child.classList.contains("llm-bubble") &&
+      child.classList.contains("user")
+    ) {
+      return child as HTMLDivElement;
+    }
+  }
+  return null;
+}
+
+export function syncUserContextAlignmentWidths(body: Element): void {
+  const chatBox = body.querySelector("#llm-chat-box") as HTMLDivElement | null;
+  if (!chatBox) return;
+  const wrappers = Array.from(
+    chatBox.querySelectorAll(".llm-message-wrapper.user.llm-user-context-aligned"),
+  ) as HTMLDivElement[];
+  for (const wrapper of wrappers) {
+    const bubble = getUserBubbleElement(wrapper);
+    if (!bubble) {
+      wrapper.style.removeProperty("--llm-user-bubble-width");
+      continue;
+    }
+    const bubbleWidth = Math.round(bubble.getBoundingClientRect().width);
+    if (bubbleWidth > 0) {
+      wrapper.style.setProperty("--llm-user-bubble-width", `${bubbleWidth}px`);
+    } else {
+      wrapper.style.removeProperty("--llm-user-bubble-width");
+    }
+  }
 }
 
 export function getConversationKey(item: Zotero.Item): number {
@@ -1415,6 +1480,7 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
               typeof entry.name === "string",
           )
         : [];
+      hasUserContext = hasUserContext || fileAttachments.length > 0;
       if (fileAttachments.length) {
         const filesBar = doc.createElement("button") as HTMLButtonElement;
         filesBar.type = "button";
@@ -1438,8 +1504,33 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
         filesList.className = "llm-user-files-list";
 
         for (const attachment of fileAttachments) {
-          const fileItem = doc.createElement("div") as HTMLDivElement;
+          const canOpen = Boolean(toFileUrl(attachment.storedPath));
+          const fileItem = doc.createElement(
+            canOpen ? "button" : "div",
+          ) as HTMLButtonElement | HTMLDivElement;
           fileItem.className = "llm-user-files-item";
+          if (canOpen) {
+            fileItem.classList.add("llm-user-files-item-openable");
+            (fileItem as HTMLButtonElement).type = "button";
+            (fileItem as HTMLButtonElement).title = `Open ${attachment.name}`;
+            fileItem.addEventListener("mousedown", (e: Event) => {
+              const mouse = e as MouseEvent;
+              if (mouse.button !== 0) return;
+              mouse.preventDefault();
+              mouse.stopPropagation();
+              openStoredAttachmentFromMessage(attachment);
+            });
+            fileItem.addEventListener("click", (e: Event) => {
+              e.preventDefault();
+              e.stopPropagation();
+            });
+            fileItem.addEventListener("keydown", (e: KeyboardEvent) => {
+              if (e.key !== "Enter" && e.key !== " ") return;
+              e.preventDefault();
+              e.stopPropagation();
+              openStoredAttachmentFromMessage(attachment);
+            });
+          }
 
           const fileType = doc.createElement("span") as HTMLSpanElement;
           fileType.className = "llm-user-files-item-type";
@@ -1750,16 +1841,11 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
     wrapper.appendChild(meta);
     chatBox.appendChild(wrapper);
     if (isUser && hasUserContext) {
-      const bubbleWidth = Math.round(bubble.getBoundingClientRect().width);
-      if (bubbleWidth > 0) {
-        wrapper.classList.add("llm-user-context-aligned");
-        wrapper.style.setProperty(
-          "--llm-user-bubble-width",
-          `${bubbleWidth}px`,
-        );
-      }
+      wrapper.classList.add("llm-user-context-aligned");
     }
   }
+
+  syncUserContextAlignmentWidths(body);
 
   applyChatScrollSnapshot(chatBox, baselineSnapshot);
   persistChatScrollSnapshotByKey(conversationKey, chatBox);

@@ -65,6 +65,7 @@ import {
 import {
   sendQuestion,
   refreshChat,
+  syncUserContextAlignmentWidths,
   getConversationKey,
   ensureConversationLoaded,
   persistChatScrollSnapshot,
@@ -1790,6 +1791,7 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
       // resize of .llm-messages doesn't corrupt the scroll snapshot.
       withScrollGuard(chatBox, conversationKey, () => {
         applyResponsiveActionButtonsLayout();
+        syncUserContextAlignmentWidths(body);
       });
     });
     ro.observe(panelRoot);

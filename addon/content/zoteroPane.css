@@ -560,10 +560,43 @@
 }
 
 .llm-user-files-item {
+  appearance: none;
+  -moz-appearance: none;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
   gap: 0 10px;
+  width: 100%;
+  min-height: 50px;
+  padding: 6px 8px;
+  margin: 0;
+  border: 1px solid var(--stroke-secondary);
+  border-radius: 10px;
+  background: color-mix(
+    in srgb,
+    var(--material-background) 84%,
+    var(--fill-quinary)
+  );
+  text-align: left;
+  color: inherit;
+  font: inherit;
+}
+
+.llm-user-files-item-openable {
+  cursor: pointer;
+}
+
+.llm-user-files-item-openable:hover {
+  background: color-mix(
+    in srgb,
+    var(--color-accent) 12%,
+    var(--material-background)
+  );
+}
+
+.llm-user-files-item-openable:focus-visible {
+  outline: 1px solid var(--color-accent);
+  outline-offset: 1px;
 }
 
 .llm-user-files-item-type {
@@ -655,13 +688,25 @@
 }
 
 .llm-message-wrapper.user.llm-user-context-aligned .llm-user-selected-text,
-.llm-message-wrapper.user.llm-user-context-aligned .llm-user-screenshots-bar,
 .llm-message-wrapper.user.llm-user-context-aligned
   .llm-user-selected-text-expanded,
 .llm-message-wrapper.user.llm-user-context-aligned
-  .llm-user-screenshots-expanded {
-  width: var(--llm-user-bubble-width);
-  max-width: var(--llm-user-bubble-width);
+  .llm-user-screenshots-expanded,
+.llm-message-wrapper.user.llm-user-context-aligned .llm-user-files-expanded {
+  width: var(--llm-user-bubble-width, min(95%, 620px));
+  max-width: var(--llm-user-bubble-width, min(95%, 620px));
+  box-sizing: border-box;
+}
+
+.llm-message-wrapper.user.llm-user-context-aligned .llm-user-context-badges {
+  width: var(--llm-user-bubble-width, min(95%, 620px));
+  max-width: var(--llm-user-bubble-width, min(95%, 620px));
+  box-sizing: border-box;
+  justify-content: flex-start;
+}
+
+.llm-message-wrapper.user .llm-message-meta {
+  margin-right: 8px;
 }
 
 .llm-user-screenshots-thumbs {
@@ -1916,6 +1961,11 @@
     auto-fit,
     minmax(var(--llm-file-card-min-width), 1fr)
   );
+}
+
+/* User-message file cards should remain readable inside bubble-aligned width. */
+#llm-main .llm-message-wrapper.user.llm-user-context-aligned .llm-user-files-list {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .llm-file-context-item {
