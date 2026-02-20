@@ -1553,6 +1553,14 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
 
   for (const [index, msg] of history.entries()) {
     const isUser = msg.role === "user";
+    const canEditLatestUserPrompt = Boolean(
+      isUser &&
+      item &&
+      latestEditableIsIdle &&
+      index === latestEditableUserIndex &&
+      Number.isFinite(latestEditableUserTimestamp) &&
+      Number.isFinite(latestEditableAssistantTimestamp),
+    );
     let hasUserContext = false;
     const wrapper = doc.createElement("div") as HTMLDivElement;
     wrapper.className = `llm-message-wrapper ${isUser ? "user" : "assistant"}`;
@@ -1916,13 +1924,7 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
         renderSelectedTextStates();
       }
       bubble.textContent = sanitizeText(msg.text || "");
-      if (
-        item &&
-        latestEditableIsIdle &&
-        index === latestEditableUserIndex &&
-        Number.isFinite(latestEditableUserTimestamp) &&
-        Number.isFinite(latestEditableAssistantTimestamp)
-      ) {
+      if (canEditLatestUserPrompt) {
         bubble.addEventListener("contextmenu", (e: Event) => {
           const me = e as MouseEvent;
           me.preventDefault();
@@ -2110,6 +2112,21 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
     const time = doc.createElement("span") as HTMLSpanElement;
     time.className = "llm-message-time";
     time.textContent = formatTime(msg.timestamp);
+    if (canEditLatestUserPrompt) {
+      const editBtn = doc.createElement("button") as HTMLButtonElement;
+      editBtn.type = "button";
+      editBtn.className = "llm-edit-latest";
+      editBtn.textContent = "✎";
+      editBtn.title = "Edit latest prompt";
+      editBtn.setAttribute("aria-label", "Edit latest prompt");
+      editBtn.dataset.userTimestamp = String(
+        latestEditableUserTimestamp as number,
+      );
+      editBtn.dataset.assistantTimestamp = String(
+        latestEditableAssistantTimestamp as number,
+      );
+      meta.appendChild(editBtn);
+    }
     meta.appendChild(time);
     if (
       !isUser &&

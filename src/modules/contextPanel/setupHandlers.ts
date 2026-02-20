@@ -3001,10 +3001,41 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
 
   if (chatBox) {
     chatBox.addEventListener("click", (e: Event) => {
-      const target = (e.target as Element | null)?.closest(
+      const editTarget = (e.target as Element | null)?.closest(
+        ".llm-edit-latest",
+      ) as HTMLButtonElement | null;
+      if (editTarget) {
+        e.preventDefault();
+        e.stopPropagation();
+        closeResponseMenu();
+        closeExportMenu();
+        closeRetryModelMenu();
+        if (!item || !promptMenuEditBtn) return;
+        const userTimestamp = Number(editTarget.dataset.userTimestamp || "");
+        const assistantTimestamp = Number(
+          editTarget.dataset.assistantTimestamp || "",
+        );
+        if (
+          !Number.isFinite(userTimestamp) ||
+          !Number.isFinite(assistantTimestamp)
+        ) {
+          if (status) setStatus(status, "No editable latest prompt", "error");
+          return;
+        }
+        setPromptMenuTarget({
+          item,
+          conversationKey: getConversationKey(item),
+          userTimestamp,
+          assistantTimestamp,
+        });
+        promptMenuEditBtn.click();
+        return;
+      }
+
+      const retryTarget = (e.target as Element | null)?.closest(
         ".llm-retry-latest",
       ) as HTMLButtonElement | null;
-      if (!target) return;
+      if (!retryTarget) return;
       e.preventDefault();
       e.stopPropagation();
       closePromptMenu();
@@ -3012,7 +3043,7 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
       if (isFloatingMenuOpen(retryModelMenu)) {
         closeRetryModelMenu();
       } else {
-        openRetryModelMenu(target);
+        openRetryModelMenu(retryTarget);
       }
     });
   }

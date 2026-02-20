@@ -865,9 +865,10 @@
 
 /* Message Meta */
 .llm-message-meta {
+  --llm-meta-action-gap: 8px;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--llm-meta-action-gap);
   padding: 0 4px;
 }
 
@@ -876,12 +877,15 @@
   color: var(--fill-tertiary);
 }
 
+.llm-edit-latest,
 .llm-retry-latest {
   appearance: none;
   -moz-appearance: none;
   display: inline-flex;
+  flex: 0 0 18px;
   align-items: center;
   justify-content: center;
+  width: 18px;
   min-width: 18px;
   height: 18px;
   padding: 0;
@@ -900,6 +904,8 @@
     opacity 120ms ease;
 }
 
+.llm-edit-latest:hover:not(:disabled),
+.llm-edit-latest:focus-visible,
 .llm-retry-latest:hover:not(:disabled),
 .llm-retry-latest:focus-visible {
   color: var(--fill-primary);
@@ -907,6 +913,7 @@
   opacity: 1;
 }
 
+.llm-edit-latest:disabled,
 .llm-retry-latest:disabled {
   opacity: 0.35;
   cursor: not-allowed;
