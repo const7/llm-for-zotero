@@ -1058,14 +1058,11 @@ export async function retryLatestAssistantResponse(
 
   const assistantMessage = retryPair.assistantMessage;
   const assistantSnapshot = takeAssistantSnapshot(assistantMessage);
-  assistantMessage.text = "";
-  assistantMessage.timestamp = Date.now();
-  assistantMessage.modelName = effectiveModel;
   assistantMessage.streaming = true;
-  assistantMessage.reasoningSummary = undefined;
-  assistantMessage.reasoningDetails = undefined;
-  assistantMessage.reasoningOpen = false;
   refreshChatSafely();
+  let nextAssistantText = "";
+  let nextReasoningSummary = "";
+  let nextReasoningDetails = "";
 
   const restoreOriginalAssistant = () => {
     restoreAssistantSnapshot(assistantMessage, assistantSnapshot);
@@ -1097,16 +1094,6 @@ export async function retryLatestAssistantResponse(
       AbortControllerCtor ? new AbortControllerCtor() : null,
     );
 
-    let refreshQueued = false;
-    const queueRefresh = () => {
-      if (refreshQueued) return;
-      refreshQueued = true;
-      setTimeout(() => {
-        refreshQueued = false;
-        refreshChatSafely();
-      }, 50);
-    };
-
     const answer = await callLLMStream(
       {
         prompt: question,
@@ -1122,23 +1109,21 @@ export async function retryLatestAssistantResponse(
         maxTokens: effectiveAdvanced?.maxTokens,
       },
       (delta) => {
-        assistantMessage.text += sanitizeText(delta);
-        queueRefresh();
+        nextAssistantText += sanitizeText(delta);
       },
       (reasoningEvent: ReasoningEvent) => {
         if (reasoningEvent.summary) {
-          assistantMessage.reasoningSummary = appendReasoningPart(
-            assistantMessage.reasoningSummary,
+          nextReasoningSummary = appendReasoningPart(
+            nextReasoningSummary,
             reasoningEvent.summary,
           );
         }
         if (reasoningEvent.details) {
-          assistantMessage.reasoningDetails = appendReasoningPart(
-            assistantMessage.reasoningDetails,
+          nextReasoningDetails = appendReasoningPart(
+            nextReasoningDetails,
             reasoningEvent.details,
           );
         }
-        queueRefresh();
       },
     );
 
@@ -1152,7 +1137,12 @@ export async function retryLatestAssistantResponse(
     }
 
     assistantMessage.text =
-      sanitizeText(answer) || assistantMessage.text || "No response.";
+      sanitizeText(answer) || nextAssistantText || "No response.";
+    assistantMessage.timestamp = Date.now();
+    assistantMessage.modelName = effectiveModel;
+    assistantMessage.reasoningSummary = nextReasoningSummary || undefined;
+    assistantMessage.reasoningDetails = nextReasoningDetails || undefined;
+    assistantMessage.reasoningOpen = false;
     assistantMessage.streaming = false;
     refreshChatSafely();
 
