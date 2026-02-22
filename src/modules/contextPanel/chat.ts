@@ -23,6 +23,9 @@ import {
   AUTO_SCROLL_BOTTOM_THRESHOLD,
   MAX_SELECTED_IMAGES,
   formatFigureCountLabel,
+  formatPaperCountLabel,
+  ACTIVE_PAPER_MULTI_CONTEXT_MAX_CHUNKS,
+  ACTIVE_PAPER_MULTI_CONTEXT_MAX_LENGTH,
 } from "./constants";
 import type {
   Message,
@@ -32,6 +35,7 @@ import type {
   AdvancedModelParams,
   ChatAttachment,
   SelectedTextSource,
+  PaperContextRef,
 } from "./types";
 import {
   chatHistory,
@@ -66,6 +70,7 @@ import {
   getStringPref,
 } from "./prefHelpers";
 import { buildContext, ensurePDFTextCached } from "./pdfContext";
+import { buildSupplementalPaperContext } from "./paperContext";
 import {
   getActiveContextAttachmentFromTabs,
   resolveContextSourceItem,
@@ -167,6 +172,47 @@ function normalizeSelectedTextSources(
   const out: SelectedTextSource[] = [];
   for (let index = 0; index < count; index++) {
     out.push(normalizeSelectedTextSource(raw[index]));
+  }
+  return out;
+}
+
+function normalizePaperContexts(paperContexts: unknown): PaperContextRef[] {
+  if (!Array.isArray(paperContexts)) return [];
+  const out: PaperContextRef[] = [];
+  const seen = new Set<string>();
+  for (const entry of paperContexts) {
+    if (!entry || typeof entry !== "object") continue;
+    const typed = entry as Record<string, unknown>;
+    const itemId = Number(typed.itemId);
+    const contextItemId = Number(typed.contextItemId);
+    if (!Number.isFinite(itemId) || !Number.isFinite(contextItemId)) continue;
+    const normalizedItemId = Math.floor(itemId);
+    const normalizedContextItemId = Math.floor(contextItemId);
+    if (normalizedItemId <= 0 || normalizedContextItemId <= 0) continue;
+    const title = sanitizeText(
+      typeof typed.title === "string" ? typed.title : "",
+    ).trim();
+    if (!title) continue;
+    const citationKey = sanitizeText(
+      typeof typed.citationKey === "string" ? typed.citationKey : "",
+    ).trim();
+    const firstCreator = sanitizeText(
+      typeof typed.firstCreator === "string" ? typed.firstCreator : "",
+    ).trim();
+    const year = sanitizeText(
+      typeof typed.year === "string" ? typed.year : "",
+    ).trim();
+    const dedupeKey = `${normalizedItemId}:${normalizedContextItemId}`;
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+    out.push({
+      itemId: normalizedItemId,
+      contextItemId: normalizedContextItemId,
+      title,
+      citationKey: citationKey || undefined,
+      firstCreator: firstCreator || undefined,
+      year: year || undefined,
+    });
   }
   return out;
 }
@@ -510,6 +556,7 @@ function toPanelMessage(message: StoredChatMessage): Message {
     message.selectedTextSources,
     selectedTexts.length,
   );
+  const paperContexts = normalizePaperContexts(message.paperContexts);
   return {
     role: message.role,
     text: message.text,
@@ -521,6 +568,8 @@ function toPanelMessage(message: StoredChatMessage): Message {
       ? selectedTextSources
       : undefined,
     selectedTextExpandedIndex: -1,
+    paperContexts: paperContexts.length ? paperContexts : undefined,
+    paperContextsExpanded: false,
     screenshotImages,
     attachments,
     attachmentsExpanded: false,
@@ -783,6 +832,7 @@ function reconstructRetryPayload(userMessage: Message): {
   question: string;
   screenshotImages: string[];
   fileAttachments: ChatFileAttachment[];
+  paperContexts: PaperContextRef[];
 } {
   const selectedTexts = getMessageSelectedTexts(userMessage);
   const selectedTextSources = normalizeSelectedTextSources(
@@ -826,6 +876,7 @@ function reconstructRetryPayload(userMessage: Message): {
         .filter(Boolean)
         .slice(0, MAX_SELECTED_IMAGES)
     : [];
+  const paperContexts = normalizePaperContexts(userMessage.paperContexts);
   const fileAttachmentsForModel: ChatFileAttachment[] = [];
   for (const attachment of fileAttachments) {
     if (
@@ -846,6 +897,7 @@ function reconstructRetryPayload(userMessage: Message): {
     question,
     screenshotImages,
     fileAttachments: fileAttachmentsForModel,
+    paperContexts,
   };
 }
 
@@ -953,6 +1005,12 @@ function normalizeEditableAttachments(
   }));
 }
 
+function normalizeEditablePaperContexts(
+  paperContexts?: PaperContextRef[],
+): PaperContextRef[] {
+  return normalizePaperContexts(paperContexts);
+}
+
 export async function editLatestUserMessageAndRetry(
   body: Element,
   item: Zotero.Item,
@@ -960,6 +1018,7 @@ export async function editLatestUserMessageAndRetry(
   selectedTexts?: string[],
   selectedTextSources?: SelectedTextSource[],
   screenshotImages?: string[],
+  paperContexts?: PaperContextRef[],
   attachments?: ChatAttachment[],
   expected?: EditLatestTurnMarker,
   model?: string,
@@ -996,6 +1055,7 @@ export async function editLatestUserMessageAndRetry(
         .filter(Boolean)
         .slice(0, MAX_SELECTED_IMAGES)
     : [];
+  const paperContextsForMessage = normalizeEditablePaperContexts(paperContexts);
   const attachmentsForMessage = normalizeEditableAttachments(attachments);
   const updatedTimestamp = Date.now();
   const nextDisplayQuestion = sanitizeText(displayQuestion || "");
@@ -1018,6 +1078,10 @@ export async function editLatestUserMessageAndRetry(
   retryPair.userMessage.screenshotExpanded = false;
   retryPair.userMessage.screenshotActiveIndex =
     screenshotImagesForMessage.length ? 0 : undefined;
+  retryPair.userMessage.paperContexts = paperContextsForMessage.length
+    ? paperContextsForMessage
+    : undefined;
+  retryPair.userMessage.paperContextsExpanded = false;
   retryPair.userMessage.attachments = attachmentsForMessage.length
     ? attachmentsForMessage
     : undefined;
@@ -1032,6 +1096,7 @@ export async function editLatestUserMessageAndRetry(
       selectedTexts: retryPair.userMessage.selectedTexts,
       selectedTextSources: retryPair.userMessage.selectedTextSources,
       screenshotImages: retryPair.userMessage.screenshotImages,
+      paperContexts: retryPair.userMessage.paperContexts,
       attachments: retryPair.userMessage.attachments,
     });
 
@@ -1117,9 +1182,8 @@ export async function retryLatestAssistantResponse(
   const historyForLLM = history
     .slice(0, retryPair.userIndex)
     .slice(-MAX_HISTORY_MESSAGES);
-  const { question, screenshotImages, fileAttachments } = reconstructRetryPayload(
-    retryPair.userMessage,
-  );
+  const { question, screenshotImages, fileAttachments, paperContexts } =
+    reconstructRetryPayload(retryPair.userMessage);
   if (!question.trim()) {
     setStatusSafely("Nothing to retry for latest turn", "error");
     withScrollGuard(chatBox, conversationKey, () => {
@@ -1169,6 +1233,7 @@ export async function retryLatestAssistantResponse(
     const contextSource = resolveContextSourceItem(item);
     setStatusSafely(contextSource.statusText, "sending");
 
+    const hasSupplementalPaperContexts = paperContexts.length > 0;
     let pdfContext = "";
     if (contextSource.contextItem) {
       await ensurePDFTextCached(contextSource.contextItem);
@@ -1177,8 +1242,33 @@ export async function retryLatestAssistantResponse(
         question,
         screenshotImages.length > 0,
         { apiBase: effectiveApiBase, apiKey: effectiveApiKey },
+        {
+          forceRetrieval: hasSupplementalPaperContexts,
+          maxChunks: hasSupplementalPaperContexts
+            ? ACTIVE_PAPER_MULTI_CONTEXT_MAX_CHUNKS
+            : undefined,
+          maxLength: hasSupplementalPaperContexts
+            ? ACTIVE_PAPER_MULTI_CONTEXT_MAX_LENGTH
+            : undefined,
+        },
       );
     }
+    const supplementalPaperContext = hasSupplementalPaperContexts
+      ? await buildSupplementalPaperContext(paperContexts, question, {
+          apiBase: effectiveApiBase,
+          apiKey: effectiveApiKey,
+        })
+      : "";
+    if (hasSupplementalPaperContexts) {
+      setStatusSafely(
+        `Using ${paperContexts.length} supplemental paper context(s)`,
+        "sending",
+      );
+    }
+    const combinedContext = [pdfContext, supplementalPaperContext]
+      .map((entry) => sanitizeText(entry || "").trim())
+      .filter(Boolean)
+      .join("\n\n====================\n\n");
 
     const llmHistory = buildLLMHistoryMessages(historyForLLM);
 
@@ -1199,7 +1289,7 @@ export async function retryLatestAssistantResponse(
     const answer = await callLLMStream(
       {
         prompt: question,
-        context: pdfContext,
+        context: combinedContext,
         history: llmHistory,
         signal: currentAbortController?.signal,
         images: screenshotImages,
@@ -1310,6 +1400,7 @@ export async function sendQuestion(
   displayQuestion?: string,
   selectedTexts?: string[],
   selectedTextSources?: SelectedTextSource[],
+  paperContexts?: PaperContextRef[],
   attachments?: ChatAttachment[],
 ) {
   const inputBox = body.querySelector(
@@ -1380,6 +1471,7 @@ export async function sendQuestion(
     selectedTextsForMessage.length,
   );
   const selectedTextForMessage = selectedTextsForMessage[0] || "";
+  const paperContextsForMessage = normalizePaperContexts(paperContexts);
   const screenshotImagesForMessage = Array.isArray(images)
     ? images
         .filter((entry): entry is string => typeof entry === "string")
@@ -1402,6 +1494,10 @@ export async function sendQuestion(
       ? selectedTextSourcesForMessage
       : undefined,
     selectedTextExpandedIndex: -1,
+    paperContexts: paperContextsForMessage.length
+      ? paperContextsForMessage
+      : undefined,
+    paperContextsExpanded: false,
     screenshotImages: screenshotImagesForMessage.length
       ? screenshotImagesForMessage
       : undefined,
@@ -1417,6 +1513,7 @@ export async function sendQuestion(
     selectedText: userMessage.selectedText,
     selectedTexts: userMessage.selectedTexts,
     selectedTextSources: userMessage.selectedTextSources,
+    paperContexts: userMessage.paperContexts,
     screenshotImages: userMessage.screenshotImages,
     attachments: userMessage.attachments,
   });
@@ -1463,6 +1560,7 @@ export async function sendQuestion(
     const contextSource = resolveContextSourceItem(item);
     setStatusSafely(contextSource.statusText, "sending");
 
+    const hasSupplementalPaperContexts = paperContextsForMessage.length > 0;
     let pdfContext = "";
     if (contextSource.contextItem) {
       await ensurePDFTextCached(contextSource.contextItem);
@@ -1471,8 +1569,33 @@ export async function sendQuestion(
         question,
         imageCount > 0,
         { apiBase: effectiveApiBase, apiKey: effectiveApiKey },
+        {
+          forceRetrieval: hasSupplementalPaperContexts,
+          maxChunks: hasSupplementalPaperContexts
+            ? ACTIVE_PAPER_MULTI_CONTEXT_MAX_CHUNKS
+            : undefined,
+          maxLength: hasSupplementalPaperContexts
+            ? ACTIVE_PAPER_MULTI_CONTEXT_MAX_LENGTH
+            : undefined,
+        },
       );
     }
+    const supplementalPaperContext = hasSupplementalPaperContexts
+      ? await buildSupplementalPaperContext(paperContextsForMessage, question, {
+          apiBase: effectiveApiBase,
+          apiKey: effectiveApiKey,
+        })
+      : "";
+    if (hasSupplementalPaperContexts) {
+      setStatusSafely(
+        `Using ${paperContextsForMessage.length} supplemental paper context(s)`,
+        "sending",
+      );
+    }
+    const combinedContext = [pdfContext, supplementalPaperContext]
+      .map((entry) => sanitizeText(entry || "").trim())
+      .filter(Boolean)
+      .join("\n\n====================\n\n");
 
     const llmHistory = buildLLMHistoryMessages(historyForLLM);
 
@@ -1493,7 +1616,7 @@ export async function sendQuestion(
     const answer = await callLLMStream(
       {
         prompt: question,
-        context: pdfContext,
+        context: combinedContext,
         history: llmHistory,
         signal: currentAbortController?.signal,
         images: images,
@@ -1656,6 +1779,7 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
         ? msg.screenshotImages.filter((entry) => Boolean(entry))
         : [];
       let screenshotExpanded: HTMLDivElement | null = null;
+      let papersExpanded: HTMLDivElement | null = null;
       let filesExpanded: HTMLDivElement | null = null;
       const selectedTexts = getMessageSelectedTexts(msg);
       const selectedTextSources = normalizeSelectedTextSources(
@@ -1792,6 +1916,95 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
         hasContextBadge = true;
       }
 
+      const paperContexts = normalizePaperContexts(msg.paperContexts);
+      hasUserContext = hasUserContext || paperContexts.length > 0;
+      if (paperContexts.length) {
+        const papersBar = doc.createElement("button") as HTMLButtonElement;
+        papersBar.type = "button";
+        papersBar.className = "llm-user-papers-bar";
+
+        const papersIcon = doc.createElement("span") as HTMLSpanElement;
+        papersIcon.className = "llm-user-papers-icon";
+        papersIcon.textContent = "📚";
+
+        const papersLabel = doc.createElement("span") as HTMLSpanElement;
+        papersLabel.className = "llm-user-papers-label";
+        papersLabel.textContent = formatPaperCountLabel(paperContexts.length);
+        papersLabel.title = paperContexts
+          .map((entry) => entry.title)
+          .join("\n");
+        papersBar.append(papersIcon, papersLabel);
+
+        const papersExpandedEl = doc.createElement("div") as HTMLDivElement;
+        papersExpandedEl.className = "llm-user-papers-expanded";
+        papersExpanded = papersExpandedEl;
+        const papersList = doc.createElement("div") as HTMLDivElement;
+        papersList.className = "llm-user-papers-list";
+        for (const paperContext of paperContexts) {
+          const paperItem = doc.createElement("div") as HTMLDivElement;
+          paperItem.className = "llm-user-papers-item";
+
+          if (paperContext.citationKey) {
+            const keyBadge = doc.createElement("span") as HTMLSpanElement;
+            keyBadge.className = "llm-user-papers-item-key";
+            keyBadge.textContent = paperContext.citationKey;
+            keyBadge.title = paperContext.citationKey;
+            paperItem.appendChild(keyBadge);
+          }
+
+          const paperTitle = doc.createElement("span") as HTMLSpanElement;
+          paperTitle.className = "llm-user-papers-item-title";
+          paperTitle.textContent = paperContext.title;
+          paperTitle.title = paperContext.title;
+
+          const paperMeta = doc.createElement("span") as HTMLSpanElement;
+          paperMeta.className = "llm-user-papers-item-meta";
+          const metaParts = [
+            paperContext.firstCreator || "",
+            paperContext.year || "",
+          ].filter(Boolean);
+          paperMeta.textContent = metaParts.join(" · ") || "Supplemental paper";
+          paperMeta.title = paperMeta.textContent;
+          paperItem.append(paperTitle, paperMeta);
+          papersList.appendChild(paperItem);
+        }
+        papersExpandedEl.appendChild(papersList);
+
+        const applyPapersState = () => {
+          const expanded = Boolean(msg.paperContextsExpanded);
+          papersBar.classList.toggle("expanded", expanded);
+          papersBar.setAttribute("aria-expanded", expanded ? "true" : "false");
+          papersExpandedEl.hidden = !expanded;
+          papersExpandedEl.style.display = expanded ? "block" : "none";
+          papersBar.title = expanded ? "Collapse papers" : "Expand papers";
+        };
+        const togglePapersExpanded = () => {
+          msg.paperContextsExpanded = !msg.paperContextsExpanded;
+          applyPapersState();
+        };
+        applyPapersState();
+        papersBar.addEventListener("mousedown", (e: Event) => {
+          const mouse = e as MouseEvent;
+          if (mouse.button !== 0) return;
+          mouse.preventDefault();
+          mouse.stopPropagation();
+          togglePapersExpanded();
+        });
+        papersBar.addEventListener("click", (e: Event) => {
+          e.preventDefault();
+          e.stopPropagation();
+        });
+        papersBar.addEventListener("keydown", (e: KeyboardEvent) => {
+          if (e.key !== "Enter" && e.key !== " ") return;
+          e.preventDefault();
+          e.stopPropagation();
+          togglePapersExpanded();
+        });
+
+        contextBadgesRow.appendChild(papersBar);
+        hasContextBadge = true;
+      }
+
       const fileAttachments = Array.isArray(msg.attachments)
         ? msg.attachments.filter(
             (entry) =>
@@ -1916,6 +2129,9 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
       }
       if (screenshotExpanded) {
         wrapper.appendChild(screenshotExpanded);
+      }
+      if (papersExpanded) {
+        wrapper.appendChild(papersExpanded);
       }
       if (filesExpanded) {
         wrapper.appendChild(filesExpanded);

@@ -16,6 +16,8 @@ export interface Message {
   selectedTextSources?: SelectedTextSource[];
   selectedTextExpandedIndex?: number;
   screenshotImages?: string[];
+  paperContexts?: PaperContextRef[];
+  paperContextsExpanded?: boolean;
   attachments?: ChatAttachment[];
   attachmentsExpanded?: boolean;
   attachmentActiveIndex?: number;
@@ -102,6 +104,15 @@ export type PdfContext = {
   embeddings?: number[][];
   embeddingPromise?: Promise<number[][] | null>;
   embeddingFailed?: boolean;
+};
+
+export type PaperContextRef = {
+  itemId: number;
+  contextItemId: number;
+  citationKey?: string;
+  title: string;
+  firstCreator?: string;
+  year?: string;
 };
 
 export type ChunkStat = {

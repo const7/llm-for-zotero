@@ -2,6 +2,7 @@ import { createElement } from "../../utils/domHelpers";
 import {
   AUTO_SCROLL_BOTTOM_THRESHOLD,
   MAX_SELECTED_IMAGES,
+  MAX_SELECTED_PAPER_CONTEXTS,
   MAX_UPLOAD_PDF_SIZE_BYTES,
   formatFigureCountLabel,
   formatFileCountLabel,
@@ -31,6 +32,8 @@ import {
   selectedImagePreviewExpandedCache,
   selectedImagePreviewActiveIndexCache,
   selectedFilePreviewExpandedCache,
+  selectedPaperContextCache,
+  selectedPaperPreviewExpandedCache,
   setCancelledRequestId,
   currentAbortController,
   panelFontScalePercent,
@@ -119,9 +122,11 @@ import type {
   ReasoningProviderKind,
   AdvancedModelParams,
   ChatAttachment,
+  PaperContextRef,
 } from "./types";
 import type { ReasoningLevel as LLMReasoningLevel } from "../../utils/llmClient";
 import type { ReasoningConfig as LLMReasoningConfig } from "../../utils/llmClient";
+import { searchPaperCandidates } from "./paperSearch";
 
 export function setupHandlers(body: Element, item?: Zotero.Item | null) {
   // Use querySelector on body to find elements
@@ -217,6 +222,18 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
   const filePreviewClear = body.querySelector(
     "#llm-file-context-clear",
   ) as HTMLButtonElement | null;
+  const paperPreview = body.querySelector(
+    "#llm-paper-context-preview",
+  ) as HTMLDivElement | null;
+  const paperPreviewList = body.querySelector(
+    "#llm-paper-context-list",
+  ) as HTMLDivElement | null;
+  const paperPicker = body.querySelector(
+    "#llm-paper-picker",
+  ) as HTMLDivElement | null;
+  const paperPickerList = body.querySelector(
+    "#llm-paper-picker-list",
+  ) as HTMLDivElement | null;
   const responseMenu = body.querySelector(
     "#llm-response-menu",
   ) as HTMLDivElement | null;
@@ -823,6 +840,16 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
         }
         setSelectedTextExpandedIndex(item.id, null);
 
+        const restoredPaperContexts = normalizePaperContextEntries(
+          pair.userMessage.paperContexts,
+        );
+        if (restoredPaperContexts.length) {
+          selectedPaperContextCache.set(item.id, restoredPaperContexts);
+          selectedPaperPreviewExpandedCache.set(item.id, false);
+        } else {
+          clearSelectedPaperState(item.id);
+        }
+
         const restoredFiles = (
           Array.isArray(pair.userMessage.attachments)
             ? pair.userMessage.attachments.filter(
@@ -885,6 +912,7 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
           clearSelectedImageState(item.id);
         }
 
+        updatePaperPreviewPreservingScroll();
         updateFilePreviewPreservingScroll();
         updateImagePreviewPreservingScroll();
         updateSelectedTextPreviewPreservingScroll();
@@ -999,6 +1027,11 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
     selectedFilePreviewExpandedCache.delete(itemId);
   };
 
+  const clearSelectedPaperState = (itemId: number) => {
+    selectedPaperContextCache.delete(itemId);
+    selectedPaperPreviewExpandedCache.delete(itemId);
+  };
+
   const clearSelectedTextState = (itemId: number) => {
     setSelectedTextContexts(itemId, []);
     setSelectedTextExpandedIndex(itemId, null);
@@ -1016,6 +1049,195 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
     const pair = findLatestRetryPair(history);
     if (!pair) return null;
     return { conversationKey: key, pair };
+  };
+
+  const normalizePaperContextEntries = (value: unknown): PaperContextRef[] => {
+    if (!Array.isArray(value)) return [];
+    const out: PaperContextRef[] = [];
+    const seen = new Set<string>();
+    for (const entry of value) {
+      if (!entry || typeof entry !== "object") continue;
+      const typed = entry as Record<string, unknown>;
+      const itemId = Number(typed.itemId);
+      const contextItemId = Number(typed.contextItemId);
+      if (!Number.isFinite(itemId) || !Number.isFinite(contextItemId)) continue;
+      const normalizedItemId = Math.floor(itemId);
+      const normalizedContextItemId = Math.floor(contextItemId);
+      if (normalizedItemId <= 0 || normalizedContextItemId <= 0) continue;
+      const title = sanitizeText(
+        typeof typed.title === "string" ? typed.title : "",
+      ).trim();
+      if (!title) continue;
+      const citationKey = sanitizeText(
+        typeof typed.citationKey === "string" ? typed.citationKey : "",
+      ).trim();
+      const firstCreator = sanitizeText(
+        typeof typed.firstCreator === "string" ? typed.firstCreator : "",
+      ).trim();
+      const year = sanitizeText(
+        typeof typed.year === "string" ? typed.year : "",
+      ).trim();
+      const dedupeKey = `${normalizedItemId}:${normalizedContextItemId}`;
+      if (seen.has(dedupeKey)) continue;
+      seen.add(dedupeKey);
+      out.push({
+        itemId: normalizedItemId,
+        contextItemId: normalizedContextItemId,
+        title,
+        citationKey: citationKey || undefined,
+        firstCreator: firstCreator || undefined,
+        year: year || undefined,
+      });
+    }
+    return out;
+  };
+
+  const extractYearValue = (value: unknown): string | undefined => {
+    const text = sanitizeText(String(value || "")).trim();
+    if (!text) return undefined;
+    const match = text.match(/\b(19|20)\d{2}\b/);
+    return match?.[0];
+  };
+
+  const resolvePaperContextDisplayMetadata = (
+    paperContext: PaperContextRef,
+  ): {
+    firstCreator?: string;
+    year?: string;
+  } => {
+    let firstCreator = sanitizeText(paperContext.firstCreator || "").trim();
+    let year = extractYearValue(paperContext.year);
+    if (!firstCreator || !year) {
+      const zoteroItem = Zotero.Items.get(paperContext.itemId);
+      if (zoteroItem?.isRegularItem?.()) {
+        if (!firstCreator) {
+          firstCreator = sanitizeText(
+            String(zoteroItem.getField("firstCreator") || ""),
+          ).trim();
+          if (!firstCreator) {
+            firstCreator = sanitizeText(
+              String((zoteroItem as Zotero.Item).firstCreator || ""),
+            ).trim();
+          }
+        }
+        if (!year) {
+          year =
+            extractYearValue(zoteroItem.getField("year")) ||
+            extractYearValue(zoteroItem.getField("date")) ||
+            extractYearValue(zoteroItem.getField("issued"));
+        }
+      }
+    }
+    return {
+      firstCreator: firstCreator || undefined,
+      year: year || undefined,
+    };
+  };
+
+  const extractFirstAuthorLastName = (paperContext: PaperContextRef): string => {
+    const metadata = resolvePaperContextDisplayMetadata(paperContext);
+    let creator = sanitizeText(metadata.firstCreator || "").trim();
+    if (!creator) return "Paper";
+    creator = creator
+      .replace(/\s+et\s+al\.?$/i, "")
+      .replace(/\s+al\.?$/i, "")
+      .replace(/[;,.]+$/g, "")
+      .trim();
+    if (!creator) return "Paper";
+    const primaryAuthor =
+      creator.split(/\s+(?:and|&)\s+/i).find((part) => part.trim()) || creator;
+    const normalizedPrimary = primaryAuthor.replace(/[;,.]+$/g, "").trim();
+    if (!normalizedPrimary) return "Paper";
+    if (normalizedPrimary.includes(",")) {
+      const commaSeparated = normalizedPrimary.split(",")[0]?.trim();
+      if (commaSeparated) return commaSeparated;
+    }
+    const parts = normalizedPrimary.split(/\s+/g).filter(Boolean);
+    if (!parts.length) return "Paper";
+    if (parts.length === 1) return parts[0];
+    const trailingToken = parts[parts.length - 1];
+    if (/^[A-Z](?:\.[A-Z])?\.?$/i.test(trailingToken)) {
+      return parts[parts.length - 2] || parts[0];
+    }
+    return trailingToken;
+  };
+
+  const extractPaperYear = (paperContext: PaperContextRef): string | null => {
+    return resolvePaperContextDisplayMetadata(paperContext).year || null;
+  };
+
+  const formatPaperContextChipLabel = (paperContext: PaperContextRef): string => {
+    const authorLastName = extractFirstAuthorLastName(paperContext);
+    const year = extractPaperYear(paperContext);
+    return year
+      ? `📝 ${authorLastName} et al., ${year}`
+      : `📝 ${authorLastName} et al.`;
+  };
+
+  const formatPaperContextChipTitle = (paperContext: PaperContextRef): string => {
+    const metadata = resolvePaperContextDisplayMetadata(paperContext);
+    const meta = [metadata.firstCreator || "", metadata.year || ""]
+      .filter(Boolean)
+      .join(" · ");
+    return [paperContext.title, meta].filter(Boolean).join("\n");
+  };
+
+  const updatePaperPreview = () => {
+    if (!item || !paperPreview || !paperPreviewList) return;
+    const papers = normalizePaperContextEntries(
+      selectedPaperContextCache.get(item.id) || [],
+    );
+    if (!papers.length) {
+      paperPreview.style.display = "none";
+      paperPreviewList.innerHTML = "";
+      clearSelectedPaperState(item.id);
+      return;
+    }
+    selectedPaperContextCache.set(item.id, papers);
+    selectedPaperPreviewExpandedCache.set(item.id, false);
+    paperPreview.style.display = "contents";
+    paperPreviewList.style.display = "contents";
+    paperPreviewList.innerHTML = "";
+    const ownerDoc = body.ownerDocument;
+    if (!ownerDoc) return;
+    papers.forEach((paperContext, index) => {
+      const chip = createElement(
+        ownerDoc,
+        "div",
+        "llm-selected-context llm-paper-context-chip",
+      );
+      chip.dataset.paperContextIndex = `${index}`;
+      chip.classList.add("collapsed");
+      const chipHeader = createElement(
+        ownerDoc,
+        "div",
+        "llm-image-preview-header llm-selected-context-header llm-paper-context-chip-header",
+      );
+      const chipLabel = createElement(
+        ownerDoc,
+        "span",
+        "llm-paper-context-chip-label",
+        {
+          textContent: formatPaperContextChipLabel(paperContext),
+          title: formatPaperContextChipTitle(paperContext),
+        },
+      );
+      const removeBtn = createElement(
+        ownerDoc,
+        "button",
+        "llm-remove-img-btn llm-paper-context-clear",
+        {
+          type: "button",
+          textContent: "×",
+          title: `Remove ${paperContext.title}`,
+        },
+      ) as HTMLButtonElement;
+      removeBtn.dataset.paperContextIndex = `${index}`;
+      removeBtn.setAttribute("aria-label", `Remove ${paperContext.title}`);
+      chipHeader.append(chipLabel, removeBtn);
+      chip.append(chipHeader);
+      paperPreviewList.appendChild(chip);
+    });
   };
 
   const updateFilePreview = () => {
@@ -1287,6 +1509,11 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
   const updateSelectedTextPreview = () => {
     if (!item) return;
     applySelectedTextPreview(body, item.id);
+  };
+  const updatePaperPreviewPreservingScroll = () => {
+    runWithChatScrollGuard(() => {
+      updatePaperPreview();
+    });
   };
   const updateFilePreviewPreservingScroll = () => {
     runWithChatScrollGuard(() => {
@@ -2116,6 +2343,7 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
   };
 
   // Initialize preview state
+  updatePaperPreviewPreservingScroll();
   updateFilePreviewPreservingScroll();
   updateImagePreviewPreservingScroll();
   updateSelectedTextPreviewPreservingScroll();
@@ -2514,6 +2742,238 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
     }
   };
 
+  type ActiveSlashToken = {
+    query: string;
+    slashStart: number;
+    caretEnd: number;
+  };
+  let paperPickerCandidates: PaperContextRef[] = [];
+  let paperPickerActiveIndex = 0;
+  let paperPickerRequestSeq = 0;
+  let paperPickerDebounceTimer: number | null = null;
+  const getActiveSlashToken = (): ActiveSlashToken | null => {
+    const caretEnd =
+      typeof inputBox.selectionStart === "number"
+        ? inputBox.selectionStart
+        : inputBox.value.length;
+    const prefix = inputBox.value.slice(0, caretEnd);
+    const match = prefix.match(/(?:^|\s)\/([^\s/]*)$/);
+    if (!match) return null;
+    const raw = match[0] || "";
+    const fullStart = (match.index ?? prefix.length - raw.length) || 0;
+    const slashStart = raw.startsWith(" ") ? fullStart + 1 : fullStart;
+    return {
+      query: sanitizeText(match[1] || "").trim(),
+      slashStart,
+      caretEnd,
+    };
+  };
+  const isPaperPickerOpen = () =>
+    Boolean(paperPicker && paperPicker.style.display !== "none");
+  const closePaperPicker = () => {
+    if (!paperPicker || !paperPickerList) return;
+    paperPicker.style.display = "none";
+    paperPickerCandidates = [];
+    paperPickerActiveIndex = 0;
+    paperPickerList.innerHTML = "";
+  };
+  const buildPaperMetaText = (paper: PaperContextRef): string => {
+    const metadata = resolvePaperContextDisplayMetadata(paper);
+    const parts = [
+      paper.citationKey || "",
+      metadata.firstCreator || paper.firstCreator || "",
+      metadata.year || paper.year || "",
+    ].filter(Boolean);
+    return parts.join(" · ");
+  };
+  const upsertPaperContext = (paper: PaperContextRef): boolean => {
+    if (!item) return false;
+    const selectedPapers = normalizePaperContextEntries(
+      selectedPaperContextCache.get(item.id) || [],
+    );
+    const duplicate = selectedPapers.some(
+      (entry) =>
+        entry.itemId === paper.itemId &&
+        entry.contextItemId === paper.contextItemId,
+    );
+    if (duplicate) {
+      if (status) setStatus(status, "Paper already selected", "warning");
+      return false;
+    }
+    if (selectedPapers.length >= MAX_SELECTED_PAPER_CONTEXTS) {
+      if (status) {
+        setStatus(
+          status,
+          `Paper Context up to ${MAX_SELECTED_PAPER_CONTEXTS}`,
+          "error",
+        );
+      }
+      return false;
+    }
+    const metadata = resolvePaperContextDisplayMetadata(paper);
+    const nextPapers = [
+      ...selectedPapers,
+      {
+        ...paper,
+        firstCreator: metadata.firstCreator || paper.firstCreator,
+        year: metadata.year || paper.year,
+      },
+    ];
+    selectedPaperContextCache.set(item.id, nextPapers);
+    selectedPaperPreviewExpandedCache.set(item.id, false);
+    updatePaperPreviewPreservingScroll();
+    if (status) {
+      setStatus(
+        status,
+        `Paper context added (${nextPapers.length}/${MAX_SELECTED_PAPER_CONTEXTS})`,
+        "ready",
+      );
+    }
+    return true;
+  };
+  const consumeActiveSlashToken = (): boolean => {
+    const token = getActiveSlashToken();
+    if (!token) return false;
+    const beforeSlash = inputBox.value.slice(0, token.slashStart);
+    const afterCaret = inputBox.value.slice(token.caretEnd);
+    inputBox.value = `${beforeSlash}${afterCaret}`;
+    const nextCaret = beforeSlash.length;
+    inputBox.setSelectionRange(nextCaret, nextCaret);
+    return true;
+  };
+  const selectPaperPickerCandidateAt = (index: number): boolean => {
+    const selectedPaper = paperPickerCandidates[index];
+    if (!selectedPaper) return false;
+    consumeActiveSlashToken();
+    upsertPaperContext({
+      itemId: selectedPaper.itemId,
+      contextItemId: selectedPaper.contextItemId,
+      title: selectedPaper.title,
+      citationKey: selectedPaper.citationKey,
+      firstCreator: selectedPaper.firstCreator,
+      year: selectedPaper.year,
+    });
+    closePaperPicker();
+    inputBox.focus({ preventScroll: true });
+    return true;
+  };
+  const renderPaperPicker = () => {
+    if (!paperPicker || !paperPickerList) return;
+    const ownerDoc = body.ownerDocument;
+    if (!ownerDoc) return;
+    if (!paperPickerCandidates.length) {
+      paperPickerList.innerHTML = "";
+      const empty = createElement(ownerDoc, "div", "llm-paper-picker-empty", {
+        textContent: "No papers matched.",
+      });
+      paperPickerList.appendChild(empty);
+      paperPicker.style.display = "block";
+      return;
+    }
+    paperPickerList.innerHTML = "";
+    paperPickerActiveIndex = Math.max(
+      0,
+      Math.min(paperPickerCandidates.length - 1, paperPickerActiveIndex),
+    );
+    paperPickerCandidates.forEach((paper, index) => {
+      const option = createElement(ownerDoc, "div", "llm-paper-picker-item");
+      option.setAttribute("role", "option");
+      option.setAttribute(
+        "aria-selected",
+        index === paperPickerActiveIndex ? "true" : "false",
+      );
+      option.tabIndex = -1;
+      if (index === paperPickerActiveIndex) {
+        option.classList.add("llm-paper-picker-item-active");
+      }
+      const title = createElement(ownerDoc, "span", "llm-paper-picker-title", {
+        textContent: paper.title,
+        title: paper.title,
+      });
+      const meta = createElement(ownerDoc, "span", "llm-paper-picker-meta", {
+        textContent: buildPaperMetaText(paper) || "Supplemental paper",
+      });
+      option.append(title, meta);
+      const choosePaper = (e: Event) => {
+        const mouse = e as MouseEvent;
+        if (typeof mouse.button === "number" && mouse.button !== 0) return;
+        e.preventDefault();
+        e.stopPropagation();
+        selectPaperPickerCandidateAt(index);
+      };
+      option.addEventListener("mousedown", choosePaper);
+      option.addEventListener("click", (e: Event) => {
+        e.preventDefault();
+        e.stopPropagation();
+      });
+      paperPickerList.appendChild(option);
+    });
+    paperPicker.style.display = "block";
+  };
+  const schedulePaperPickerSearch = () => {
+    if (!item || !paperPicker || !paperPickerList) {
+      closePaperPicker();
+      return;
+    }
+    const slashToken = getActiveSlashToken();
+    if (!slashToken) {
+      closePaperPicker();
+      return;
+    }
+    if (paperPickerDebounceTimer !== null) {
+      const win = body.ownerDocument?.defaultView;
+      if (win) {
+        win.clearTimeout(paperPickerDebounceTimer);
+      } else {
+        clearTimeout(paperPickerDebounceTimer);
+      }
+      paperPickerDebounceTimer = null;
+    }
+    const requestId = ++paperPickerRequestSeq;
+    const runSearch = async () => {
+      paperPickerDebounceTimer = null;
+      if (!item) return;
+      const activeSlashToken = getActiveSlashToken();
+      if (!activeSlashToken) {
+        closePaperPicker();
+        return;
+      }
+      const currentConversationItemId = getConversationKey(item);
+      const results = await searchPaperCandidates(
+        item.libraryID,
+        activeSlashToken.query,
+        currentConversationItemId,
+        20,
+      );
+      if (requestId !== paperPickerRequestSeq) return;
+      if (!getActiveSlashToken()) {
+        closePaperPicker();
+        return;
+      }
+      paperPickerCandidates = results.map((entry) => ({
+        itemId: entry.itemId,
+        contextItemId: entry.contextItemId,
+        title: entry.title,
+        citationKey: entry.citationKey,
+        firstCreator: entry.firstCreator,
+        year: entry.year,
+      }));
+      paperPickerActiveIndex = 0;
+      renderPaperPicker();
+    };
+    const win = body.ownerDocument?.defaultView;
+    if (win) {
+      paperPickerDebounceTimer = win.setTimeout(() => {
+        void runSearch();
+      }, 120);
+    } else {
+      paperPickerDebounceTimer =
+        (setTimeout(() => {
+          void runSearch();
+        }, 120) as unknown as number) || 0;
+    }
+  };
+
   if (inputSection && inputBox) {
     let fileDragDepth = 0;
 
@@ -2575,37 +3035,67 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
       void processIncomingFiles(files);
       inputBox.focus({ preventScroll: true });
     });
+
+    inputBox.addEventListener("input", () => {
+      schedulePaperPickerSearch();
+    });
+    inputBox.addEventListener("click", () => {
+      schedulePaperPickerSearch();
+    });
+    inputBox.addEventListener("keyup", (e: Event) => {
+      const key = (e as KeyboardEvent).key;
+      if (key === "ArrowUp" || key === "ArrowDown") return;
+      if (key === "Enter" || key === "Tab" || key === "Escape") return;
+      schedulePaperPickerSearch();
+    });
   }
 
   const doSend = async () => {
     if (!item) return;
+    closePaperPicker();
     const text = inputBox.value.trim();
     const selectedContexts = getSelectedTextContextEntries(item.id);
     const selectedTexts = selectedContexts.map((entry) => entry.text);
     const selectedTextSources = selectedContexts.map((entry) => entry.source);
     const primarySelectedText = selectedTexts[0] || "";
+    const selectedPaperContexts = normalizePaperContextEntries(
+      selectedPaperContextCache.get(item.id) || [],
+    );
     const selectedFiles = selectedFileAttachmentCache.get(item.id) || [];
-    if (!text && !primarySelectedText && !selectedFiles.length) return;
+    if (
+      !text &&
+      !primarySelectedText &&
+      !selectedPaperContexts.length &&
+      !selectedFiles.length
+    )
+      return;
     const promptText = resolvePromptText(
       text,
       primarySelectedText,
-      selectedFiles.length > 0,
+      selectedFiles.length > 0 || selectedPaperContexts.length > 0,
     );
     if (!promptText) return;
+    const resolvedPromptText =
+      !text &&
+      !primarySelectedText &&
+      selectedPaperContexts.length > 0 &&
+      !selectedFiles.length
+        ? "Please analyze selected papers."
+        : promptText;
     const composedQuestionBase = primarySelectedText
       ? buildQuestionWithSelectedTextContexts(
           selectedTexts,
           selectedTextSources,
-          promptText,
+          resolvedPromptText,
         )
-      : promptText;
+      : resolvedPromptText;
     const composedQuestion = buildModelPromptWithFileContext(
       composedQuestionBase,
       selectedFiles,
     );
     const displayQuestion = primarySelectedText
-      ? promptText
-      : text || promptText;
+      ? resolvedPromptText
+      : text || resolvedPromptText;
     const selectedProfile = getSelectedProfile();
     const activeModelName = (
       selectedProfile?.model ||
@@ -2647,6 +3137,7 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
         selectedTexts.length ? selectedTexts : undefined,
         selectedTexts.length ? selectedTextSources : undefined,
         images,
+        selectedPaperContexts.length ? selectedPaperContexts : undefined,
         selectedFiles.length ? selectedFiles : undefined,
         activeEditSession,
         selectedProfile?.model,
@@ -2674,6 +3165,10 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
 
       inputBox.value = "";
       clearSelectedImageState(item.id);
+      if (selectedPaperContexts.length) {
+        clearSelectedPaperState(item.id);
+        updatePaperPreviewPreservingScroll();
+      }
       if (selectedFiles.length) {
         clearSelectedFileState(item.id);
         updateFilePreviewPreservingScroll();
@@ -2691,6 +3186,10 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
     inputBox.value = "";
     // Clear selected images after sending
     clearSelectedImageState(item.id);
+    if (selectedPaperContexts.length) {
+      clearSelectedPaperState(item.id);
+      updatePaperPreviewPreservingScroll();
+    }
     if (selectedFiles.length) {
       clearSelectedFileState(item.id);
       updateFilePreviewPreservingScroll();
@@ -2713,6 +3212,7 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
       displayQuestion,
       selectedTexts.length ? selectedTexts : undefined,
       selectedTexts.length ? selectedTextSources : undefined,
+      selectedPaperContexts.length ? selectedPaperContexts : undefined,
       selectedFiles.length ? selectedFiles : undefined,
     );
   };
@@ -2727,6 +3227,41 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
   // Enter key (Shift+Enter for newline)
   inputBox.addEventListener("keydown", (e: Event) => {
     const ke = e as KeyboardEvent;
+    if (isPaperPickerOpen()) {
+      if (ke.key === "ArrowDown") {
+        e.preventDefault();
+        e.stopPropagation();
+        if (paperPickerCandidates.length) {
+          paperPickerActiveIndex =
+            (paperPickerActiveIndex + 1) % paperPickerCandidates.length;
+          renderPaperPicker();
+        }
+        return;
+      }
+      if (ke.key === "ArrowUp") {
+        e.preventDefault();
+        e.stopPropagation();
+        if (paperPickerCandidates.length) {
+          paperPickerActiveIndex =
+            (paperPickerActiveIndex - 1 + paperPickerCandidates.length) %
+            paperPickerCandidates.length;
+          renderPaperPicker();
+        }
+        return;
+      }
+      if (ke.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        closePaperPicker();
+        return;
+      }
+      if (ke.key === "Enter" || ke.key === "Tab") {
+        e.preventDefault();
+        e.stopPropagation();
+        selectPaperPickerCandidateAt(paperPickerActiveIndex);
+        return;
+      }
+    }
     if (ke.key === "Enter" && !ke.shiftKey) {
       e.preventDefault();
       e.stopPropagation();
@@ -3156,6 +3691,31 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
   bodyWithPromptMenuDismiss.__llmPromptMenuDismissHandler =
     dismissPromptMenuOnOutsidePointerDown;
 
+  const bodyWithPaperPickerDismiss = body as Element & {
+    __llmPaperPickerDismissHandler?: (event: PointerEvent) => void;
+  };
+  if (bodyWithPaperPickerDismiss.__llmPaperPickerDismissHandler) {
+    panelDoc.removeEventListener(
+      "pointerdown",
+      bodyWithPaperPickerDismiss.__llmPaperPickerDismissHandler,
+      true,
+    );
+  }
+  const dismissPaperPickerOnOutsidePointerDown = (e: PointerEvent) => {
+    if (!isPaperPickerOpen()) return;
+    const target = e.target as Node | null;
+    if (target && paperPicker?.contains(target)) return;
+    if (target && inputBox.contains(target)) return;
+    closePaperPicker();
+  };
+  panelDoc.addEventListener(
+    "pointerdown",
+    dismissPaperPickerOnOutsidePointerDown,
+    true,
+  );
+  bodyWithPaperPickerDismiss.__llmPaperPickerDismissHandler =
+    dismissPaperPickerOnOutsidePointerDown;
+
   if (chatBox) {
     chatBox.addEventListener("click", (e: Event) => {
       const editTarget = (e.target as Element | null)?.closest(
@@ -3357,8 +3917,10 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
       if (nextExpanded) {
         selectedImagePreviewActiveIndexCache.set(item.id, 0);
         setSelectedTextExpandedIndex(item.id, null);
+        selectedPaperPreviewExpandedCache.set(item.id, false);
         selectedFilePreviewExpandedCache.set(item.id, false);
       }
+      updatePaperPreviewPreservingScroll();
       updateFilePreviewPreservingScroll();
       updateSelectedTextPreviewPreservingScroll();
       updateImagePreviewPreservingScroll();
@@ -3389,7 +3951,9 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
       if (nextExpanded) {
         setSelectedTextExpandedIndex(item.id, null);
         selectedImagePreviewExpandedCache.set(item.id, false);
+        selectedPaperPreviewExpandedCache.set(item.id, false);
       }
+      updatePaperPreview();
       updateSelectedTextPreview();
       updateImagePreview();
       updateFilePreview();
@@ -3413,6 +3977,44 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
       updateFilePreview();
       scheduleAttachmentGc();
       if (status) setStatus(status, "Files cleared", "ready");
+    });
+  }
+
+  if (paperPreview) {
+    paperPreview.addEventListener("click", (e: Event) => {
+      if (!item) return;
+      const target = e.target as Element | null;
+      if (!target) return;
+      const clearBtn = target.closest(
+        ".llm-paper-context-clear",
+      ) as HTMLButtonElement | null;
+      if (!clearBtn) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const index = Number.parseInt(
+        clearBtn.dataset.paperContextIndex || "",
+        10,
+      );
+      const selectedPapers = normalizePaperContextEntries(
+        selectedPaperContextCache.get(item.id) || [],
+      );
+      if (
+        !Number.isFinite(index) ||
+        index < 0 ||
+        index >= selectedPapers.length
+      ) {
+        return;
+      }
+      const nextPapers = selectedPapers.filter((_, i) => i !== index);
+      if (nextPapers.length) {
+        selectedPaperContextCache.set(item.id, nextPapers);
+      } else {
+        clearSelectedPaperState(item.id);
+      }
+      updatePaperPreview();
+      if (status) {
+        setStatus(status, `Paper context removed (${nextPapers.length})`, "ready");
+      }
     });
   }
 
@@ -3467,8 +4069,10 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
       setSelectedTextExpandedIndex(item.id, nextExpandedIndex);
       if (nextExpandedIndex !== null) {
         selectedImagePreviewExpandedCache.set(item.id, false);
+        selectedPaperPreviewExpandedCache.set(item.id, false);
         selectedFilePreviewExpandedCache.set(item.id, false);
       }
+      updatePaperPreviewPreservingScroll();
       updateFilePreviewPreservingScroll();
       updateImagePreviewPreservingScroll();
       updateSelectedTextPreviewPreservingScroll();
@@ -3498,10 +4102,14 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
     const clickedInsideFilePanel = Boolean(
       filePreview && target && filePreview.contains(target),
     );
+    const clickedInsidePaperPanel = Boolean(
+      paperPreview && target && paperPreview.contains(target),
+    );
     if (
       clickedInsideTextPanel ||
       clickedInsideFigurePanel ||
-      clickedInsideFilePanel
+      clickedInsideFilePanel ||
+      clickedInsidePaperPanel
     )
       return;
 
@@ -3512,12 +4120,15 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
       ) >= 0;
     const figurePinned =
       selectedImagePreviewExpandedCache.get(item.id) === true;
+    const paperPinned = selectedPaperPreviewExpandedCache.get(item.id) === true;
     const filePinned = selectedFilePreviewExpandedCache.get(item.id) === true;
-    if (!textPinned && !figurePinned && !filePinned) return;
+    if (!textPinned && !figurePinned && !paperPinned && !filePinned) return;
 
     setSelectedTextExpandedIndex(item.id, null);
     selectedImagePreviewExpandedCache.set(item.id, false);
+    selectedPaperPreviewExpandedCache.set(item.id, false);
     selectedFilePreviewExpandedCache.set(item.id, false);
+    updatePaperPreviewPreservingScroll();
     updateFilePreviewPreservingScroll();
     updateSelectedTextPreviewPreservingScroll();
     updateImagePreviewPreservingScroll();
@@ -3551,6 +4162,7 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
     clearBtn.addEventListener("click", (e: Event) => {
       e.preventDefault();
       e.stopPropagation();
+      closePaperPicker();
       closeExportMenu();
       closePromptMenu();
       activeEditSession = null;
@@ -3574,8 +4186,10 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
         });
         scheduleAttachmentGc();
         clearSelectedImageState(item.id);
+        clearSelectedPaperState(item.id);
         clearSelectedFileState(item.id);
         clearSelectedTextState(item.id);
+        updatePaperPreviewPreservingScroll();
         updateFilePreviewPreservingScroll();
         updateImagePreviewPreservingScroll();
         updateSelectedTextPreviewPreservingScroll();

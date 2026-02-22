@@ -29,7 +29,13 @@ export const MAX_SELECTED_TEXT_CONTEXTS = 5;
 export const MAX_EDITABLE_SHORTCUTS = 10;
 export const MAX_SELECTED_IMAGES = 10;
 export const MAX_UPLOAD_PDF_SIZE_BYTES = 50 * 1024 * 1024;
+export const MAX_SELECTED_PAPER_CONTEXTS = 5;
 export const CHAT_ATTACHMENTS_DIR_NAME = "chat-attachments";
+export const ACTIVE_PAPER_MULTI_CONTEXT_MAX_CHUNKS = 4;
+export const ACTIVE_PAPER_MULTI_CONTEXT_MAX_LENGTH = 6000;
+export const SUPPLEMENTAL_PAPER_CONTEXT_MAX_CHUNKS = 2;
+export const SUPPLEMENTAL_PAPER_CONTEXT_MAX_LENGTH = 1800;
+export const SUPPLEMENTAL_PAPER_CONTEXT_TOTAL_MAX_LENGTH = 9000;
 
 export function formatFigureCountLabel(
   count: number,
@@ -43,6 +49,14 @@ export function formatFigureCountLabel(
 export function formatFileCountLabel(count: number): string {
   if (count <= 0) return "";
   return `Files (${count})`;
+}
+
+export function formatPaperCountLabel(
+  count: number,
+  maxCount = MAX_SELECTED_PAPER_CONTEXTS,
+): string {
+  if (count <= 0) return "";
+  return `Papers (${count}/${maxCount})`;
 }
 
 export const SELECT_TEXT_EXPANDED_LABEL = "Add Text";

@@ -286,6 +286,11 @@ export async function buildContext(
   question: string,
   hasImage: boolean,
   apiOverrides?: { apiBase?: string; apiKey?: string },
+  options?: {
+    forceRetrieval?: boolean;
+    maxChunks?: number;
+    maxLength?: number;
+  },
 ): Promise<string> {
   if (!pdfContext) return "";
   const { title, chunks, chunkStats, docFreq, avgChunkLength, fullLength } =
@@ -293,7 +298,17 @@ export async function buildContext(
   const contextParts: string[] = [];
   if (title) contextParts.push(`Title: ${title}`);
   if (!chunks.length) return contextParts.join("\n\n");
-  if (FORCE_FULL_CONTEXT && !hasImage) {
+  const forceRetrieval = options?.forceRetrieval === true;
+  const maxChunks = Number.isFinite(options?.maxChunks)
+    ? Math.max(1, Math.floor(options?.maxChunks as number))
+    : MAX_CONTEXT_CHUNKS;
+  const maxLength = Number.isFinite(options?.maxLength)
+    ? Math.max(256, Math.floor(options?.maxLength as number))
+    : hasImage
+      ? MAX_CONTEXT_LENGTH_WITH_IMAGE
+      : MAX_CONTEXT_LENGTH;
+
+  if (FORCE_FULL_CONTEXT && !hasImage && !forceRetrieval) {
     if (!fullLength || fullLength <= FULL_CONTEXT_CHAR_LIMIT) {
       contextParts.push("Paper Text:");
       contextParts.push(chunks.join("\n\n"));
@@ -346,12 +361,12 @@ export async function buildContext(
   const picked = new Set<number>();
   const addIndex = (idx: number) => {
     if (idx < 0 || idx >= chunks.length) return;
-    if (picked.size >= MAX_CONTEXT_CHUNKS) return;
+    if (picked.size >= maxChunks) return;
     picked.add(idx);
   };
 
   for (const entry of scored) {
-    if (picked.size >= MAX_CONTEXT_CHUNKS) break;
+    if (picked.size >= maxChunks) break;
     if (entry.score === 0 && picked.size > 0) break;
     addIndex(entry.index);
   }
@@ -361,18 +376,18 @@ export async function buildContext(
     addIndex(1);
   }
 
-  if (picked.size < MAX_CONTEXT_CHUNKS) {
+  if (picked.size < maxChunks) {
     const primary = Array.from(picked);
     for (const idx of primary) {
-      if (picked.size >= MAX_CONTEXT_CHUNKS) break;
+      if (picked.size >= maxChunks) break;
       addIndex(idx - 1);
-      if (picked.size >= MAX_CONTEXT_CHUNKS) break;
+      if (picked.size >= maxChunks) break;
       addIndex(idx + 1);
     }
   }
 
   const totalChunks = chunks.length;
-  let remaining = hasImage ? MAX_CONTEXT_LENGTH_WITH_IMAGE : MAX_CONTEXT_LENGTH;
+  let remaining = maxLength;
   if (title) remaining -= `Title: ${title}`.length + 2;
 
   const excerpts: string[] = [];

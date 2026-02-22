@@ -239,6 +239,21 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
   selectedContextList.style.display = "none";
   contextPreviews.appendChild(selectedContextList);
 
+  const paperPreview = createElement(doc, "div", "llm-paper-context-inline", {
+    id: "llm-paper-context-preview",
+  });
+  paperPreview.style.display = "none";
+  const paperPreviewList = createElement(
+    doc,
+    "div",
+    "llm-paper-context-inline-list",
+    {
+      id: "llm-paper-context-list",
+    },
+  );
+  paperPreview.append(paperPreviewList);
+  contextPreviews.appendChild(paperPreview);
+
   // Image preview area (shows selected screenshot)
   const imagePreview = createElement(doc, "div", "llm-image-preview", {
     id: "llm-image-preview",
@@ -352,6 +367,17 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
   filePreview.append(filePreviewHeader, filePreviewExpanded);
   contextPreviews.appendChild(filePreview);
   inputSection.appendChild(contextPreviews);
+
+  const paperPicker = createElement(doc, "div", "llm-paper-picker", {
+    id: "llm-paper-picker",
+  });
+  paperPicker.style.display = "none";
+  const paperPickerList = createElement(doc, "div", "llm-paper-picker-list", {
+    id: "llm-paper-picker-list",
+  });
+  paperPickerList.setAttribute("role", "listbox");
+  paperPicker.appendChild(paperPickerList);
+  inputSection.appendChild(paperPicker);
 
   const inputBox = createElement(doc, "textarea", "llm-input", {
     id: "llm-input",

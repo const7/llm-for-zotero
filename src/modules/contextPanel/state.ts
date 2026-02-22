@@ -6,6 +6,7 @@ import type {
   CustomShortcut,
   ChatAttachment,
   SelectedTextContext,
+  PaperContextRef,
 } from "./types";
 
 // =============================================================================
@@ -75,6 +76,8 @@ export function setPromptMenuTarget(value: typeof promptMenuTarget) {
 export const selectedImageCache = new Map<number, string[]>();
 export const selectedFileAttachmentCache = new Map<number, ChatAttachment[]>();
 export const selectedFilePreviewExpandedCache = new Map<number, boolean>();
+export const selectedPaperContextCache = new Map<number, PaperContextRef[]>();
+export const selectedPaperPreviewExpandedCache = new Map<number, boolean>();
 export const selectedTextCache = new Map<number, SelectedTextContext[]>();
 export const selectedTextPreviewExpandedCache = new Map<number, number>();
 export const selectedImagePreviewExpandedCache = new Map<number, boolean>();
