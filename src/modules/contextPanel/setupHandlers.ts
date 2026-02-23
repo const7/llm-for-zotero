@@ -68,6 +68,10 @@ import {
   getSelectedProfileForItem,
   applyPanelFontScale,
   getAdvancedModelParamsForProfile,
+  getLastUsedModelProfileKey,
+  setLastUsedModelProfileKey,
+  getLastUsedReasoningLevel,
+  setLastUsedReasoningLevel,
 } from "./prefHelpers";
 import {
   sendQuestion,
@@ -2504,6 +2508,16 @@ export function setupHandlers(
 
   const createAndSwitchGlobalConversation = async () => {
     if (!item) return;
+    if (currentAbortController || historyNewBtn?.disabled || inputBox?.disabled) {
+      if (status) {
+        setStatus(
+          status,
+          "Wait for the current response to finish before starting a new chat",
+          "ready",
+        );
+      }
+      return;
+    }
     const libraryID = getCurrentLibraryID();
     if (!libraryID) {
       if (status) {
@@ -2605,6 +2619,13 @@ export function setupHandlers(
       e.preventDefault();
       e.stopPropagation();
       if (!item) return;
+      if (currentAbortController || historyToggleBtn.disabled || inputBox?.disabled) {
+        closeHistoryMenu();
+        if (status) {
+          setStatus(status, "History is unavailable while generating", "ready");
+        }
+        return;
+      }
       void (async () => {
         closeModelMenu();
         closeReasoningMenu();
@@ -2634,6 +2655,15 @@ export function setupHandlers(
     historyMenu.addEventListener("click", (e: Event) => {
       const target = e.target as Element | null;
       if (!target || !item) return;
+      if (currentAbortController || historyToggleBtn?.disabled || inputBox?.disabled) {
+        e.preventDefault();
+        e.stopPropagation();
+        closeHistoryMenu();
+        if (status) {
+          setStatus(status, "History is unavailable while generating", "ready");
+        }
+        return;
+      }
 
       const deleteBtn = target.closest(
         ".llm-history-row-delete",
@@ -2725,11 +2755,12 @@ export function setupHandlers(
         currentModel: choices[0]?.model || "default",
       };
     }
-    let selected = selectedModelCache.get(item.id) || "primary";
+    let selected =
+      getLastUsedModelProfileKey() || selectedModelCache.get(item.id) || "primary";
     if (!choices.some((entry) => entry.key === selected)) {
-      selected = "primary";
-      selectedModelCache.set(item.id, selected);
+      selected = choices[0]?.key || "primary";
     }
+    selectedModelCache.set(item.id, selected);
     const current =
       choices.find((entry) => entry.key === selected) || choices[0];
     return {
@@ -3283,10 +3314,11 @@ export function setupHandlers(
         e.preventDefault();
         e.stopPropagation();
         if (!item) return;
+        selectedModelCache.clear();
         selectedModelCache.set(item.id, entry.key);
+        setLastUsedModelProfileKey(entry.key);
         setFloatingMenuOpen(modelMenu, MODEL_MENU_OPEN_CLASS, false);
         setFloatingMenuOpen(reasoningMenu, REASONING_MENU_OPEN_CLASS, false);
-        selectedReasoningCache.set(item.id, "none");
         updateModelButton();
         updateReasoningButton();
       };
@@ -3299,7 +3331,7 @@ export function setupHandlers(
   const rebuildRetryModelMenu = () => {
     if (!item || !retryModelMenu) return;
     const { profiles, choices } = getModelChoices();
-    const selectedKey = selectedModelCache.get(item.id) || "primary";
+    const selectedKey = getSelectedModelInfo().selected;
     retryModelMenu.innerHTML = "";
     for (const entry of choices) {
       const profile = profiles[entry.key];
@@ -3392,7 +3424,10 @@ export function setupHandlers(
     const enabledLevels = options
       .filter((option) => option.enabled)
       .map((option) => option.level);
-    let selectedLevel = selectedReasoningCache.get(item.id) || "none";
+    let selectedLevel =
+      selectedReasoningCache.get(item.id) ||
+      getLastUsedReasoningLevel() ||
+      "none";
     if (enabledLevels.length > 0) {
       if (
         selectedLevel === "none" ||
@@ -3470,7 +3505,9 @@ export function setupHandlers(
           e.preventDefault();
           e.stopPropagation();
           if (!item) return;
+          selectedReasoningCache.clear();
           selectedReasoningCache.set(item.id, level);
+          setLastUsedReasoningLevel(level);
           setFloatingMenuOpen(reasoningMenu, REASONING_MENU_OPEN_CLASS, false);
           updateReasoningButton();
         };
@@ -5789,6 +5826,14 @@ export function setupHandlers(
         sendBtn.disabled = false;
       }
       cancelBtn.style.display = "none";
+      if (historyNewBtn) {
+        historyNewBtn.disabled = false;
+        historyNewBtn.setAttribute("aria-disabled", "false");
+      }
+      if (historyToggleBtn) {
+        historyToggleBtn.disabled = false;
+        historyToggleBtn.setAttribute("aria-disabled", "false");
+      }
     });
   }
 

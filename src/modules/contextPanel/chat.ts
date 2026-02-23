@@ -68,6 +68,9 @@ import {
   getSelectedProfileForItem,
   getAdvancedModelParamsForProfile,
   getStringPref,
+  getLastReasoningExpanded,
+  getLastUsedReasoningLevel,
+  setLastReasoningExpanded,
 } from "./prefHelpers";
 import { buildContext, ensurePDFTextCached } from "./pdfContext";
 import { buildSupplementalPaperContext } from "./paperContext";
@@ -95,6 +98,38 @@ function appendReasoningPart(base: string | undefined, next?: string): string {
   const chunk = sanitizeText(next || "");
   if (!chunk) return base || "";
   return `${base || ""}${chunk}`;
+}
+
+function isReasoningExpandedByDefault(): boolean {
+  return getLastReasoningExpanded();
+}
+
+function setHistoryControlsDisabled(body: Element, disabled: boolean): void {
+  const historyNewBtn = body.querySelector(
+    "#llm-history-new",
+  ) as HTMLButtonElement | null;
+  if (historyNewBtn) {
+    historyNewBtn.disabled = disabled;
+    historyNewBtn.setAttribute("aria-disabled", disabled ? "true" : "false");
+  }
+  const historyToggleBtn = body.querySelector(
+    "#llm-history-toggle",
+  ) as HTMLButtonElement | null;
+  if (historyToggleBtn) {
+    historyToggleBtn.disabled = disabled;
+    historyToggleBtn.setAttribute("aria-disabled", disabled ? "true" : "false");
+    if (disabled) {
+      historyToggleBtn.setAttribute("aria-expanded", "false");
+    }
+  }
+  if (disabled) {
+    const historyMenu = body.querySelector(
+      "#llm-history-menu",
+    ) as HTMLDivElement | null;
+    if (historyMenu) {
+      historyMenu.style.display = "none";
+    }
+  }
 }
 
 function resolveMultimodalRetryHint(
@@ -578,7 +613,7 @@ function toPanelMessage(message: StoredChatMessage): Message {
     modelName: message.modelName,
     reasoningSummary: message.reasoningSummary,
     reasoningDetails: message.reasoningDetails,
-    reasoningOpen: false,
+    reasoningOpen: isReasoningExpandedByDefault(),
   };
 }
 
@@ -761,7 +796,8 @@ export function getSelectedReasoningForItem(
     .map((option) => option.level);
   if (!enabledLevels.length) return undefined;
 
-  let selectedLevel = selectedReasoningCache.get(itemId) || "none";
+  let selectedLevel =
+    selectedReasoningCache.get(itemId) || getLastUsedReasoningLevel() || "none";
   if (
     selectedLevel === "none" ||
     !enabledLevels.includes(selectedLevel as LLMReasoningLevel)
@@ -1163,6 +1199,7 @@ export async function retryLatestAssistantResponse(
     if (inputBox) inputBox.disabled = true;
     if (status) setStatus(status, "Preparing retry...", "sending");
   });
+  setHistoryControlsDisabled(body, true);
 
   const refreshChatSafely = () => {
     withScrollGuard(chatBox, conversationKey, () => {
@@ -1194,6 +1231,7 @@ export async function retryLatestAssistantResponse(
       if (sendBtn) sendBtn.style.display = "";
       if (cancelBtn) cancelBtn.style.display = "none";
     });
+    setHistoryControlsDisabled(body, false);
     return;
   }
 
@@ -1220,7 +1258,7 @@ export async function retryLatestAssistantResponse(
   assistantMessage.modelName = effectiveModel;
   assistantMessage.reasoningSummary = undefined;
   assistantMessage.reasoningDetails = undefined;
-  assistantMessage.reasoningOpen = false;
+  assistantMessage.reasoningOpen = isReasoningExpandedByDefault();
   assistantMessage.streaming = true;
   refreshChatSafely();
 
@@ -1335,7 +1373,6 @@ export async function retryLatestAssistantResponse(
       sanitizeText(answer) || assistantMessage.text || "No response.";
     assistantMessage.timestamp = Date.now();
     assistantMessage.modelName = effectiveModel;
-    assistantMessage.reasoningOpen = false;
     assistantMessage.streaming = false;
     refreshChatSafely();
 
@@ -1370,6 +1407,7 @@ export async function retryLatestAssistantResponse(
       "error",
     );
   } finally {
+    setHistoryControlsDisabled(body, false);
     if (cancelledRequestId < thisRequestId) {
       withScrollGuard(chatBox, conversationKey, () => {
         if (inputBox) {
@@ -1424,6 +1462,7 @@ export async function sendQuestion(
     if (inputBox) inputBox.disabled = true;
     if (status) setStatus(status, "Preparing request...", "sending");
   });
+  setHistoryControlsDisabled(body, true);
 
   await ensureConversationLoaded(item);
   const conversationKey = getConversationKey(item);
@@ -1524,7 +1563,7 @@ export async function sendQuestion(
     timestamp: Date.now(),
     modelName: effectiveModel,
     streaming: true,
-    reasoningOpen: false,
+    reasoningOpen: isReasoningExpandedByDefault(),
   };
   history.push(assistantMessage);
   if (history.length > PERSISTED_HISTORY_LIMIT) {
@@ -1683,6 +1722,7 @@ export async function sendQuestion(
 
     setStatusSafely(`Error: ${`${errMsg}${retryHint}`.slice(0, 40)}`, "error");
   } finally {
+    setHistoryControlsDisabled(body, false);
     // Only restore UI if this is still the current request
     if (cancelledRequestId < thisRequestId) {
       withScrollGuard(chatBox, conversationKey, () => {
@@ -2328,6 +2368,7 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
             const next = !msg.reasoningOpen;
             msg.reasoningOpen = next;
             details.open = next;
+            setLastReasoningExpanded(next);
           });
         };
         summary.addEventListener("mousedown", toggleReasoning);

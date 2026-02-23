@@ -14,12 +14,87 @@ import {
   CUSTOM_SHORTCUT_ID_PREFIX,
   type ModelProfileKey,
 } from "./constants";
-import type { ApiProfile, CustomShortcut } from "./types";
+import type {
+  ApiProfile,
+  CustomShortcut,
+  ReasoningLevelSelection,
+} from "./types";
 import { selectedModelCache, panelFontScalePercent } from "./state";
 
 export function getStringPref(key: string): string {
   const value = Zotero.Prefs.get(`${config.prefsPrefix}.${key}`, true);
   return typeof value === "string" ? value : "";
+}
+
+const LAST_MODEL_PROFILE_PREF_KEY = "lastUsedModelProfile";
+const LAST_REASONING_LEVEL_PREF_KEY = "lastUsedReasoningLevel";
+const LAST_REASONING_EXPANDED_PREF_KEY = "lastReasoningExpanded";
+const MODEL_PROFILE_KEYS = new Set<ModelProfileKey>([
+  "primary",
+  "secondary",
+  "tertiary",
+  "quaternary",
+]);
+const REASONING_LEVEL_SELECTIONS = new Set<ReasoningLevelSelection>([
+  "none",
+  "default",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+]);
+
+export function getLastUsedModelProfileKey(): ModelProfileKey | null {
+  const raw = getStringPref(LAST_MODEL_PROFILE_PREF_KEY).trim().toLowerCase();
+  if (!raw || !MODEL_PROFILE_KEYS.has(raw as ModelProfileKey)) return null;
+  return raw as ModelProfileKey;
+}
+
+export function setLastUsedModelProfileKey(key: ModelProfileKey): void {
+  if (!MODEL_PROFILE_KEYS.has(key)) return;
+  Zotero.Prefs.set(`${config.prefsPrefix}.${LAST_MODEL_PROFILE_PREF_KEY}`, key, true);
+}
+
+export function getLastUsedReasoningLevel(): ReasoningLevelSelection | null {
+  const raw = getStringPref(LAST_REASONING_LEVEL_PREF_KEY).trim().toLowerCase();
+  if (!raw || !REASONING_LEVEL_SELECTIONS.has(raw as ReasoningLevelSelection)) {
+    return null;
+  }
+  return raw as ReasoningLevelSelection;
+}
+
+export function setLastUsedReasoningLevel(level: ReasoningLevelSelection): void {
+  if (!REASONING_LEVEL_SELECTIONS.has(level)) return;
+  Zotero.Prefs.set(
+    `${config.prefsPrefix}.${LAST_REASONING_LEVEL_PREF_KEY}`,
+    level,
+    true,
+  );
+}
+
+export function getLastReasoningExpanded(): boolean {
+  const value = Zotero.Prefs.get(
+    `${config.prefsPrefix}.${LAST_REASONING_EXPANDED_PREF_KEY}`,
+    true,
+  );
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "true") return true;
+    if (normalized === "false") return false;
+  }
+  return false;
+}
+
+export function setLastReasoningExpanded(expanded: boolean): void {
+  Zotero.Prefs.set(
+    `${config.prefsPrefix}.${LAST_REASONING_EXPANDED_PREF_KEY}`,
+    Boolean(expanded),
+    true,
+  );
 }
 
 function normalizeTemperaturePref(raw: string): number {
@@ -71,11 +146,14 @@ export function getSelectedProfileForItem(itemId: number): {
   model: string;
 } {
   const profiles = getApiProfiles();
-  const selected = selectedModelCache.get(itemId) || "primary";
-  if (selected !== "primary" && profiles[selected].model) {
-    return { key: selected, ...profiles[selected] };
-  }
-  return { key: "primary", ...profiles.primary };
+  const preferredKey =
+    getLastUsedModelProfileKey() || selectedModelCache.get(itemId) || "primary";
+  const selectedKey =
+    preferredKey !== "primary" && profiles[preferredKey].model
+      ? preferredKey
+      : "primary";
+  selectedModelCache.set(itemId, selectedKey);
+  return { key: selectedKey, ...profiles[selectedKey] };
 }
 
 export function getAdvancedModelParamsForProfile(profileKey: ModelProfileKey): {
