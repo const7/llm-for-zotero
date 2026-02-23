@@ -96,6 +96,7 @@ import {
   getSelectedTextContexts,
   getSelectedTextExpandedIndex,
   includeSelectedTextFromReader,
+  resolveContextSourceItem,
   setSelectedTextContextEntries,
   setSelectedTextContexts,
   setSelectedTextExpandedIndex,
@@ -137,7 +138,11 @@ import type {
 } from "./types";
 import type { ReasoningLevel as LLMReasoningLevel } from "../../utils/llmClient";
 import type { ReasoningConfig as LLMReasoningConfig } from "../../utils/llmClient";
-import { searchPaperCandidates } from "./paperSearch";
+import {
+  searchPaperCandidates,
+  type PaperSearchAttachmentCandidate,
+  type PaperSearchGroupCandidate,
+} from "./paperSearch";
 import {
   createGlobalPortalItem,
   isGlobalPortalItem,
@@ -230,6 +235,15 @@ export function setupHandlers(
   const uploadInput = body.querySelector(
     "#llm-upload-input",
   ) as HTMLInputElement | null;
+  const slashMenu = body.querySelector(
+    "#llm-slash-menu",
+  ) as HTMLDivElement | null;
+  const slashUploadOption = body.querySelector(
+    "#llm-slash-upload-option",
+  ) as HTMLButtonElement | null;
+  const slashReferenceOption = body.querySelector(
+    "#llm-slash-reference-option",
+  ) as HTMLButtonElement | null;
   const imagePreview = body.querySelector(
     "#llm-image-preview",
   ) as HTMLDivElement | null;
@@ -469,6 +483,7 @@ export function setupHandlers(
   const MODEL_MENU_OPEN_CLASS = "llm-model-menu-open";
   const REASONING_MENU_OPEN_CLASS = "llm-reasoning-menu-open";
   const RETRY_MODEL_MENU_OPEN_CLASS = "llm-model-menu-open";
+  const SLASH_MENU_OPEN_CLASS = "llm-slash-menu-open";
   let retryMenuAnchor: HTMLButtonElement | null = null;
   const setFloatingMenuOpen = (
     menu: HTMLDivElement | null,
@@ -501,6 +516,12 @@ export function setupHandlers(
     if (historyMenu) historyMenu.style.display = "none";
     if (historyToggleBtn) {
       historyToggleBtn.setAttribute("aria-expanded", "false");
+    }
+  };
+  const closeSlashMenu = () => {
+    setFloatingMenuOpen(slashMenu, SLASH_MENU_OPEN_CLASS, false);
+    if (uploadBtn) {
+      uploadBtn.setAttribute("aria-expanded", "false");
     }
   };
   const isHistoryMenuOpen = () =>
@@ -1093,6 +1114,7 @@ export function setupHandlers(
       e.stopPropagation();
       if (exportBtn.disabled || !exportMenu || !item) return;
       closeRetryModelMenu();
+      closeSlashMenu();
       closeResponseMenu();
       closePromptMenu();
       closeHistoryMenu();
@@ -1278,14 +1300,61 @@ export function setupHandlers(
     return resolvePaperContextDisplayMetadata(paperContext).year || null;
   };
 
+  const resolvePaperContextAttachmentItem = (
+    paperContext: PaperContextRef,
+  ): Zotero.Item | null => {
+    const attachment = Zotero.Items.get(paperContext.contextItemId) || null;
+    if (!attachment?.isAttachment?.()) return null;
+    return attachment;
+  };
+
+  const resolvePaperContextParentItem = (
+    paperContext: PaperContextRef,
+  ): Zotero.Item | null => {
+    const item = Zotero.Items.get(paperContext.itemId) || null;
+    if (item?.isRegularItem?.()) return item;
+    const contextAttachment = resolvePaperContextAttachmentItem(paperContext);
+    if (contextAttachment?.parentID) {
+      const parent = Zotero.Items.get(contextAttachment.parentID) || null;
+      if (parent?.isRegularItem?.()) return parent;
+    }
+    return null;
+  };
+
+  const resolveMultiPdfAttachmentTitle = (
+    paperContext: PaperContextRef,
+  ): string => {
+    const parentItem = resolvePaperContextParentItem(paperContext);
+    if (!parentItem) return "";
+    const attachmentIds = parentItem.getAttachments?.() || [];
+    let pdfCount = 0;
+    for (const attachmentId of attachmentIds) {
+      const attachment = Zotero.Items.get(attachmentId);
+      if (
+        attachment?.isAttachment?.() &&
+        attachment.attachmentContentType === "application/pdf"
+      ) {
+        pdfCount += 1;
+      }
+    }
+    if (pdfCount <= 1) return "";
+    const contextAttachment = resolvePaperContextAttachmentItem(paperContext);
+    if (!contextAttachment) return "";
+    return sanitizeText(String(contextAttachment.getField("title") || ""))
+      .replace(/\s+/g, " ")
+      .trim();
+  };
+
   const formatPaperContextChipLabel = (
     paperContext: PaperContextRef,
   ): string => {
     const authorLastName = extractFirstAuthorLastName(paperContext);
     const year = extractPaperYear(paperContext);
-    return year
+    const base = year
       ? `📝 ${authorLastName} et al., ${year}`
       : `📝 ${authorLastName} et al.`;
+    const attachmentTitle = resolveMultiPdfAttachmentTitle(paperContext);
+    return attachmentTitle ? `${base} - ${attachmentTitle}` : base;
   };
 
   const formatPaperContextChipTitle = (
@@ -1295,49 +1364,110 @@ export function setupHandlers(
     const meta = [metadata.firstCreator || "", metadata.year || ""]
       .filter(Boolean)
       .join(" · ");
-    return [paperContext.title, meta].filter(Boolean).join("\n");
+    const attachmentTitle = resolveMultiPdfAttachmentTitle(paperContext);
+    return [
+      paperContext.title,
+      meta,
+      attachmentTitle ? `Attachment: ${attachmentTitle}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
   };
 
-  const updatePaperPreview = () => {
-    if (!item || !paperPreview || !paperPreviewList) return;
-    const papers = normalizePaperContextEntries(
-      selectedPaperContextCache.get(item.id) || [],
-    );
-    if (!papers.length) {
-      paperPreview.style.display = "none";
-      paperPreviewList.innerHTML = "";
-      clearSelectedPaperState(item.id);
-      return;
+  const resolveAutoLoadedPaperContext = (): PaperContextRef | null => {
+    if (!item || isGlobalMode()) return null;
+    const contextSource = resolveContextSourceItem(item);
+    const contextItem = contextSource.contextItem;
+    if (!contextItem) return null;
+
+    const parentItem =
+      contextItem.isAttachment() && contextItem.parentID
+        ? Zotero.Items.get(contextItem.parentID) || null
+        : contextItem;
+    const paperItem = parentItem || contextItem;
+    const paperItemId = Number(paperItem.id);
+    const contextItemId = Number(contextItem.id);
+    if (!Number.isFinite(paperItemId) || !Number.isFinite(contextItemId)) {
+      return null;
     }
-    selectedPaperContextCache.set(item.id, papers);
-    selectedPaperPreviewExpandedCache.set(item.id, false);
-    paperPreview.style.display = "contents";
-    paperPreviewList.style.display = "contents";
-    paperPreviewList.innerHTML = "";
-    const ownerDoc = body.ownerDocument;
-    if (!ownerDoc) return;
-    papers.forEach((paperContext, index) => {
-      const chip = createElement(
-        ownerDoc,
-        "div",
-        "llm-selected-context llm-paper-context-chip",
-      );
-      chip.dataset.paperContextIndex = `${index}`;
-      chip.classList.add("collapsed");
-      const chipHeader = createElement(
-        ownerDoc,
-        "div",
-        "llm-image-preview-header llm-selected-context-header llm-paper-context-chip-header",
-      );
-      const chipLabel = createElement(
-        ownerDoc,
-        "span",
-        "llm-paper-context-chip-label",
-        {
-          textContent: formatPaperContextChipLabel(paperContext),
-          title: formatPaperContextChipTitle(paperContext),
-        },
-      );
+    const normalizedPaperItemId = Math.floor(paperItemId);
+    const normalizedContextItemId = Math.floor(contextItemId);
+    if (normalizedPaperItemId <= 0 || normalizedContextItemId <= 0) {
+      return null;
+    }
+
+    const title = sanitizeText(
+      String(
+        paperItem.getField("title") ||
+          contextItem.getField("title") ||
+          `Paper ${normalizedPaperItemId}`,
+      ),
+    ).trim();
+    const citationKey = sanitizeText(
+      String(paperItem.getField("citationKey") || ""),
+    ).trim();
+    const firstCreator = sanitizeText(
+      String(
+        paperItem.getField("firstCreator") || (paperItem as Zotero.Item).firstCreator || "",
+      ),
+    ).trim();
+    const year = sanitizeText(
+      String(
+        paperItem.getField("year") ||
+          paperItem.getField("date") ||
+          paperItem.getField("issued") ||
+          "",
+      ),
+    ).trim();
+
+    return {
+      itemId: normalizedPaperItemId,
+      contextItemId: normalizedContextItemId,
+      title: title || `Paper ${normalizedPaperItemId}`,
+      citationKey: citationKey || undefined,
+      firstCreator: firstCreator || undefined,
+      year: year || undefined,
+    };
+  };
+
+  const appendPaperChip = (
+    ownerDoc: Document,
+    list: HTMLDivElement,
+    paperContext: PaperContextRef,
+    options?: { removable?: boolean; removableIndex?: number; autoLoaded?: boolean },
+  ) => {
+    const removable = options?.removable === true;
+    const chip = createElement(
+      ownerDoc,
+      "div",
+      "llm-selected-context llm-paper-context-chip",
+    );
+    if (options?.autoLoaded) {
+      chip.classList.add("llm-paper-context-chip-autoloaded");
+      chip.dataset.autoLoaded = "true";
+    }
+    if (removable) {
+      chip.dataset.paperContextIndex = `${options?.removableIndex ?? -1}`;
+    }
+    chip.classList.add("collapsed");
+
+    const chipHeader = createElement(
+      ownerDoc,
+      "div",
+      "llm-image-preview-header llm-selected-context-header llm-paper-context-chip-header",
+    );
+    const chipLabel = createElement(
+      ownerDoc,
+      "span",
+      "llm-paper-context-chip-label",
+      {
+        textContent: formatPaperContextChipLabel(paperContext),
+        title: formatPaperContextChipTitle(paperContext),
+      },
+    );
+    chipHeader.append(chipLabel);
+
+    if (removable) {
       const removeBtn = createElement(
         ownerDoc,
         "button",
@@ -1348,11 +1478,48 @@ export function setupHandlers(
           title: `Remove ${paperContext.title}`,
         },
       ) as HTMLButtonElement;
-      removeBtn.dataset.paperContextIndex = `${index}`;
+      removeBtn.dataset.paperContextIndex = `${options?.removableIndex ?? -1}`;
       removeBtn.setAttribute("aria-label", `Remove ${paperContext.title}`);
-      chipHeader.append(chipLabel, removeBtn);
-      chip.append(chipHeader);
-      paperPreviewList.appendChild(chip);
+      chipHeader.append(removeBtn);
+    }
+
+    chip.append(chipHeader);
+    list.appendChild(chip);
+  };
+
+  const updatePaperPreview = () => {
+    if (!item || !paperPreview || !paperPreviewList) return;
+    const selectedPapers = normalizePaperContextEntries(
+      selectedPaperContextCache.get(item.id) || [],
+    );
+    const autoLoadedPaperContext = resolveAutoLoadedPaperContext();
+    if (!selectedPapers.length && !autoLoadedPaperContext) {
+      paperPreview.style.display = "none";
+      paperPreviewList.innerHTML = "";
+      clearSelectedPaperState(item.id);
+      return;
+    }
+    if (selectedPapers.length) {
+      selectedPaperContextCache.set(item.id, selectedPapers);
+    } else {
+      clearSelectedPaperState(item.id);
+    }
+    selectedPaperPreviewExpandedCache.set(item.id, false);
+    paperPreview.style.display = "contents";
+    paperPreviewList.style.display = "contents";
+    paperPreviewList.innerHTML = "";
+    const ownerDoc = body.ownerDocument;
+    if (!ownerDoc) return;
+    if (autoLoadedPaperContext) {
+      appendPaperChip(ownerDoc, paperPreviewList, autoLoadedPaperContext, {
+        autoLoaded: true,
+      });
+    }
+    selectedPapers.forEach((paperContext, index) => {
+      appendPaperChip(ownerDoc, paperPreviewList, paperContext, {
+        removable: true,
+        removableIndex: index,
+      });
     });
   };
 
@@ -2442,6 +2609,7 @@ export function setupHandlers(
         closeModelMenu();
         closeReasoningMenu();
         closeRetryModelMenu();
+        closeSlashMenu();
         closeResponseMenu();
         closePromptMenu();
         closeExportMenu();
@@ -3102,7 +3270,7 @@ export function setupHandlers(
       const option = createElement(
         body.ownerDocument as Document,
         "button",
-        "llm-model-option",
+        "llm-response-menu-item llm-model-option",
         {
           type: "button",
           textContent: isSelected
@@ -3139,7 +3307,7 @@ export function setupHandlers(
       const option = createElement(
         body.ownerDocument as Document,
         "button",
-        "llm-model-option",
+        "llm-response-menu-item llm-model-option",
         {
           type: "button",
           textContent: isSelected
@@ -3282,7 +3450,7 @@ export function setupHandlers(
       const option = createElement(
         body.ownerDocument as Document,
         "button",
-        "llm-reasoning-option",
+        "llm-response-menu-item llm-reasoning-option",
         {
           type: "button",
           textContent:
@@ -3733,8 +3901,20 @@ export function setupHandlers(
     slashStart: number;
     caretEnd: number;
   };
-  let paperPickerCandidates: PaperContextRef[] = [];
-  let paperPickerActiveIndex = 0;
+  type PaperPickerRow =
+    | {
+        kind: "paper";
+        groupIndex: number;
+      }
+    | {
+        kind: "attachment";
+        groupIndex: number;
+        attachmentIndex: number;
+      };
+  let paperPickerGroups: PaperSearchGroupCandidate[] = [];
+  let paperPickerExpandedGroupKeys = new Set<number>();
+  let paperPickerRows: PaperPickerRow[] = [];
+  let paperPickerActiveRowIndex = 0;
   let paperPickerRequestSeq = 0;
   let paperPickerDebounceTimer: number | null = null;
   const getActiveSlashToken = (): ActiveSlashToken | null => {
@@ -3759,18 +3939,105 @@ export function setupHandlers(
   const closePaperPicker = () => {
     if (!paperPicker || !paperPickerList) return;
     paperPicker.style.display = "none";
-    paperPickerCandidates = [];
-    paperPickerActiveIndex = 0;
+    paperPickerGroups = [];
+    paperPickerExpandedGroupKeys = new Set<number>();
+    paperPickerRows = [];
+    paperPickerActiveRowIndex = 0;
     paperPickerList.innerHTML = "";
   };
-  const buildPaperMetaText = (paper: PaperContextRef): string => {
-    const metadata = resolvePaperContextDisplayMetadata(paper);
+  const buildPaperMetaText = (paper: {
+    citationKey?: string;
+    firstCreator?: string;
+    year?: string;
+  }): string => {
     const parts = [
       paper.citationKey || "",
-      metadata.firstCreator || paper.firstCreator || "",
-      metadata.year || paper.year || "",
+      paper.firstCreator || "",
+      paper.year || "",
     ].filter(Boolean);
     return parts.join(" · ");
+  };
+  const getPaperPickerAttachmentDisplayTitle = (
+    group: PaperSearchGroupCandidate,
+    attachment: PaperSearchAttachmentCandidate,
+    attachmentIndex: number,
+  ): string => {
+    const normalizedTitle = sanitizeText(attachment.title || "").trim();
+    if (normalizedTitle) return normalizedTitle;
+    return group.attachments.length > 1 ? `PDF ${attachmentIndex + 1}` : "PDF";
+  };
+  const getPaperPickerGroupKey = (group: PaperSearchGroupCandidate): number =>
+    group.itemId;
+  const isPaperPickerGroupExpanded = (
+    group: PaperSearchGroupCandidate,
+  ): boolean => {
+    if (group.attachments.length <= 1) return false;
+    return paperPickerExpandedGroupKeys.has(getPaperPickerGroupKey(group));
+  };
+  const rebuildPaperPickerRows = () => {
+    const rows: PaperPickerRow[] = [];
+    paperPickerGroups.forEach((group, groupIndex) => {
+      rows.push({
+        kind: "paper",
+        groupIndex,
+      });
+      if (group.attachments.length <= 1) return;
+      if (!isPaperPickerGroupExpanded(group)) return;
+      group.attachments.forEach((_attachment, attachmentIndex) => {
+        rows.push({
+          kind: "attachment",
+          groupIndex,
+          attachmentIndex,
+        });
+      });
+    });
+    paperPickerRows = rows;
+    if (!paperPickerRows.length) {
+      paperPickerActiveRowIndex = 0;
+      return;
+    }
+    paperPickerActiveRowIndex = Math.max(
+      0,
+      Math.min(paperPickerRows.length - 1, paperPickerActiveRowIndex),
+    );
+  };
+  const getPaperPickerRowAt = (index: number): PaperPickerRow | null =>
+    paperPickerRows[index] || null;
+  const findPaperPickerPaperRowIndex = (groupIndex: number): number => {
+    for (let index = 0; index < paperPickerRows.length; index += 1) {
+      const row = paperPickerRows[index];
+      if (row.kind === "paper" && row.groupIndex === groupIndex) {
+        return index;
+      }
+    }
+    return -1;
+  };
+  const findPaperPickerFirstAttachmentRowIndex = (groupIndex: number): number => {
+    for (let index = 0; index < paperPickerRows.length; index += 1) {
+      const row = paperPickerRows[index];
+      if (row.kind === "attachment" && row.groupIndex === groupIndex) {
+        return index;
+      }
+    }
+    return -1;
+  };
+  const togglePaperPickerGroupExpanded = (
+    groupIndex: number,
+    expanded?: boolean,
+  ): boolean => {
+    const group = paperPickerGroups[groupIndex];
+    if (!group || group.attachments.length <= 1) return false;
+    const groupKey = getPaperPickerGroupKey(group);
+    const currentlyExpanded = paperPickerExpandedGroupKeys.has(groupKey);
+    const nextExpanded = expanded === undefined ? !currentlyExpanded : expanded;
+    if (nextExpanded === currentlyExpanded) return false;
+    if (nextExpanded) {
+      paperPickerExpandedGroupKeys.add(groupKey);
+    } else {
+      paperPickerExpandedGroupKeys.delete(groupKey);
+    }
+    rebuildPaperPickerRows();
+    return true;
   };
   const upsertPaperContext = (paper: PaperContextRef): boolean => {
     if (!item) return false;
@@ -3827,27 +4094,124 @@ export function setupHandlers(
     inputBox.setSelectionRange(nextCaret, nextCaret);
     return true;
   };
-  const selectPaperPickerCandidateAt = (index: number): boolean => {
-    const selectedPaper = paperPickerCandidates[index];
-    if (!selectedPaper) return false;
+  const selectPaperPickerAttachment = (
+    groupIndex: number,
+    attachmentIndex: number,
+    selectionKind: "paper-single" | "attachment",
+  ): boolean => {
+    const selectedGroup = paperPickerGroups[groupIndex];
+    if (!selectedGroup) return false;
+    const selectedAttachment = selectedGroup.attachments[attachmentIndex];
+    if (!selectedAttachment) return false;
     consumeActiveSlashToken();
+    ztoolkit.log("LLM: Paper picker selection", {
+      selectionKind,
+      itemId: selectedGroup.itemId,
+      contextItemId: selectedAttachment.contextItemId,
+    });
     upsertPaperContext({
-      itemId: selectedPaper.itemId,
-      contextItemId: selectedPaper.contextItemId,
-      title: selectedPaper.title,
-      citationKey: selectedPaper.citationKey,
-      firstCreator: selectedPaper.firstCreator,
-      year: selectedPaper.year,
+      itemId: selectedGroup.itemId,
+      contextItemId: selectedAttachment.contextItemId,
+      title: selectedGroup.title,
+      citationKey: selectedGroup.citationKey,
+      firstCreator: selectedGroup.firstCreator,
+      year: selectedGroup.year,
     });
     closePaperPicker();
     inputBox.focus({ preventScroll: true });
+    return true;
+  };
+  const selectPaperPickerRowAt = (index: number): boolean => {
+    const row = getPaperPickerRowAt(index);
+    if (!row) return false;
+    if (row.kind === "attachment") {
+      return selectPaperPickerAttachment(
+        row.groupIndex,
+        row.attachmentIndex,
+        "attachment",
+      );
+    }
+    const group = paperPickerGroups[row.groupIndex];
+    if (!group) return false;
+    if (group.attachments.length <= 1) {
+      return selectPaperPickerAttachment(row.groupIndex, 0, "paper-single");
+    }
+    if (!isPaperPickerGroupExpanded(group)) {
+      togglePaperPickerGroupExpanded(row.groupIndex, true);
+      ztoolkit.log("LLM: Paper picker expanded group via keyboard", {
+        itemId: group.itemId,
+      });
+      renderPaperPicker();
+      return true;
+    }
+    const firstChildIndex = findPaperPickerFirstAttachmentRowIndex(
+      row.groupIndex,
+    );
+    if (firstChildIndex >= 0) {
+      paperPickerActiveRowIndex = firstChildIndex;
+      renderPaperPicker();
+      return true;
+    }
+    return false;
+  };
+  const handlePaperPickerArrowRight = (): boolean => {
+    const activeRow = getPaperPickerRowAt(paperPickerActiveRowIndex);
+    if (!activeRow || activeRow.kind !== "paper") return false;
+    const group = paperPickerGroups[activeRow.groupIndex];
+    if (!group || group.attachments.length <= 1) return false;
+    if (!isPaperPickerGroupExpanded(group)) {
+      togglePaperPickerGroupExpanded(activeRow.groupIndex, true);
+      renderPaperPicker();
+      return true;
+    }
+    const firstChildIndex = findPaperPickerFirstAttachmentRowIndex(
+      activeRow.groupIndex,
+    );
+    if (firstChildIndex >= 0 && firstChildIndex !== paperPickerActiveRowIndex) {
+      paperPickerActiveRowIndex = firstChildIndex;
+      renderPaperPicker();
+      return true;
+    }
+    return false;
+  };
+  const handlePaperPickerArrowLeft = (): boolean => {
+    const activeRow = getPaperPickerRowAt(paperPickerActiveRowIndex);
+    if (!activeRow) return false;
+    if (activeRow.kind === "attachment") {
+      const parentIndex = findPaperPickerPaperRowIndex(activeRow.groupIndex);
+      if (parentIndex >= 0 && parentIndex !== paperPickerActiveRowIndex) {
+        paperPickerActiveRowIndex = parentIndex;
+        renderPaperPicker();
+        return true;
+      }
+      return false;
+    }
+    const group = paperPickerGroups[activeRow.groupIndex];
+    if (!group || group.attachments.length <= 1) return false;
+    if (!isPaperPickerGroupExpanded(group)) return false;
+    togglePaperPickerGroupExpanded(activeRow.groupIndex, false);
+    const parentIndex = findPaperPickerPaperRowIndex(activeRow.groupIndex);
+    if (parentIndex >= 0) {
+      paperPickerActiveRowIndex = parentIndex;
+    }
+    renderPaperPicker();
     return true;
   };
   const renderPaperPicker = () => {
     if (!paperPicker || !paperPickerList) return;
     const ownerDoc = body.ownerDocument;
     if (!ownerDoc) return;
-    if (!paperPickerCandidates.length) {
+    if (!paperPickerGroups.length) {
+      paperPickerList.innerHTML = "";
+      const empty = createElement(ownerDoc, "div", "llm-paper-picker-empty", {
+        textContent: "No papers matched.",
+      });
+      paperPickerList.appendChild(empty);
+      paperPicker.style.display = "block";
+      return;
+    }
+    rebuildPaperPickerRows();
+    if (!paperPickerRows.length) {
       paperPickerList.innerHTML = "";
       const empty = createElement(ownerDoc, "div", "llm-paper-picker-empty", {
         textContent: "No papers matched.",
@@ -3857,37 +4221,131 @@ export function setupHandlers(
       return;
     }
     paperPickerList.innerHTML = "";
-    paperPickerActiveIndex = Math.max(
-      0,
-      Math.min(paperPickerCandidates.length - 1, paperPickerActiveIndex),
-    );
-    paperPickerCandidates.forEach((paper, index) => {
-      const option = createElement(ownerDoc, "div", "llm-paper-picker-item");
+    paperPickerRows.forEach((row, rowIndex) => {
+      const option = createElement(
+        ownerDoc,
+        "div",
+        `llm-paper-picker-item ${
+          row.kind === "paper"
+            ? "llm-paper-picker-group-row"
+            : "llm-paper-picker-attachment-row"
+        }`,
+      );
       option.setAttribute("role", "option");
       option.setAttribute(
         "aria-selected",
-        index === paperPickerActiveIndex ? "true" : "false",
+        rowIndex === paperPickerActiveRowIndex ? "true" : "false",
       );
       option.tabIndex = -1;
-      if (index === paperPickerActiveIndex) {
-        option.classList.add("llm-paper-picker-item-active");
+
+      if (row.kind === "paper") {
+        const group = paperPickerGroups[row.groupIndex];
+        if (!group) return;
+        const isMultiAttachment = group.attachments.length > 1;
+        const expanded = isPaperPickerGroupExpanded(group);
+        if (isMultiAttachment) {
+          option.setAttribute("aria-expanded", expanded ? "true" : "false");
+        }
+        const rowMain = createElement(
+          ownerDoc,
+          "div",
+          "llm-paper-picker-group-row-main",
+        );
+        const titleLine = createElement(
+          ownerDoc,
+          "div",
+          "llm-paper-picker-group-title-line",
+        );
+        const title = createElement(ownerDoc, "span", "llm-paper-picker-title", {
+          textContent: group.title,
+          title: group.title,
+        });
+        titleLine.appendChild(title);
+        if (isMultiAttachment) {
+          const attachmentCount = createElement(
+            ownerDoc,
+            "span",
+            "llm-paper-picker-group-meta",
+            {
+              textContent: `${group.attachments.length} PDFs`,
+            },
+          );
+          const chevron = createElement(
+            ownerDoc,
+            "span",
+            "llm-paper-picker-group-chevron",
+            {
+              textContent: expanded ? "▾" : "▸",
+            },
+          );
+          titleLine.append(attachmentCount, chevron);
+        }
+        rowMain.appendChild(titleLine);
+        const meta = createElement(ownerDoc, "span", "llm-paper-picker-meta", {
+          textContent: buildPaperMetaText(group) || "Supplemental paper",
+        });
+        rowMain.appendChild(meta);
+        option.appendChild(rowMain);
+      } else {
+        const group = paperPickerGroups[row.groupIndex];
+        if (!group) return;
+        const attachment = group.attachments[row.attachmentIndex];
+        if (!attachment) return;
+        const attachmentTitle = getPaperPickerAttachmentDisplayTitle(
+          group,
+          attachment,
+          row.attachmentIndex,
+        );
+        const indent = createElement(
+          ownerDoc,
+          "span",
+          "llm-paper-picker-attachment-indent",
+        );
+        const attachmentMain = createElement(
+          ownerDoc,
+          "div",
+          "llm-paper-picker-attachment-main",
+        );
+        const title = createElement(ownerDoc, "span", "llm-paper-picker-title", {
+          textContent: attachmentTitle,
+          title: attachmentTitle,
+        });
+        const meta = createElement(ownerDoc, "span", "llm-paper-picker-meta", {
+          textContent: "PDF attachment",
+        });
+        attachmentMain.append(title, meta);
+        option.append(indent, attachmentMain);
       }
-      const title = createElement(ownerDoc, "span", "llm-paper-picker-title", {
-        textContent: paper.title,
-        title: paper.title,
-      });
-      const meta = createElement(ownerDoc, "span", "llm-paper-picker-meta", {
-        textContent: buildPaperMetaText(paper) || "Supplemental paper",
-      });
-      option.append(title, meta);
-      const choosePaper = (e: Event) => {
+
+      const choosePaperRow = (e: Event) => {
         const mouse = e as MouseEvent;
         if (typeof mouse.button === "number" && mouse.button !== 0) return;
         e.preventDefault();
         e.stopPropagation();
-        selectPaperPickerCandidateAt(index);
+        if (row.kind === "paper") {
+          paperPickerActiveRowIndex = rowIndex;
+          const group = paperPickerGroups[row.groupIndex];
+          if (!group) return;
+          if (group.attachments.length <= 1) {
+            selectPaperPickerAttachment(row.groupIndex, 0, "paper-single");
+            return;
+          }
+          togglePaperPickerGroupExpanded(row.groupIndex);
+          const parentIndex = findPaperPickerPaperRowIndex(row.groupIndex);
+          if (parentIndex >= 0) {
+            paperPickerActiveRowIndex = parentIndex;
+          }
+          renderPaperPicker();
+          return;
+        }
+        paperPickerActiveRowIndex = rowIndex;
+        selectPaperPickerAttachment(
+          row.groupIndex,
+          row.attachmentIndex,
+          "attachment",
+        );
       };
-      option.addEventListener("mousedown", choosePaper);
+      option.addEventListener("mousedown", choosePaperRow);
       option.addEventListener("click", (e: Event) => {
         e.preventDefault();
         e.stopPropagation();
@@ -3929,13 +4387,12 @@ export function setupHandlers(
         closePaperPicker();
         return;
       }
-      const currentConversationItemId = isGlobalMode()
-        ? null
-        : getConversationKey(item);
+      const contextSource = resolveContextSourceItem(item);
+      const excludeContextItemId = contextSource.contextItem?.id ?? null;
       const results = await searchPaperCandidates(
         libraryID,
         activeSlashToken.query,
-        currentConversationItemId,
+        excludeContextItemId,
         20,
       );
       if (requestId !== paperPickerRequestSeq) return;
@@ -3943,15 +4400,28 @@ export function setupHandlers(
         closePaperPicker();
         return;
       }
-      paperPickerCandidates = results.map((entry) => ({
-        itemId: entry.itemId,
-        contextItemId: entry.contextItemId,
-        title: entry.title,
-        citationKey: entry.citationKey,
-        firstCreator: entry.firstCreator,
-        year: entry.year,
-      }));
-      paperPickerActiveIndex = 0;
+      paperPickerGroups = results;
+      paperPickerExpandedGroupKeys = new Set<number>();
+      if (activeSlashToken.query.trim()) {
+        for (const group of paperPickerGroups) {
+          if (
+            group.attachments.length > 1 &&
+            group.attachments.some((attachment) => attachment.score > 0)
+          ) {
+            paperPickerExpandedGroupKeys.add(getPaperPickerGroupKey(group));
+          }
+        }
+      }
+      const attachmentCount = paperPickerGroups.reduce(
+        (count, group) => count + group.attachments.length,
+        0,
+      );
+      ztoolkit.log("LLM: Paper picker grouped candidates", {
+        groups: paperPickerGroups.length,
+        attachments: attachmentCount,
+        autoExpandedGroups: paperPickerExpandedGroupKeys.size,
+      });
+      paperPickerActiveRowIndex = 0;
       renderPaperPicker();
     };
     const win = body.ownerDocument?.defaultView;
@@ -4037,7 +4507,13 @@ export function setupHandlers(
     });
     inputBox.addEventListener("keyup", (e: Event) => {
       const key = (e as KeyboardEvent).key;
-      if (key === "ArrowUp" || key === "ArrowDown") return;
+      if (
+        key === "ArrowUp" ||
+        key === "ArrowDown" ||
+        key === "ArrowLeft" ||
+        key === "ArrowRight"
+      )
+        return;
       if (key === "Enter" || key === "Tab" || key === "Escape") return;
       schedulePaperPickerSearch();
     });
@@ -4045,6 +4521,7 @@ export function setupHandlers(
 
   const doSend = async () => {
     if (!item) return;
+    closeSlashMenu();
     closePaperPicker();
     const text = inputBox.value.trim();
     const selectedContexts = getSelectedTextContextEntries(item.id);
@@ -4244,9 +4721,9 @@ export function setupHandlers(
       if (ke.key === "ArrowDown") {
         e.preventDefault();
         e.stopPropagation();
-        if (paperPickerCandidates.length) {
-          paperPickerActiveIndex =
-            (paperPickerActiveIndex + 1) % paperPickerCandidates.length;
+        if (paperPickerRows.length) {
+          paperPickerActiveRowIndex =
+            (paperPickerActiveRowIndex + 1) % paperPickerRows.length;
           renderPaperPicker();
         }
         return;
@@ -4254,12 +4731,24 @@ export function setupHandlers(
       if (ke.key === "ArrowUp") {
         e.preventDefault();
         e.stopPropagation();
-        if (paperPickerCandidates.length) {
-          paperPickerActiveIndex =
-            (paperPickerActiveIndex - 1 + paperPickerCandidates.length) %
-            paperPickerCandidates.length;
+        if (paperPickerRows.length) {
+          paperPickerActiveRowIndex =
+            (paperPickerActiveRowIndex - 1 + paperPickerRows.length) %
+            paperPickerRows.length;
           renderPaperPicker();
         }
+        return;
+      }
+      if (ke.key === "ArrowRight") {
+        e.preventDefault();
+        e.stopPropagation();
+        handlePaperPickerArrowRight();
+        return;
+      }
+      if (ke.key === "ArrowLeft") {
+        e.preventDefault();
+        e.stopPropagation();
+        handlePaperPickerArrowLeft();
         return;
       }
       if (ke.key === "Escape") {
@@ -4271,7 +4760,7 @@ export function setupHandlers(
       if (ke.key === "Enter" || ke.key === "Tab") {
         e.preventDefault();
         e.stopPropagation();
-        selectPaperPickerCandidateAt(paperPickerActiveIndex);
+        selectPaperPickerRowAt(paperPickerActiveRowIndex);
         return;
       }
     }
@@ -4512,18 +5001,81 @@ export function setupHandlers(
     });
   }
 
+  const openReferenceSlashFromMenu = () => {
+    if (!item) return;
+    const existingToken = getActiveSlashToken();
+    if (!existingToken) {
+      const selectionStart =
+        typeof inputBox.selectionStart === "number"
+          ? inputBox.selectionStart
+          : inputBox.value.length;
+      const selectionEnd =
+        typeof inputBox.selectionEnd === "number"
+          ? inputBox.selectionEnd
+          : selectionStart;
+      const before = inputBox.value.slice(0, selectionStart);
+      const after = inputBox.value.slice(selectionEnd);
+      const needsLeadingSpace = before.length > 0 && !/\s$/.test(before);
+      const insertion = `${needsLeadingSpace ? " " : ""}/`;
+      inputBox.value = `${before}${insertion}${after}`;
+      const nextCaret = before.length + insertion.length;
+      inputBox.setSelectionRange(nextCaret, nextCaret);
+    }
+    inputBox.focus({ preventScroll: true });
+    schedulePaperPickerSearch();
+    if (status) {
+      setStatus(status, "Reference picker ready. Type to search papers.", "ready");
+    }
+  };
+
   if (uploadBtn && uploadInput) {
     uploadBtn.addEventListener("click", (e: Event) => {
       e.preventDefault();
       e.stopPropagation();
       if (!item) return;
-      uploadInput.click();
+      if (!slashMenu) {
+        uploadInput.click();
+        return;
+      }
+      if (isFloatingMenuOpen(slashMenu)) {
+        closeSlashMenu();
+        return;
+      }
+      closeRetryModelMenu();
+      closeModelMenu();
+      closeReasoningMenu();
+      closeHistoryMenu();
+      closeResponseMenu();
+      closePromptMenu();
+      closeExportMenu();
+      positionFloatingMenu(slashMenu, uploadBtn);
+      setFloatingMenuOpen(slashMenu, SLASH_MENU_OPEN_CLASS, true);
+      uploadBtn.setAttribute("aria-expanded", "true");
     });
     uploadInput.addEventListener("change", async () => {
       if (!item) return;
       const files = Array.from(uploadInput.files || []);
       uploadInput.value = "";
       await processIncomingFiles(files);
+    });
+  }
+
+  if (slashUploadOption && uploadInput) {
+    slashUploadOption.addEventListener("click", (e: Event) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!item) return;
+      closeSlashMenu();
+      uploadInput.click();
+    });
+  }
+
+  if (slashReferenceOption) {
+    slashReferenceOption.addEventListener("click", (e: Event) => {
+      e.preventDefault();
+      e.stopPropagation();
+      closeSlashMenu();
+      openReferenceSlashFromMenu();
     });
   }
 
@@ -4575,6 +5127,7 @@ export function setupHandlers(
 
   const openModelMenu = () => {
     if (!modelMenu || !modelBtn) return;
+    closeSlashMenu();
     closeRetryModelMenu();
     closeReasoningMenu();
     closePromptMenu();
@@ -4595,6 +5148,7 @@ export function setupHandlers(
 
   const openReasoningMenu = () => {
     if (!reasoningMenu || !reasoningBtn) return;
+    closeSlashMenu();
     closeRetryModelMenu();
     closeModelMenu();
     closePromptMenu();
@@ -4615,6 +5169,7 @@ export function setupHandlers(
 
   const openRetryModelMenu = (anchor: HTMLButtonElement) => {
     if (!item || !retryModelMenu) return;
+    closeSlashMenu();
     closeResponseMenu();
     closeExportMenu();
     closePromptMenu();
@@ -4654,6 +5209,15 @@ export function setupHandlers(
       e.stopPropagation();
     });
     retryModelMenu.addEventListener("mousedown", (e: Event) => {
+      e.stopPropagation();
+    });
+  }
+
+  if (slashMenu) {
+    slashMenu.addEventListener("pointerdown", (e: Event) => {
+      e.stopPropagation();
+    });
+    slashMenu.addEventListener("mousedown", (e: Event) => {
       e.stopPropagation();
     });
   }
@@ -4824,18 +5388,12 @@ export function setupHandlers(
   ) {
     doc.addEventListener("mousedown", (e: Event) => {
       const me = e as MouseEvent;
-      const modelMenuEl = doc.querySelector(
-        "#llm-model-menu",
-      ) as HTMLDivElement | null;
-      const modelButtonEl = doc.querySelector(
-        "#llm-model-toggle",
-      ) as HTMLButtonElement | null;
-      const reasoningMenuEl = doc.querySelector(
-        "#llm-reasoning-menu",
-      ) as HTMLDivElement | null;
-      const reasoningButtonEl = doc.querySelector(
-        "#llm-reasoning-toggle",
-      ) as HTMLButtonElement | null;
+      const modelMenus = Array.from(
+        doc.querySelectorAll("#llm-model-menu"),
+      ) as HTMLDivElement[];
+      const reasoningMenus = Array.from(
+        doc.querySelectorAll("#llm-reasoning-menu"),
+      ) as HTMLDivElement[];
       const target = e.target as Node | null;
       const retryButtonTarget = isElementNode(target)
         ? (target.closest(".llm-retry-latest") as HTMLButtonElement | null)
@@ -4852,25 +5410,42 @@ export function setupHandlers(
       const exportMenus = Array.from(
         doc.querySelectorAll("#llm-export-menu"),
       ) as HTMLDivElement[];
+      const slashMenus = Array.from(
+        doc.querySelectorAll("#llm-slash-menu"),
+      ) as HTMLDivElement[];
       const historyMenus = Array.from(
         doc.querySelectorAll("#llm-history-menu"),
       ) as HTMLDivElement[];
-      if (
-        modelMenuEl &&
-        isFloatingMenuOpen(modelMenuEl) &&
-        (!target ||
-          (!modelMenuEl.contains(target) && !modelButtonEl?.contains(target)))
-      ) {
-        setFloatingMenuOpen(modelMenuEl, MODEL_MENU_OPEN_CLASS, false);
+      for (const modelMenuEl of modelMenus) {
+        if (!isFloatingMenuOpen(modelMenuEl)) continue;
+        const panelRoot = modelMenuEl.closest("#llm-main");
+        const modelButtonEl = panelRoot?.querySelector(
+          "#llm-model-toggle",
+        ) as HTMLButtonElement | null;
+        if (
+          !target ||
+          (!modelMenuEl.contains(target) && !modelButtonEl?.contains(target))
+        ) {
+          setFloatingMenuOpen(modelMenuEl, MODEL_MENU_OPEN_CLASS, false);
+        }
       }
-      if (
-        reasoningMenuEl &&
-        isFloatingMenuOpen(reasoningMenuEl) &&
-        (!target ||
+      for (const reasoningMenuEl of reasoningMenus) {
+        if (!isFloatingMenuOpen(reasoningMenuEl)) continue;
+        const panelRoot = reasoningMenuEl.closest("#llm-main");
+        const reasoningButtonEl = panelRoot?.querySelector(
+          "#llm-reasoning-toggle",
+        ) as HTMLButtonElement | null;
+        if (
+          !target ||
           (!reasoningMenuEl.contains(target) &&
-            !reasoningButtonEl?.contains(target)))
-      ) {
-        setFloatingMenuOpen(reasoningMenuEl, REASONING_MENU_OPEN_CLASS, false);
+            !reasoningButtonEl?.contains(target))
+        ) {
+          setFloatingMenuOpen(
+            reasoningMenuEl,
+            REASONING_MENU_OPEN_CLASS,
+            false,
+          );
+        }
       }
       for (const retryModelMenuEl of retryModelMenus) {
         if (!isFloatingMenuOpen(retryModelMenuEl)) continue;
@@ -4923,6 +5498,18 @@ export function setupHandlers(
           ) as HTMLButtonElement | null;
           if (target && exportButtonEl?.contains(target)) continue;
           exportMenuEl.style.display = "none";
+        }
+
+        for (const slashMenuEl of slashMenus) {
+          if (slashMenuEl.style.display === "none") continue;
+          if (target && slashMenuEl.contains(target)) continue;
+          const panelRoot = slashMenuEl.closest("#llm-main");
+          const slashButtonEl = panelRoot?.querySelector(
+            "#llm-upload-file",
+          ) as HTMLButtonElement | null;
+          if (target && slashButtonEl?.contains(target)) continue;
+          slashMenuEl.style.display = "none";
+          slashButtonEl?.setAttribute("aria-expanded", "false");
         }
 
         for (const historyMenuEl of historyMenus) {

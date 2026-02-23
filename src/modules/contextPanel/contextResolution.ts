@@ -245,19 +245,19 @@ function getFirstPdfChildAttachment(
 export function resolveContextSourceItem(
   panelItem: Zotero.Item,
 ): ResolvedContextSource {
+  if (isGlobalPortalItem(panelItem)) {
+    return {
+      contextItem: null,
+      statusText: "No active paper context. Type / to add papers.",
+    };
+  }
+
   const activeItem = getActiveContextAttachmentFromTabs();
   if (activeItem) {
     const label = getContextItemLabel(activeItem);
     return {
       contextItem: activeItem,
       statusText: `Using context: ${label} (active tab)`,
-    };
-  }
-
-  if (isGlobalPortalItem(panelItem)) {
-    return {
-      contextItem: null,
-      statusText: "No active paper context. Type / to add papers.",
     };
   }
 

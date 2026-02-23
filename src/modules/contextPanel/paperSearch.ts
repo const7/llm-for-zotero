@@ -1,6 +1,16 @@
 import type { PaperContextRef } from "./types";
 
-export type PaperSearchCandidate = PaperContextRef & {
+export type PaperSearchAttachmentCandidate = {
+  contextItemId: number;
+  title: string;
+  score: number;
+};
+
+export type PaperSearchGroupCandidate = Omit<
+  PaperContextRef,
+  "contextItemId"
+> & {
+  attachments: PaperSearchAttachmentCandidate[];
   score: number;
   modifiedAt: number;
 };
@@ -26,8 +36,9 @@ function toModifiedTimestamp(value: unknown): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function getFirstPdfChildAttachment(item: Zotero.Item): Zotero.Item | null {
-  if (!item?.isRegularItem?.()) return null;
+function getPdfChildAttachments(item: Zotero.Item): Zotero.Item[] {
+  const out: Zotero.Item[] = [];
+  if (!item?.isRegularItem?.()) return out;
   const attachments = item.getAttachments();
   for (const attachmentId of attachments) {
     const attachment = Zotero.Items.get(attachmentId);
@@ -36,15 +47,43 @@ function getFirstPdfChildAttachment(item: Zotero.Item): Zotero.Item | null {
       attachment.isAttachment() &&
       attachment.attachmentContentType === "application/pdf"
     ) {
-      return attachment;
+      out.push(attachment);
     }
   }
-  return null;
+  return out;
 }
 
-function buildCandidate(item: Zotero.Item): PaperSearchCandidate | null {
-  const contextAttachment = getFirstPdfChildAttachment(item);
-  if (!contextAttachment) return null;
+function resolveAttachmentTitle(
+  attachment: Zotero.Item,
+  index: number,
+  total: number,
+): string {
+  const title = normalizeText(attachment.getField("title"));
+  if (title) return title;
+  const filename = normalizeText(
+    (attachment as unknown as { attachmentFilename?: string })
+      .attachmentFilename || "",
+  );
+  if (filename) return filename;
+  if (total > 1) return `PDF ${index + 1}`;
+  return "PDF";
+}
+
+function buildAttachmentCandidates(
+  attachments: Zotero.Item[],
+): PaperSearchAttachmentCandidate[] {
+  return attachments.map((attachment, index) => ({
+    contextItemId: attachment.id,
+    title: resolveAttachmentTitle(attachment, index, attachments.length),
+    score: 0,
+  }));
+}
+
+function buildGroupCandidate(
+  item: Zotero.Item,
+  attachments: Zotero.Item[],
+): PaperSearchGroupCandidate | null {
+  if (!attachments.length) return null;
   const title = normalizeText(item.getField("title")) || `Item ${item.id}`;
   const citationKey = normalizeText(item.getField("citationKey")) || undefined;
   const firstCreator =
@@ -57,18 +96,21 @@ function buildCandidate(item: Zotero.Item): PaperSearchCandidate | null {
     undefined;
   return {
     itemId: item.id,
-    contextItemId: contextAttachment.id,
     citationKey,
     title,
     firstCreator,
     year,
+    attachments: buildAttachmentCandidates(attachments),
     score: 0,
     modifiedAt: toModifiedTimestamp(item.dateModified),
   };
 }
 
-function scoreCandidate(
-  candidate: PaperSearchCandidate,
+function scorePaperMetadata(
+  candidate: Pick<
+    PaperContextRef,
+    "citationKey" | "title" | "firstCreator" | "year"
+  >,
   query: string,
 ): number {
   const normalizedQuery = normalizeSearchToken(query);
@@ -106,12 +148,34 @@ function scoreCandidate(
   return score;
 }
 
+function scoreAttachmentTitle(title: string, query: string): number {
+  const normalizedQuery = normalizeSearchToken(query);
+  if (!normalizedQuery) return 0;
+  const queryTokens = normalizedQuery.split(/\s+/g).filter(Boolean);
+  const normalizedTitle = normalizeSearchToken(title);
+  if (!normalizedTitle) return 0;
+
+  let score = 0;
+  if (normalizedTitle.startsWith(normalizedQuery)) {
+    score += 640;
+  } else if (normalizedTitle.includes(normalizedQuery)) {
+    score += 560;
+  }
+  if (queryTokens.length > 1) {
+    const tokenMatches = queryTokens.reduce((count, token) => {
+      return count + (normalizedTitle.includes(token) ? 1 : 0);
+    }, 0);
+    score += tokenMatches * 60;
+  }
+  return score;
+}
+
 export async function searchPaperCandidates(
   libraryID: number,
   query: string,
-  excludeConversationItemId?: number | null,
+  excludeContextItemId?: number | null,
   limit = 20,
-): Promise<PaperSearchCandidate[]> {
+): Promise<PaperSearchGroupCandidate[]> {
   if (!Number.isFinite(libraryID) || libraryID <= 0) return [];
   const normalizedLimit = Number.isFinite(limit)
     ? Math.max(1, Math.floor(limit))
@@ -124,22 +188,42 @@ export async function searchPaperCandidates(
     return [];
   }
   const excludeId =
-    typeof excludeConversationItemId === "number" &&
-    Number.isFinite(excludeConversationItemId) &&
-    excludeConversationItemId > 0
-      ? Math.floor(excludeConversationItemId)
+    typeof excludeContextItemId === "number" &&
+    Number.isFinite(excludeContextItemId) &&
+    excludeContextItemId > 0
+      ? Math.floor(excludeContextItemId)
       : null;
   const normalizedQuery = normalizeSearchToken(query);
-  const candidates: PaperSearchCandidate[] = [];
+  const candidates: PaperSearchGroupCandidate[] = [];
   for (const item of items) {
     if (!item?.isRegularItem?.()) continue;
-    if (excludeId && item.id === excludeId) continue;
-    const candidate = buildCandidate(item);
+    const contextAttachments = getPdfChildAttachments(item).filter(
+      (attachment) => !excludeId || attachment.id !== excludeId,
+    );
+    if (!contextAttachments.length) continue;
+    const candidate = buildGroupCandidate(item, contextAttachments);
     if (!candidate) continue;
-    candidate.score = normalizedQuery
-      ? scoreCandidate(candidate, normalizedQuery)
+
+    const paperScore = normalizedQuery
+      ? scorePaperMetadata(candidate, normalizedQuery)
       : 0;
+    for (const attachment of candidate.attachments) {
+      attachment.score = normalizedQuery
+        ? scoreAttachmentTitle(attachment.title, normalizedQuery)
+        : 0;
+    }
+    const bestAttachmentScore = candidate.attachments.reduce(
+      (maxScore, attachment) => Math.max(maxScore, attachment.score),
+      0,
+    );
+    candidate.score = Math.max(paperScore, bestAttachmentScore);
     if (normalizedQuery && candidate.score <= 0) continue;
+
+    candidate.attachments.sort((a, b) => {
+      const scoreDelta = b.score - a.score;
+      if (scoreDelta !== 0) return scoreDelta;
+      return a.title.localeCompare(b.title, undefined, { sensitivity: "base" });
+    });
     candidates.push(candidate);
   }
   candidates.sort((a, b) => {

@@ -266,6 +266,33 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
   exportMenu.append(exportMenuCopyBtn, exportMenuNoteBtn);
   container.appendChild(exportMenu);
 
+  const slashMenu = createElement(doc, "div", "llm-response-menu llm-slash-menu", {
+    id: "llm-slash-menu",
+  });
+  slashMenu.style.display = "none";
+  const slashUploadBtn = createElement(
+    doc,
+    "button",
+    "llm-response-menu-item",
+    {
+      id: "llm-slash-upload-option",
+      type: "button",
+      textContent: "Upload files",
+    },
+  );
+  const slashReferenceBtn = createElement(
+    doc,
+    "button",
+    "llm-response-menu-item",
+    {
+      id: "llm-slash-reference-option",
+      type: "button",
+      textContent: "Select references",
+    },
+  );
+  slashMenu.append(slashUploadBtn, slashReferenceBtn);
+  container.appendChild(slashMenu);
+
   // Retry model menu (opened from latest assistant retry action)
   const retryModelMenu = createElement(doc, "div", "llm-model-menu", {
     id: "llm-retry-model-menu",
@@ -434,7 +461,7 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
     placeholder: hasItem
       ? isGlobalMode
         ? "Ask anything... Type / to add papers"
-        : "Ask a question about this paper..."
+        : "Ask about this paper... Type / for adding other papers as context"
       : "Open a PDF first",
     disabled: !hasItem,
   });
@@ -477,14 +504,18 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
   const uploadBtn = createElement(
     doc,
     "button",
-    "llm-shortcut-btn llm-action-btn llm-action-btn-secondary llm-upload-file-btn",
+    "llm-shortcut-btn llm-action-btn llm-action-btn-secondary llm-upload-file-btn llm-slash-menu-btn",
     {
       id: "llm-upload-file",
+      type: "button",
       textContent: UPLOAD_FILE_EXPANDED_LABEL,
-      title: "Upload files",
+      title: "Context actions",
       disabled: !hasItem,
     },
   );
+  uploadBtn.setAttribute("aria-haspopup", "menu");
+  uploadBtn.setAttribute("aria-expanded", "false");
+  uploadBtn.setAttribute("aria-label", "Context actions");
   const uploadInput = createElement(doc, "input", "", {
     id: "llm-upload-input",
     type: "file",

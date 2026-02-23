@@ -185,14 +185,62 @@ export function registerReaderSelectionTracking() {
       popupPrefValue !== false &&
       `${popupPrefValue || ""}`.toLowerCase() !== "false";
 
-    if (selectedText) {
+    const resolveSelectedTextForPopupAction = (): string => {
+      const fromPopupDoc = selectionFrom(event.doc);
+      if (fromPopupDoc) return fromPopupDoc;
+      const fromParams = normalizeSelectedText(
+        (event.params as unknown as { text?: string; selectedText?: string })
+          ?.text ||
+          (event.params as unknown as { text?: string; selectedText?: string })
+            ?.selectedText ||
+          "",
+      );
+      if (fromParams) return fromParams;
+      const fromAnnotation = normalizeSelectedText(
+        event.params?.annotation?.text || "",
+      );
+      if (fromAnnotation) return fromAnnotation;
+      const reader = event.reader as any;
+      const readerDoc =
+        (reader?._iframeWindow?.document as Document | undefined) ||
+        (reader?._iframe?.contentDocument as Document | undefined) ||
+        (reader?._window?.document as Document | undefined);
+      const fromReaderDoc = selectionFrom(readerDoc);
+      if (fromReaderDoc) return fromReaderDoc;
+      const internalReader = reader?._internalReader;
+      const views = [internalReader?._primaryView, internalReader?._secondaryView];
+      for (const view of views) {
+        if (!view) continue;
+        const viewDoc =
+          (view._iframeWindow?.document as Document | undefined) ||
+          (view._iframe?.contentDocument as Document | undefined);
+        const fromView = selectionFrom(viewDoc);
+        if (fromView) return fromView;
+      }
+      for (const key of keys) {
+        const cached = normalizeSelectedText(
+          recentReaderSelectionCache.get(key) || "",
+        );
+        if (cached) return cached;
+      }
+      return "";
+    };
+
+    if (selectedText || showAddTextInPopup) {
       let popupSentinelEl: HTMLElement | null = null;
       const addTextToPanel = () => {
+        const effectiveSelectedText =
+          normalizeSelectedText(selectedText) ||
+          resolveSelectedTextForPopupAction();
+        if (!effectiveSelectedText) {
+          ztoolkit.log("LLM: Add Text popup action skipped (no selection)");
+          return;
+        }
         const appendByKey = new Map<number, boolean>();
         for (const key of keys) {
           appendByKey.set(
             key,
-            appendSelectedTextContextForItem(key, selectedText, "pdf"),
+            appendSelectedTextContextForItem(key, effectiveSelectedText, "pdf"),
           );
         }
         try {
@@ -304,7 +352,7 @@ export function registerReaderSelectionTracking() {
               panelItemId,
               appendSelectedTextContextForItem(
                 panelItemId,
-                selectedText,
+                effectiveSelectedText,
                 "pdf",
               ),
             );
@@ -363,7 +411,6 @@ export function registerReaderSelectionTracking() {
         if (isSeparator(prev)) prev.style.display = "none";
         if (isSeparator(next)) next.style.display = "none";
       };
-
       if (showAddTextInPopup) {
         try {
           const addTextBtn = event.doc.createElementNS(
@@ -423,52 +470,60 @@ export function registerReaderSelectionTracking() {
         }
       }
 
-      for (const key of keys) {
-        recentReaderSelectionCache.set(key, selectedText);
+      if (selectedText) {
+        for (const key of keys) {
+          recentReaderSelectionCache.set(key, selectedText);
+        }
+      } else {
+        for (const key of keys) {
+          recentReaderSelectionCache.delete(key);
+        }
       }
 
-      try {
-        let sentinel = popupSentinelEl;
-        if (!sentinel) {
-          const fallback = event.doc.createElementNS(
-            "http://www.w3.org/1999/xhtml",
-            "span",
-          ) as HTMLSpanElement;
-          fallback.style.display = "none";
-          event.append(fallback);
-          stripPopupRowChrome(
-            fallback.parentElement as HTMLElement | null,
-            true,
-          );
-          sentinel = fallback;
-        }
-
-        let wasConnected = false;
-        let checks = 0;
-        const maxChecks = 600;
-
-        const watchSentinel = () => {
-          if (++checks > maxChecks) return;
-          if (sentinel.isConnected) {
-            wasConnected = true;
-            setTimeout(watchSentinel, 500);
-            return;
+      if (selectedText) {
+        try {
+          let sentinel = popupSentinelEl;
+          if (!sentinel) {
+            const fallback = event.doc.createElementNS(
+              "http://www.w3.org/1999/xhtml",
+              "span",
+            ) as HTMLSpanElement;
+            fallback.style.display = "none";
+            event.append(fallback);
+            stripPopupRowChrome(
+              fallback.parentElement as HTMLElement | null,
+              true,
+            );
+            sentinel = fallback;
           }
-          if (!wasConnected && checks <= 6) {
-            setTimeout(watchSentinel, 200);
-            return;
-          }
-          if (wasConnected) {
-            for (const key of keys) {
-              if (recentReaderSelectionCache.get(key) === selectedText) {
-                recentReaderSelectionCache.delete(key);
+
+          let wasConnected = false;
+          let checks = 0;
+          const maxChecks = 600;
+
+          const watchSentinel = () => {
+            if (++checks > maxChecks) return;
+            if (sentinel.isConnected) {
+              wasConnected = true;
+              setTimeout(watchSentinel, 500);
+              return;
+            }
+            if (!wasConnected && checks <= 6) {
+              setTimeout(watchSentinel, 200);
+              return;
+            }
+            if (wasConnected) {
+              for (const key of keys) {
+                if (recentReaderSelectionCache.get(key) === selectedText) {
+                  recentReaderSelectionCache.delete(key);
+                }
               }
             }
-          }
-        };
-        setTimeout(watchSentinel, 100);
-      } catch (_err) {
-        ztoolkit.log("LLM: selection popup sentinel failed", _err);
+          };
+          setTimeout(watchSentinel, 100);
+        } catch (_err) {
+          ztoolkit.log("LLM: selection popup sentinel failed", _err);
+        }
       }
     } else {
       for (const key of keys) {

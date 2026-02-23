@@ -213,7 +213,10 @@ export function formatTime(timestamp: number) {
   if (Number.isNaN(date.getTime())) return "";
   const hour = `${date.getHours()}`.padStart(2, "0");
   const minute = `${date.getMinutes()}`.padStart(2, "0");
-  return `${hour}:${minute}`;
+  const month = `${date.getMonth() + 1}`.padStart(2, "0");
+  const day = `${date.getDate()}`.padStart(2, "0");
+  const year = `${date.getFullYear() % 100}`.padStart(2, "0");
+  return `${hour}:${minute} ${month}/${day}/${year}`;
 }
 
 export function getAttachmentTypeLabel(entry: {
