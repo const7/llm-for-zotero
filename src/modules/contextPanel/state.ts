@@ -17,6 +17,7 @@ export const chatHistory = new Map<number, Message[]>();
 export const loadedConversationKeys = new Set<number>();
 export const loadingConversationTasks = new Map<number, Promise<void>>();
 export const selectedModelCache = new Map<number, ModelProfileKey>();
+export const selectedAgentCache = new Map<number, boolean>();
 export const selectedReasoningCache = new Map<
   number,
   ReasoningLevelSelection

@@ -718,6 +718,29 @@ export async function browsePaperCollectionCandidates(
   return topLevelCollections;
 }
 
+export async function listLibraryPaperCandidates(
+  libraryID: number,
+  excludeContextItemId?: number | null,
+  limit?: number,
+): Promise<PaperSearchGroupCandidate[]> {
+  if (!Number.isFinite(libraryID) || libraryID <= 0) return [];
+  const libraryIndex = await getPaperSearchLibraryIndex(Math.floor(libraryID));
+  const visibleCandidates = libraryIndex.candidates
+    .map((candidate) => buildVisibleCandidate(candidate, excludeContextItemId))
+    .filter(
+      (candidate): candidate is PaperSearchGroupCandidate => Boolean(candidate),
+    )
+    .sort((a, b) => {
+      const modifiedDelta = b.modifiedAt - a.modifiedAt;
+      if (modifiedDelta !== 0) return modifiedDelta;
+      return a.title.localeCompare(b.title, undefined, { sensitivity: "base" });
+    });
+  if (Number.isFinite(limit) && typeof limit === "number" && limit > 0) {
+    return visibleCandidates.slice(0, Math.floor(limit));
+  }
+  return visibleCandidates;
+}
+
 export async function searchPaperCandidates(
   libraryID: number,
   query: string,

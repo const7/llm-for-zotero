@@ -77,6 +77,7 @@ import {
   setLastReasoningExpanded,
 } from "./prefHelpers";
 import { resolveMultiContextPlan } from "./multiContextPlanner";
+import { resolveAgentContext } from "./agentContext";
 import { formatPaperCitationLabel } from "./paperAttribution";
 import {
   getActiveContextAttachmentFromTabs,
@@ -929,6 +930,7 @@ async function buildContextPlanForRequest(params: {
   recentPaperContexts: PaperContextRef[];
   history: ChatMessage[];
   effectiveRequestConfig: EffectiveRequestConfig;
+  agentEnabled?: boolean;
   setStatusSafely: (
     text: string,
     kind: Parameters<typeof setStatus>[2],
@@ -936,13 +938,40 @@ async function buildContextPlanForRequest(params: {
 }): Promise<string> {
   const contextSource = resolveContextSourceItem(params.item);
   params.setStatusSafely(contextSource.statusText, "sending");
+  let activeContextItem = contextSource.contextItem;
+  let conversationMode: "open" | "paper" = isGlobalPortalItem(params.item)
+    ? "open"
+    : "paper";
+  let paperContexts = params.paperContexts;
+  let pinnedPaperContexts = params.pinnedPaperContexts;
+  const contextBlocks: string[] = [];
+
+  if (params.agentEnabled) {
+    const agentContext = await resolveAgentContext({
+      question: params.question,
+      libraryID: Number(params.item.libraryID),
+      conversationMode,
+    });
+    if (agentContext) {
+      conversationMode = "open";
+      activeContextItem = null;
+      paperContexts = agentContext.paperContexts;
+      pinnedPaperContexts = agentContext.pinnedPaperContexts;
+      const prefix = sanitizeText(agentContext.contextPrefix || "").trim();
+      if (prefix) {
+        contextBlocks.push(prefix);
+      }
+      params.setStatusSafely(agentContext.statusText, "sending");
+    }
+  }
+
   const systemPrompt = getStringPref("systemPrompt") || undefined;
   const plan = await resolveMultiContextPlan({
-    activeContextItem: contextSource.contextItem,
-    conversationMode: isGlobalPortalItem(params.item) ? "open" : "paper",
+    activeContextItem,
+    conversationMode,
     question: params.question,
-    paperContexts: params.paperContexts,
-    pinnedPaperContexts: params.pinnedPaperContexts,
+    paperContexts,
+    pinnedPaperContexts,
     historyPaperContexts: params.recentPaperContexts,
     history: params.history,
     images: params.images,
@@ -968,7 +997,11 @@ async function buildContextPlanForRequest(params: {
     contextBudgetTokens: plan.contextBudget.contextBudgetTokens,
     usedContextTokens: plan.usedContextTokens,
   });
-  return sanitizeText(plan.contextText || "").trim();
+  const planContext = sanitizeText(plan.contextText || "").trim();
+  if (planContext) {
+    contextBlocks.push(planContext);
+  }
+  return contextBlocks.join("\n\n---\n\n");
 }
 
 function createQueuedRefresh(refresh: () => void): () => void {
@@ -1259,6 +1292,7 @@ export async function editLatestUserMessageAndRetry(
   apiKey?: string,
   reasoning?: LLMReasoningConfig,
   advanced?: AdvancedModelParams,
+  agentEnabled?: boolean,
 ): Promise<EditLatestTurnResult> {
   await ensureConversationLoaded(item);
   const conversationKey = getConversationKey(item);
@@ -1374,6 +1408,7 @@ export async function editLatestUserMessageAndRetry(
     apiKey,
     reasoning,
     advanced,
+    agentEnabled,
   );
   return "ok";
 }
@@ -1386,6 +1421,7 @@ export async function retryLatestAssistantResponse(
   apiKey?: string,
   reasoning?: LLMReasoningConfig,
   advanced?: AdvancedModelParams,
+  agentEnabled?: boolean,
 ) {
   const ui = getPanelRequestUI(body);
 
@@ -1462,6 +1498,7 @@ export async function retryLatestAssistantResponse(
       recentPaperContexts,
       history: llmHistory,
       effectiveRequestConfig,
+      agentEnabled,
       setStatusSafely,
     });
     if (cancelledRequestId >= thisRequestId) {
@@ -1597,6 +1634,7 @@ export async function sendQuestion(
   paperContexts?: PaperContextRef[],
   pinnedPaperContexts?: PaperContextRef[],
   attachments?: ChatAttachment[],
+  agentEnabled?: boolean,
 ) {
   const ui = getPanelRequestUI(body);
 
@@ -1751,6 +1789,7 @@ export async function sendQuestion(
       recentPaperContexts,
       history: llmHistory,
       effectiveRequestConfig,
+      agentEnabled,
       setStatusSafely,
     });
 

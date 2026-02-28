@@ -27,6 +27,7 @@ import {
 } from "./constants";
 import {
   selectedModelCache,
+  selectedAgentCache,
   selectedReasoningCache,
   selectedImageCache,
   selectedFileAttachmentCache,
@@ -82,7 +83,9 @@ import {
   applyPanelFontScale,
   getAdvancedModelParamsForProfile,
   getLastUsedModelProfileKey,
+  getLastUsedAgentEnabled,
   setLastUsedModelProfileKey,
+  setLastUsedAgentEnabled,
   getLastUsedReasoningLevel,
   setLastUsedReasoningLevel,
   getLastUsedPaperConversationKey,
@@ -3417,6 +3420,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     chatHistory.delete(conversationKey);
     loadedConversationKeys.delete(conversationKey);
     selectedModelCache.delete(conversationKey);
+    selectedAgentCache.delete(conversationKey);
     selectedReasoningCache.delete(conversationKey);
     clearTransientComposeStateForItem(conversationKey);
   };
@@ -4469,6 +4473,16 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     };
   };
 
+  const getSelectedAgentEnabled = () => {
+    if (!item) return false;
+    const cached = selectedAgentCache.get(item.id);
+    if (typeof cached === "boolean") return cached;
+    const persisted = getLastUsedAgentEnabled();
+    const enabled = persisted === true;
+    selectedAgentCache.set(item.id, enabled);
+    return enabled;
+  };
+
   type ActionLabelMode = "icon" | "full";
   type ModelLabelMode = "icon" | "full-single" | "full-wrap2";
   type ActionLayoutMode = "icon" | "half" | "full";
@@ -5002,7 +5016,12 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     const { choices, selected } = getSelectedModelInfo();
 
     modelMenu.innerHTML = "";
-    appendDropdownInstruction(modelMenu, "Select model", "llm-model-menu-hint");
+    appendDropdownInstruction(
+      modelMenu,
+      "Select model",
+      "llm-model-menu-hint",
+    );
+
     for (const entry of choices) {
       const isSelected = entry.key === selected;
       const option = createElement(
@@ -5074,6 +5093,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
           profile.apiKey,
           retryReasoning,
           retryAdvanced,
+          getSelectedAgentEnabled(),
         );
       };
       option.addEventListener("click", (e: Event) => {
@@ -5127,6 +5147,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     withScrollGuard(chatBox, conversationKey, () => {
       const { provider, currentModel, options, enabledLevels, selectedLevel } =
         getReasoningState();
+      const agentEnabled = getSelectedAgentEnabled();
       const available = enabledLevels.length > 0;
       const active = available && selectedLevel !== "none";
       const reasoningLabel = active
@@ -5137,18 +5158,26 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
             options,
           )
         : "Reasoning";
-      reasoningBtn.disabled = !item || !available;
+      reasoningBtn.disabled = !item;
       reasoningBtn.classList.toggle(
         "llm-reasoning-btn-unavailable",
         !available,
       );
       reasoningBtn.classList.toggle("llm-reasoning-btn-active", active);
+      reasoningBtn.classList.toggle(
+        "llm-reasoning-btn-agent-enabled",
+        agentEnabled,
+      );
       reasoningBtn.style.background = "";
       reasoningBtn.style.borderColor = "";
       reasoningBtn.style.color = "";
       const reasoningHint = available
-        ? "Click to choose reasoning level"
-        : "Reasoning unavailable for current model";
+        ? agentEnabled
+          ? "Agent mode on. Click to adjust agent mode and reasoning level"
+          : "Click to adjust agent mode and reasoning level"
+        : agentEnabled
+          ? "Agent mode on. Reasoning is unavailable for the current model"
+          : "Click to toggle agent mode. Reasoning is unavailable for the current model";
       reasoningBtn.dataset.reasoningLabel = reasoningLabel;
       reasoningBtn.dataset.reasoningHint = reasoningHint;
       applyResponsiveActionButtonsLayout();
@@ -5157,14 +5186,85 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
 
   const rebuildReasoningMenu = () => {
     if (!item || !reasoningMenu) return;
-    const { provider, currentModel, options, selectedLevel } =
+    const { provider, currentModel, options, selectedLevel, enabledLevels } =
       getReasoningState();
+    const agentEnabled = getSelectedAgentEnabled();
     reasoningMenu.innerHTML = "";
     appendDropdownInstruction(
       reasoningMenu,
-      "Reasoning level",
-      "llm-reasoning-menu-hint",
+      "Agent mode",
+      "llm-reasoning-menu-section",
     );
+    const agentOption = createElement(
+      body.ownerDocument as Document,
+      "button",
+      "llm-response-menu-item llm-reasoning-option llm-agent-toggle-option",
+      {
+        type: "button",
+      },
+    );
+    agentOption.setAttribute("role", "menuitemcheckbox");
+    agentOption.setAttribute("aria-checked", agentEnabled ? "true" : "false");
+    agentOption.classList.toggle("llm-agent-toggle-option-active", agentEnabled);
+
+    const agentIndicator = createElement(
+      body.ownerDocument as Document,
+      "span",
+      "llm-agent-toggle-indicator",
+    );
+    agentIndicator.setAttribute("aria-hidden", "true");
+    const agentLabel = createElement(
+      body.ownerDocument as Document,
+      "span",
+      "llm-agent-toggle-label",
+      {
+        textContent: "Agent",
+      },
+    );
+    agentOption.append(agentIndicator, agentLabel);
+
+    const toggleAgentSelection = (e: Event) => {
+      if (!isPrimaryPointerEvent(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (!item) return;
+      const nextEnabled = !getSelectedAgentEnabled();
+      selectedAgentCache.set(item.id, nextEnabled);
+      setLastUsedAgentEnabled(nextEnabled);
+      updateReasoningButton();
+      rebuildReasoningMenu();
+      if (reasoningBtn) {
+        positionFloatingMenu(body, reasoningMenu, reasoningBtn);
+      }
+    };
+    agentOption.addEventListener("pointerdown", toggleAgentSelection);
+    agentOption.addEventListener("click", toggleAgentSelection);
+    reasoningMenu.appendChild(agentOption);
+    reasoningMenu.appendChild(
+      createElement(
+        body.ownerDocument as Document,
+        "div",
+        "llm-model-menu-divider",
+      ),
+    );
+    appendDropdownInstruction(
+      reasoningMenu,
+      "Reasoning level",
+      "llm-reasoning-menu-section",
+    );
+    if (!enabledLevels.length) {
+      reasoningMenu.appendChild(
+        createElement(
+          body.ownerDocument as Document,
+          "div",
+          "llm-reasoning-menu-empty",
+          {
+            textContent: "Reasoning unavailable for the current model",
+          },
+        ),
+      );
+      return;
+    }
     for (const optionState of options) {
       const level = optionState.level;
       const option = createElement(
@@ -6247,6 +6347,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     getSelectedProfile,
     getCurrentModelName: () => getSelectedModelInfo().currentModel,
     isScreenshotUnsupportedModel,
+    getAgentEnabled: getSelectedAgentEnabled,
     getSelectedReasoning,
     getAdvancedModelParams,
     getActiveEditSession: () => activeEditSession,
