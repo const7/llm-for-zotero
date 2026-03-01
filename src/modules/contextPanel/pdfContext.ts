@@ -1,15 +1,19 @@
 import { callEmbeddings } from "../../utils/llmClient";
 import { estimateTextTokens } from "../../utils/modelInputCap";
 import {
-  CHUNK_TARGET_LENGTH,
   CHUNK_OVERLAP,
   EMBEDDING_BATCH_SIZE,
+  CHUNK_TARGET_LENGTH,
   HYBRID_WEIGHT_BM25,
   HYBRID_WEIGHT_EMBEDDING,
   RETRIEVAL_TOP_K_PER_PAPER,
   STOPWORDS,
 } from "./constants";
-import { formatPaperCitationLabel } from "./paperAttribution";
+import {
+  buildPaperQuoteCitationGuidance,
+  formatPaperCitationLabel,
+  formatPaperSourceLabel,
+} from "./paperAttribution";
 import { pdfTextCache, pdfTextLoadingTasks } from "./state";
 import type {
   PdfContext,
@@ -321,6 +325,10 @@ function cleanLeadingEvidenceNoise(text: string, chunkKind: PdfChunkKind): {
   }
   cleaned = cleaned.replace(/^[-–—:;,.()\[\]]+\s*/, "").trim();
   cleaned = cleaned.replace(/^(?:\d{1,3}\s+){1,3}(?=[A-Za-z])/u, "").trim();
+  cleaned = cleaned.replace(
+    /^(?:[a-z][a-z-]{1,24}\.)\s+(?=[A-Z])/u,
+    "",
+  );
   cleaned = cleaned.replace(
     /^(?:page|p)\s*\d{1,4}(?:\s+of\s+\d{1,4})?\s*/i,
     "",
@@ -634,7 +642,16 @@ function formatPaperMetadataLines(ref: PaperContextRef): string[] {
   if (ref.citationKey) lines.push(`Citation key: ${ref.citationKey}`);
   if (ref.firstCreator) lines.push(`Author: ${ref.firstCreator}`);
   if (ref.year) lines.push(`Year: ${ref.year}`);
+  lines.push(`Source label: ${formatPaperSourceLabel(ref)}`);
   return lines;
+}
+
+function formatPerPaperQuoteGuidanceLines(ref: PaperContextRef): string[] {
+  return [
+    "Answer format when quoting this paper:",
+    "> quoted text from the paper",
+    formatPaperSourceLabel(ref),
+  ];
 }
 
 export function buildFullPaperContext(
@@ -646,12 +663,19 @@ export function buildFullPaperContext(
     return [
       ...metadata,
       "",
+      ...formatPerPaperQuoteGuidanceLines(paperContext),
+      "",
       "[No extractable PDF text available. Using metadata only.]",
     ].join("\n");
   }
-  return [...metadata, "", "Paper Text:", pdfContext.chunks.join("\n\n")].join(
-    "\n",
-  );
+  return [
+    ...metadata,
+    "",
+    ...formatPerPaperQuoteGuidanceLines(paperContext),
+    "",
+    "Paper Text:",
+    pdfContext.chunks.join("\n\n"),
+  ].join("\n");
 }
 
 export function buildTruncatedFullPaperContext(
@@ -669,6 +693,8 @@ export function buildTruncatedFullPaperContext(
     const text = [
       ...metadata,
       "",
+      ...formatPerPaperQuoteGuidanceLines(paperContext),
+      "",
       "[No extractable PDF text available. Using metadata only.]",
     ].join("\n");
     return {
@@ -680,7 +706,13 @@ export function buildTruncatedFullPaperContext(
   }
 
   const maxTokens = Math.max(1, Math.floor(options.maxTokens));
-  const parts = [...metadata, "", "Paper Text:"];
+  const parts = [
+    ...metadata,
+    "",
+    ...formatPerPaperQuoteGuidanceLines(paperContext),
+    "",
+    "Paper Text:",
+  ];
   let text = parts.join("\n");
   let estimatedTokens = estimateTextTokens(text);
   let includedChunks = 0;
@@ -700,6 +732,8 @@ export function buildTruncatedFullPaperContext(
   if (!includedChunks) {
     text = [
       ...metadata,
+      "",
+      ...formatPerPaperQuoteGuidanceLines(paperContext),
       "",
       "[Full paper text was available but exceeded the current tool budget before any chunk could be included.]",
     ].join("\n");
@@ -894,6 +928,31 @@ export async function buildPaperRetrievalCandidates(
   return scored.slice(0, topK).map((entry) => entry.candidate);
 }
 
+function buildEvidenceQuoteText(
+  candidate: Pick<
+    PaperContextCandidate,
+    "chunkText" | "sectionLabel" | "chunkKind"
+  >,
+): string {
+  const baseText = sanitizePdfText(candidate.chunkText);
+  if (!baseText) return "";
+  const sectionLabel =
+    candidate.sectionLabel || matchSectionHeading(candidate.chunkText)?.label;
+  return cleanLeadingEvidenceNoise(
+    trimLeadingSectionHeading(baseText, sectionLabel),
+    candidate.chunkKind || "body",
+  ).text;
+}
+
+function formatMarkdownBlockquote(text: string): string {
+  const normalized = sanitizePdfText(text);
+  if (!normalized) return "> [No quoted text available]";
+  return normalized
+    .split(/\n+/)
+    .map((line) => `> ${line.trim()}`)
+    .join("\n");
+}
+
 export function renderEvidencePack(params: {
   papers: PaperContextRef[];
   candidates: PaperContextCandidate[];
@@ -920,10 +979,8 @@ export function renderEvidencePack(params: {
     [
       "Retrieved Evidence:",
       "",
-      'Use the suggested citations below when attributing evidence in the answer.',
-      'Prefer citations like (Zheng 2026, Abstract, "Despite global representational drift...").',
+      ...buildPaperQuoteCitationGuidance(),
       "Use only these snippets as evidence.",
-      "Do not cite raw chunk ids.",
       "Do not use snippets from references as empirical evidence.",
       "If support is weak or indirect, say so instead of overstating the claim.",
     ].join("\n"),
@@ -936,14 +993,12 @@ export function renderEvidencePack(params: {
     const lines: string[] = [`Paper ${paperIndex + 1}`];
     lines.push(...formatPaperMetadataLines(paper));
     lines.push("", "Evidence:");
-    for (const candidate of paperCandidates) {
-      lines.push(
-        `Suggested citation: ${formatSuggestedEvidenceCitation(
-          paper,
-          candidate,
-        )}`,
-      );
-      lines.push(candidate.chunkText);
+    for (const [candidateIndex, candidate] of paperCandidates.entries()) {
+      lines.push(`Evidence snippet ${candidateIndex + 1}`);
+      lines.push(`Section: ${candidate.sectionLabel || "Unlabeled body text"}`);
+      lines.push(`Source label: ${formatPaperSourceLabel(paper)}`);
+      lines.push("Quoted evidence:");
+      lines.push(formatMarkdownBlockquote(buildEvidenceQuoteText(candidate)));
       lines.push("");
     }
     blocks.push(lines.join("\n").trimEnd());
@@ -951,21 +1006,6 @@ export function renderEvidencePack(params: {
 
   if (blocks.length <= 1) return "";
   return blocks.join("\n\n---\n\n");
-}
-
-function buildClaimEvidenceExcerpt(candidate: PaperContextCandidate): string {
-  const baseText = normalizeEvidenceText(candidate.chunkText);
-  if (!baseText) return "";
-  const cleaned = cleanLeadingEvidenceNoise(
-    trimLeadingSectionHeading(baseText, candidate.sectionLabel),
-    candidate.chunkKind || "body",
-  ).text;
-  const maxChars = 280;
-  if (cleaned.length <= maxChars) return cleaned;
-  const boundary = cleaned.lastIndexOf(" ", maxChars);
-  const truncated =
-    boundary >= 120 ? cleaned.slice(0, boundary).trim() : cleaned.slice(0, maxChars).trim();
-  return `${truncated}...`;
 }
 
 export function renderClaimEvidencePack(params: {
@@ -977,6 +1017,7 @@ export function renderClaimEvidencePack(params: {
   const lines = [
     "Claim Evidence:",
     "",
+    ...buildPaperQuoteCitationGuidance(),
     "Use only the evidence snippets below when assessing the claim.",
     "Do not treat references or background citations as direct empirical evidence.",
     "If the evidence is indirect or mixed, say so explicitly.",
@@ -988,10 +1029,9 @@ export function renderClaimEvidencePack(params: {
       `Support level: ${getSupportLevelLabel(candidate.chunkKind).toLowerCase()}`,
     );
     lines.push(`Section: ${candidate.sectionLabel || "Unlabeled body text"}`);
-    lines.push(
-      `Suggested citation: ${formatSuggestedEvidenceCitation(paper, candidate)}`,
-    );
-    lines.push(`Excerpt: ${buildClaimEvidenceExcerpt(candidate)}`);
+    lines.push(`Source label: ${formatPaperSourceLabel(paper)}`);
+    lines.push("Quoted evidence:");
+    lines.push(formatMarkdownBlockquote(buildEvidenceQuoteText(candidate)));
     lines.push("");
   });
   return lines.join("\n").trimEnd();

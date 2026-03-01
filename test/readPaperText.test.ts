@@ -65,6 +65,8 @@ describe("readPaperText", function () {
     );
 
     assert.isTrue(result.ok);
+    assert.include(result.groundingText, "Source label: (Kim et al., 2025)");
+    assert.include(result.groundingText, "Answer format when quoting this paper:");
     assert.include(result.groundingText, "Paper Text:");
     assert.include(result.groundingText, "First section.");
     assert.include(result.groundingText, "Second section.");
@@ -136,6 +138,7 @@ describe("readPaperText", function () {
 
     assert.isTrue(result.ok);
     assert.include(result.groundingText, "Extractable full text available: no");
+    assert.include(result.groundingText, "Source label: (Kim et al., 2025)");
     assert.include(result.groundingText, "[No extractable PDF text available.");
   });
 });
