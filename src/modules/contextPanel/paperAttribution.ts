@@ -112,6 +112,27 @@ export function formatPaperCitationLabel(
   return fallbackId > 0 ? `Paper ${fallbackId}` : "Paper";
 }
 
+export function formatPaperSourceLabel(
+  paperContext: PaperContextRef | null | undefined,
+): string {
+  return `(${formatPaperCitationLabel(paperContext)})`;
+}
+
+export function buildPaperQuoteCitationGuidance(
+  paperContext?: PaperContextRef | null,
+): string[] {
+  return [
+    "Paper-grounded citation format for the final answer:",
+    "> quoted text from the paper",
+    paperContext
+      ? formatPaperSourceLabel(paperContext)
+      : "(Author et al., Year)",
+    "- Put the source label on the line immediately after the quote.",
+    "- Use the matching paper metadata for the source label.",
+    "- Do not cite raw chunk ids, citation keys, or invented page numbers unless they are explicitly provided.",
+  ];
+}
+
 export function formatPaperContextReferenceLabel(
   paperContext: PaperContextRef | null | undefined,
 ): string {

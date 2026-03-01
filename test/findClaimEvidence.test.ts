@@ -178,7 +178,8 @@ describe("findClaimEvidence", function () {
     assert.include(result.groundingText, "- Tool: find_claim_evidence");
     assert.include(result.groundingText, "Claim Evidence:");
     assert.include(result.groundingText, "Evidence snippet 1");
-    assert.include(result.groundingText, "Suggested citation:");
+    assert.include(result.groundingText, "Source label: (Kim et al., 2025)");
+    assert.include(result.groundingText, "Quoted evidence:");
     assert.include(result.groundingText, "diffusion policy improves");
     assert.include(result.groundingText, "baseline imitation learning");
     assert.notInclude(result.groundingText, "appendix lists extra implementation details");
@@ -265,7 +266,7 @@ describe("findClaimEvidence", function () {
     assert.isTrue(result.ok);
     assert.include(
       result.groundingText,
-      "Excerpt: Representational drift across days in principal component space.",
+      "> Representational drift across days in principal component space.",
     );
   });
 

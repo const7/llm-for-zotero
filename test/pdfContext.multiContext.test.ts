@@ -93,10 +93,12 @@ describe("pdfContext multi-context helpers", function () {
     const text = buildFullPaperContext(paper, context);
     assert.include(text, "Title: Paper B");
     assert.include(text, "Citation key: Smith2023");
+    assert.include(text, "Source label: (Smith et al., 2023)");
+    assert.include(text, "Answer format when quoting this paper:");
     assert.include(text, "Paper Text:");
   });
 
-  it("renders evidence pack with suggested human-readable citations", function () {
+  it("renders evidence pack with quote-plus-source formatting", function () {
     const paperA: PaperContextRef = {
       itemId: 1,
       contextItemId: 11,
@@ -145,9 +147,15 @@ describe("pdfContext multi-context helpers", function () {
     });
     assert.include(
       rendered,
-      'Suggested citation: (Zheng 2026, Abstract, "Despite global representational drift, the relative geometry remained stable across conditions.")',
+      "Paper-grounded citation format for the final answer:",
     );
-    assert.include(rendered, 'Suggested citation: (Smith2023, "Shared claim B")');
+    assert.include(rendered, "Source label: (Zheng et al., 2026)");
+    assert.include(
+      rendered,
+      "> Despite global representational drift, the relative geometry remained stable across conditions.",
+    );
+    assert.include(rendered, "Source label: (Paper 2)");
+    assert.include(rendered, "> Shared claim B");
     assert.notInclude(rendered, "[P1-C4]");
   });
 

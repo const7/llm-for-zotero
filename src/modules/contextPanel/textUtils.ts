@@ -4,7 +4,11 @@ import {
   normalizeSelectedTextSource,
 } from "./normalizers";
 import type { PaperContextRef, SelectedTextSource } from "./types";
-import { formatPaperCitationLabel } from "./paperAttribution";
+import {
+  buildPaperQuoteCitationGuidance,
+  formatPaperCitationLabel,
+  formatPaperSourceLabel,
+} from "./paperAttribution";
 export { normalizeSelectedTextSource } from "./normalizers";
 
 export const DEFAULT_SELECTED_TEXT_PROMPT =
@@ -168,10 +172,21 @@ export function buildQuestionWithSelectedTextContexts(
       includePaperAttribution && source === "pdf"
         ? formatPaperCitationLabel(selectedTextPaperContexts[index])
         : "";
+    const sourceCitationLabel =
+      includePaperAttribution && source === "pdf"
+        ? formatPaperSourceLabel(selectedTextPaperContexts[index])
+        : "";
     const paperPart = paperLabel ? ` [paper=${paperLabel}]` : "";
-    return `Text Context ${index + 1} [source=${sourceLabel}]${paperPart}:\n"""\n${text}\n"""`;
+    const citationPart = sourceCitationLabel
+      ? ` [source_label=${sourceCitationLabel}]`
+      : "";
+    return `Text Context ${index + 1} [source=${sourceLabel}]${paperPart}${citationPart}:\n"""\n${text}\n"""`;
   });
-  return `Selected text contexts with explicit sources:\n${contextBlocks.join(
+  const guidance =
+    includePaperAttribution && selectedTextPaperContexts.some((entry) => !!entry)
+      ? `${buildPaperQuoteCitationGuidance().join("\n")}\n\n`
+      : "";
+  return `Selected text contexts with explicit sources:\n${guidance}${contextBlocks.join(
     "\n\n",
   )}\n\nUser question:\n${normalizedPrompt}`;
 }

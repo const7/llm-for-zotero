@@ -117,7 +117,8 @@ describe("multiContextPlanner", function () {
     assert.include(result.contextText, "Retrieved Evidence:");
     assert.include(result.contextText, "Paper 1");
     assert.include(result.contextText, "Paper 2");
-    assert.include(result.contextText, "Suggested citation:");
+    assert.include(result.contextText, "Source label:");
+    assert.include(result.contextText, "Quoted evidence:");
     assert.notInclude(result.contextText, "[P1-");
   });
 
@@ -138,6 +139,7 @@ describe("multiContextPlanner", function () {
     });
     assert.include(full.contextText, "Full Paper Contexts:");
     assert.include(full.contextText, "Paper 1");
+    assert.include(full.contextText, "Answer format when quoting this paper:");
     assert.isAbove(full.estimatedTokens, 0);
   });
 
