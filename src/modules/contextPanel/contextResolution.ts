@@ -34,7 +34,7 @@ import {
   prunePinnedSelectedTextKeys,
 } from "./setupHandlers/controllers/pinnedContextController";
 
-function getActiveReaderForSelectedTab(): any | null {
+export function getActiveReaderForSelectedTab(): any | null {
   const tabs = getZoteroTabsState();
   const selectedTabId = tabs?.selectedID;
   if (selectedTabId === undefined || selectedTabId === null) return null;

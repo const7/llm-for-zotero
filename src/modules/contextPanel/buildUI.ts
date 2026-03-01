@@ -410,7 +410,18 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
       textContent: "Select references",
     },
   );
-  slashMenu.append(slashUploadBtn, slashReferenceBtn);
+  const slashLocateSelectionBtn = createElement(
+    doc,
+    "button",
+    "llm-response-menu-item",
+    {
+      id: "llm-slash-locate-selection-option",
+      type: "button",
+      textContent: "Locate selection demo",
+      title: "Resolve the current PDF selection against the live reader text",
+    },
+  );
+  slashMenu.append(slashUploadBtn, slashReferenceBtn, slashLocateSelectionBtn);
   container.appendChild(slashMenu);
 
   // Retry model menu (opened from latest assistant retry action)
@@ -739,6 +750,10 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
         : "Ready"
       : "Select an item or open a PDF",
   });
+  const liveLocateDemo = createElement(doc, "div", "llm-live-locate-demo", {
+    id: "llm-live-locate-demo",
+  });
+  liveLocateDemo.style.display = "none";
 
   actionsLeft.append(
     uploadSlot,
@@ -752,6 +767,7 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
   composeArea.appendChild(actionsRow);
   container.appendChild(inputSection);
   container.appendChild(statusLine);
+  container.appendChild(liveLocateDemo);
   body.appendChild(container);
 }
 

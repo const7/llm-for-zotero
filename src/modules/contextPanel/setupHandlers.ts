@@ -114,6 +114,7 @@ import {
   type EditLatestTurnMarker,
 } from "./chat";
 import {
+  getActiveReaderForSelectedTab,
   getActiveReaderSelectionText,
   getActiveContextAttachmentFromTabs,
   addSelectedTextContext,
@@ -127,6 +128,10 @@ import {
   setSelectedTextContexts,
   setSelectedTextExpandedIndex,
 } from "./contextResolution";
+import {
+  locateCurrentSelectionInLivePdfReader,
+  type LivePdfSelectionLocateResult,
+} from "./livePdfSelectionLocator";
 import { resolvePaperContextRefFromAttachment } from "./paperAttribution";
 import { captureScreenshotSelection, optimizeImageDataUrl } from "./screenshot";
 import {
@@ -307,6 +312,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     slashMenu,
     slashUploadOption,
     slashReferenceOption,
+    slashLocateSelectionOption,
     contextAgentToggleBtn,
     imagePreview,
     selectedContextList,
@@ -337,6 +343,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     exportMenuNoteBtn,
     retryModelMenu,
     status,
+    liveLocateDemo,
     chatBox,
     panelRoot,
   } = getPanelDomRefs(body);
@@ -6879,6 +6886,139 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     }
   };
 
+  const hideLiveLocateDemo = () => {
+    if (!liveLocateDemo) return;
+    liveLocateDemo.style.display = "none";
+    liveLocateDemo.textContent = "";
+    delete liveLocateDemo.dataset.demoState;
+  };
+
+  const renderLiveLocateDemo = (result: LivePdfSelectionLocateResult) => {
+    if (!liveLocateDemo) return;
+    const expectedPage =
+      result.expectedPageIndex !== null ? `${result.expectedPageIndex + 1}` : "n/a";
+    const computedPage =
+      result.computedPageIndex !== null ? `${result.computedPageIndex + 1}` : "n/a";
+    const matchedPages = result.matchedPageIndexes.length
+      ? result.matchedPageIndexes.map((pageIndex) => `${pageIndex + 1}`).join(", ")
+      : "none";
+    const lines = [
+      "Live Reader Locator Demo",
+      `Status: ${result.status}`,
+      `Confidence: ${result.confidence}`,
+      `Expected page: ${expectedPage}`,
+      `Computed page: ${computedPage}`,
+      `Matched pages: ${matchedPages}`,
+      `Match count: ${result.totalMatches}`,
+      `Pages scanned: ${result.pagesScanned}`,
+      `Selection: "${result.selectionText || "[empty]"}"`,
+    ];
+    if (result.excerpt) {
+      lines.push(`Excerpt: "${result.excerpt}"`);
+    }
+    if (result.reason) {
+      lines.push(`Reason: ${result.reason}`);
+    }
+    liveLocateDemo.dataset.demoState = result.status;
+    liveLocateDemo.textContent = lines.join("\n");
+    liveLocateDemo.style.display = "block";
+  };
+
+  const runLiveLocateSelectionDemo = async () => {
+    closeSlashMenu();
+    hideLiveLocateDemo();
+    const reader = getActiveReaderForSelectedTab();
+    const selectedText = getActiveReaderSelectionText(
+      body.ownerDocument as Document,
+      item,
+    );
+    if (!reader) {
+      if (status) {
+        setStatus(status, "Open a PDF reader tab to run the locate-selection demo", "error");
+      }
+      renderLiveLocateDemo({
+        status: "unavailable",
+        confidence: "none",
+        selectionText: "",
+        normalizedSelection: "",
+        expectedPageIndex: null,
+        computedPageIndex: null,
+        matchedPageIndexes: [],
+        totalMatches: 0,
+        pagesScanned: 0,
+        reason: "No active PDF reader was available.",
+      });
+      return;
+    }
+    if (!selectedText) {
+      if (status) {
+        setStatus(status, "Select text in the active PDF, then rerun the demo", "error");
+      }
+      renderLiveLocateDemo({
+        status: "unavailable",
+        confidence: "none",
+        selectionText: "",
+        normalizedSelection: "",
+        expectedPageIndex: null,
+        computedPageIndex: null,
+        matchedPageIndexes: [],
+        totalMatches: 0,
+        pagesScanned: 0,
+        reason: "No current selection was found in the active PDF reader.",
+      });
+      return;
+    }
+
+    if (status) {
+      setStatus(status, "Resolving the current selection against the live PDF reader...", "sending");
+    }
+    try {
+      const result = await locateCurrentSelectionInLivePdfReader(reader, selectedText);
+      renderLiveLocateDemo(result);
+      ztoolkit.log("LLM: Live reader selection locator demo", result);
+      if (status) {
+        if (
+          result.status === "resolved" &&
+          result.expectedPageIndex !== null &&
+          result.computedPageIndex === result.expectedPageIndex
+        ) {
+          setStatus(
+            status,
+            `Locate demo matched page ${result.computedPageIndex + 1} from the live reader.`,
+            "ready",
+          );
+        } else if (result.status === "resolved") {
+          setStatus(
+            status,
+            `Locate demo resolved to page ${result.computedPageIndex !== null ? result.computedPageIndex + 1 : "?"}; compare with the result panel.`,
+            "warning",
+          );
+        } else if (result.status === "ambiguous") {
+          setStatus(status, "Locate demo found multiple live-reader matches; see the result panel.", "warning");
+        } else {
+          setStatus(status, result.reason || "Locate demo could not resolve the current selection.", "error");
+        }
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      renderLiveLocateDemo({
+        status: "unavailable",
+        confidence: "none",
+        selectionText: selectedText,
+        normalizedSelection: "",
+        expectedPageIndex: null,
+        computedPageIndex: null,
+        matchedPageIndexes: [],
+        totalMatches: 0,
+        pagesScanned: 0,
+        reason: `Locate demo crashed: ${message}`,
+      });
+      if (status) {
+        setStatus(status, `Locate demo crashed: ${message}`, "error");
+      }
+    }
+  };
+
   if (uploadBtn && uploadInput) {
     uploadBtn.addEventListener("click", (e: Event) => {
       e.preventDefault();
@@ -6928,6 +7068,14 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       e.stopPropagation();
       closeSlashMenu();
       openReferenceSlashFromMenu();
+    });
+  }
+
+  if (slashLocateSelectionOption) {
+    slashLocateSelectionOption.addEventListener("click", async (e: Event) => {
+      e.preventDefault();
+      e.stopPropagation();
+      await runLiveLocateSelectionDemo();
     });
   }
 
