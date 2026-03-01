@@ -1,5 +1,10 @@
 import { formatPaperCitationLabel } from "./paperAttribution";
 import {
+  TOKEN_ESTIMATE_CHARS_PER_TOKEN,
+  estimateTextTokens,
+} from "../../utils/modelInputCap";
+import { CHUNK_TARGET_LENGTH } from "./constants";
+import {
   listLibraryPaperCandidates,
   searchPaperCandidates,
   type PaperSearchGroupCandidate,
@@ -8,10 +13,7 @@ import { sanitizeText } from "./textUtils";
 import type { PaperContextRef } from "./types";
 import type { AgentQueryPlan } from "./agentTypes";
 
-const MAX_LIBRARY_OVERVIEW_LIST = 40;
-const MAX_LIBRARY_OVERVIEW_READ = 12;
-const MAX_LIBRARY_SEARCH_LIST = 12;
-const MAX_LIBRARY_SEARCH_READ = 6;
+const AGENT_METADATA_PREFIX_RATIO = 0.25;
 
 export type AgentContextResolution = {
   mode: "library-overview" | "library-search";
@@ -114,11 +116,10 @@ function buildSelectedPaperTraceLine(
 function clampReadLimit(
   value: number | undefined,
   fallback: number,
-  maximum: number,
 ): number {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
-  return Math.max(1, Math.min(maximum, Math.floor(parsed)));
+  return Math.max(1, Math.floor(parsed));
 }
 
 function dedupePaperContexts(values: PaperContextRef[]): PaperContextRef[] {
@@ -153,8 +154,8 @@ function buildGroundingRulesBlock(extraLine: string): string[] {
 function buildLibraryOverviewContext(
   candidates: PaperSearchGroupCandidate[],
   papersToRead: number,
+  maxPrefixTokens?: number,
 ): string {
-  const listedCandidates = candidates.slice(0, MAX_LIBRARY_OVERVIEW_LIST);
   const lines = [
     "Zotero Agent Retrieval",
     "- Mode: whole-library overview",
@@ -163,26 +164,23 @@ function buildLibraryOverviewContext(
     ...buildGroundingRulesBlock(
       "- If the user asks for information outside this retrieved snapshot, say that you do not have enough grounded Zotero data.",
     ),
-    "",
-    "Retrieved library paper list:",
-    ...listedCandidates.map((candidate, index) =>
-      formatPaperListLine(candidate, index),
-    ),
   ];
-  if (candidates.length > listedCandidates.length) {
-    lines.push(
-      `- Additional readable papers not listed here due to brevity: ${candidates.length - listedCandidates.length}`,
-    );
-  }
-  return lines.join("\n");
+  return appendPaperListWithinBudget({
+    baseLines: lines,
+    heading: "Retrieved library paper list:",
+    candidates,
+    maxPrefixTokens,
+    overflowLabel: (remainingCount) =>
+      `- Additional readable papers not listed here due to brevity: ${remainingCount}`,
+  });
 }
 
 function buildLibrarySearchContext(
   question: string,
   candidates: PaperSearchGroupCandidate[],
   papersToRead: number,
+  maxPrefixTokens?: number,
 ): string {
-  const listedCandidates = candidates.slice(0, MAX_LIBRARY_SEARCH_LIST);
   const lines = [
     "Zotero Agent Retrieval",
     "- Mode: library search",
@@ -192,18 +190,15 @@ function buildLibrarySearchContext(
     ...buildGroundingRulesBlock(
       "- If there are no retrieved matches for a claim, say that the current Zotero retrieval did not find evidence for it.",
     ),
-    "",
-    "Top retrieved library matches:",
-    ...listedCandidates.map((candidate, index) =>
-      formatPaperListLine(candidate, index),
-    ),
   ];
-  if (candidates.length > listedCandidates.length) {
-    lines.push(
-      `- Additional readable matches not listed here due to brevity: ${candidates.length - listedCandidates.length}`,
-    );
-  }
-  return lines.join("\n");
+  return appendPaperListWithinBudget({
+    baseLines: lines,
+    heading: "Top retrieved library matches:",
+    candidates,
+    maxPrefixTokens,
+    overflowLabel: (remainingCount) =>
+      `- Additional readable matches not listed here due to brevity: ${remainingCount}`,
+  });
 }
 
 function buildNoResultsContext(
@@ -220,11 +215,73 @@ function buildNoResultsContext(
   ].join("\n");
 }
 
+function deriveAgentPrefixTokenBudget(params: {
+  availableContextBudgetTokens?: number;
+  papersToRead: number;
+}): number | undefined {
+  const totalBudget = Math.floor(Number(params.availableContextBudgetTokens));
+  if (!Number.isFinite(totalBudget)) return undefined;
+  if (totalBudget <= 0) return 0;
+  const sharedPrefixBudget = Math.max(
+    0,
+    Math.floor(totalBudget * AGENT_METADATA_PREFIX_RATIO),
+  );
+  const estimatedPerPaperBudget = Math.max(
+    1,
+    Math.floor(CHUNK_TARGET_LENGTH / TOKEN_ESTIMATE_CHARS_PER_TOKEN),
+  );
+  const reservedRetrievalBudget = params.papersToRead * estimatedPerPaperBudget;
+  const availableAfterReserve = Math.max(0, totalBudget - reservedRetrievalBudget);
+  return Math.max(0, Math.min(sharedPrefixBudget, availableAfterReserve));
+}
+
+function appendPaperListWithinBudget(params: {
+  baseLines: string[];
+  heading: string;
+  candidates: PaperSearchGroupCandidate[];
+  maxPrefixTokens?: number;
+  overflowLabel: (remainingCount: number) => string;
+}): string {
+  const lines = [...params.baseLines, "", params.heading];
+  const budget =
+    Number.isFinite(params.maxPrefixTokens) && Number(params.maxPrefixTokens) > 0
+      ? Math.floor(Number(params.maxPrefixTokens))
+      : Number.POSITIVE_INFINITY;
+  if (budget <= 0) {
+    return params.baseLines.join("\n");
+  }
+  let listedCount = 0;
+  for (const [index, candidate] of params.candidates.entries()) {
+    const line = formatPaperListLine(candidate, index);
+    const next = [...lines, line].join("\n");
+    if (estimateTextTokens(next) > budget && listedCount > 0) {
+      break;
+    }
+    lines.push(line);
+    listedCount += 1;
+    if (estimateTextTokens(lines.join("\n")) > budget) {
+      lines.pop();
+      listedCount -= 1;
+      break;
+    }
+  }
+  const remainingCount = params.candidates.length - listedCount;
+  if (remainingCount > 0) {
+    const overflowLine = params.overflowLabel(remainingCount);
+    const withOverflow = [...lines, overflowLine].join("\n");
+    if (estimateTextTokens(withOverflow) <= budget) {
+      lines.push(overflowLine);
+    }
+  }
+  return lines.join("\n");
+}
+
 export async function resolveAgentContext(params: {
   question: string;
   libraryID: number;
   conversationMode: "paper" | "open";
   plan?: AgentQueryPlan | null;
+  availableContextBudgetTokens?: number;
   onStatus?: (statusText: string) => void;
 }): Promise<AgentContextResolution | null> {
   const normalizedLibraryID = Number(params.libraryID);
@@ -246,10 +303,13 @@ export async function resolveAgentContext(params: {
     const candidates = await listLibraryPaperCandidates(normalizedLibraryID);
     const papersToRead = clampReadLimit(
       params.plan?.maxPapersToRead,
-      MAX_LIBRARY_OVERVIEW_READ,
-      MAX_LIBRARY_OVERVIEW_READ,
+      Math.max(1, candidates.length),
     );
     const selectedCandidates = candidates.slice(0, papersToRead);
+    const prefixBudget = deriveAgentPrefixTokenBudget({
+      availableContextBudgetTokens: params.availableContextBudgetTokens,
+      papersToRead,
+    });
     const paperContexts = dedupePaperContexts(
       selectedCandidates
         .map((candidate) => buildPaperContextRef(candidate))
@@ -264,7 +324,7 @@ export async function resolveAgentContext(params: {
     return {
       mode: "library-overview",
       contextPrefix: candidates.length
-        ? buildLibraryOverviewContext(candidates, papersToRead)
+        ? buildLibraryOverviewContext(candidates, papersToRead, prefixBudget)
         : buildNoResultsContext("library-overview", params.question),
       paperContexts,
       pinnedPaperContexts: paperContexts,
@@ -279,18 +339,18 @@ export async function resolveAgentContext(params: {
     params.onStatus?.("Searching library metadata now...");
     const searchQuery =
       sanitizeText(params.plan?.searchQuery || "").trim() || params.question;
+    const papersToRead = clampReadLimit(params.plan?.maxPapersToRead, 1);
     const candidates = await searchPaperCandidates(
       normalizedLibraryID,
       searchQuery,
       null,
-      MAX_LIBRARY_SEARCH_LIST,
-    );
-    const papersToRead = clampReadLimit(
-      params.plan?.maxPapersToRead,
-      MAX_LIBRARY_SEARCH_READ,
-      MAX_LIBRARY_SEARCH_READ,
+      Math.max(papersToRead, papersToRead * 4),
     );
     const selectedCandidates = candidates.slice(0, papersToRead);
+    const prefixBudget = deriveAgentPrefixTokenBudget({
+      availableContextBudgetTokens: params.availableContextBudgetTokens,
+      papersToRead,
+    });
     const paperContexts = dedupePaperContexts(
       selectedCandidates
         .map((candidate) => buildPaperContextRef(candidate))
@@ -306,7 +366,12 @@ export async function resolveAgentContext(params: {
     return {
       mode: "library-search",
       contextPrefix: candidates.length
-        ? buildLibrarySearchContext(searchQuery, candidates, papersToRead)
+        ? buildLibrarySearchContext(
+            searchQuery,
+            candidates,
+            papersToRead,
+            prefixBudget,
+          )
         : buildNoResultsContext("library-search", searchQuery),
       paperContexts,
       pinnedPaperContexts: paperContexts,

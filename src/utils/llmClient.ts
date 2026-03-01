@@ -689,10 +689,6 @@ function buildMessages(
   return messages;
 }
 
-function clampNumber(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
-}
-
 function getReasoningReserveTokens(reasoning?: ReasoningConfig): number {
   const level = reasoning?.level || "none";
   switch (level) {
@@ -731,12 +727,8 @@ export function estimateAvailableContextBudget(params: {
     params.inputTokenCap,
     modelLimitTokens,
   );
-  const softLimitTokens = Math.max(1_024, Math.floor(limitTokens * 0.9));
-  const outputReserveTokens = clampNumber(
-    normalizeMaxTokens(params.maxTokens),
-    512,
-    8_192,
-  );
+  const softLimitTokens = Math.max(1, Math.floor(limitTokens * 0.9));
+  const outputReserveTokens = normalizeMaxTokens(params.maxTokens);
   const reasoningReserveTokens = getReasoningReserveTokens(params.reasoning);
 
   const baseMessages = buildMessages(
@@ -750,7 +742,7 @@ export function estimateAvailableContextBudget(params: {
   );
   const baseInputTokens = estimateConversationTokens(baseMessages);
   const contextBudgetTokens = Math.max(
-    1_024,
+    0,
     softLimitTokens -
       baseInputTokens -
       outputReserveTokens -

@@ -5816,6 +5816,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       itemId: selectedGroup.itemId,
       contextItemId: selectedAttachment.contextItemId,
       title: selectedGroup.title,
+      attachmentTitle: selectedAttachment.title,
       citationKey: selectedGroup.citationKey,
       firstCreator: selectedGroup.firstCreator,
       year: selectedGroup.year,

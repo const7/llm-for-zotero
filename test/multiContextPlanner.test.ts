@@ -2,6 +2,7 @@ import { assert } from "chai";
 import {
   assembleFullMultiPaperContext,
   assembleRetrievedMultiPaperContext,
+  resolveMultiContextPlan,
   selectContextAssemblyMode,
 } from "../src/modules/contextPanel/multiContextPlanner";
 import { buildPaperKey } from "../src/modules/contextPanel/pdfContext";
@@ -134,5 +135,34 @@ describe("multiContextPlanner", function () {
     assert.include(full.contextText, "Full Paper Contexts:");
     assert.include(full.contextText, "Paper 1");
     assert.isAbove(full.estimatedTokens, 0);
+  });
+
+  it("reserves context budget for an existing prefix block", async function () {
+    const withoutPrefix = await resolveMultiContextPlan({
+      conversationMode: "open",
+      activeContextItem: null,
+      question: "summarize this",
+      paperContexts: [],
+      pinnedPaperContexts: [],
+      historyPaperContexts: [],
+      history: [],
+      model: "gpt-4o-mini",
+    });
+    const withPrefix = await resolveMultiContextPlan({
+      conversationMode: "open",
+      activeContextItem: null,
+      question: "summarize this",
+      contextPrefix: "Agent Tool Result\n- Tool: read_paper_text\n" + "detail ".repeat(400),
+      paperContexts: [],
+      pinnedPaperContexts: [],
+      historyPaperContexts: [],
+      history: [],
+      model: "gpt-4o-mini",
+    });
+
+    assert.isBelow(
+      withPrefix.contextBudget.contextBudgetTokens,
+      withoutPrefix.contextBudget.contextBudgetTokens,
+    );
   });
 });

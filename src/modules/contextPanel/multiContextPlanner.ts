@@ -582,6 +582,7 @@ export async function resolveMultiContextPlan(params: {
   conversationMode: ConversationMode;
   activeContextItem: Zotero.Item | null;
   question: string;
+  contextPrefix?: string;
   paperContexts?: PaperContextRef[];
   pinnedPaperContexts?: PaperContextRef[];
   historyPaperContexts?: PaperContextRef[];
@@ -613,12 +614,20 @@ export async function resolveMultiContextPlan(params: {
     inputTokenCap: params.advanced?.inputTokenCap,
     systemPrompt: params.systemPrompt,
   });
+  const reservedPrefixTokens = estimateTextTokens(params.contextPrefix || "");
+  const adjustedContextBudget = {
+    ...contextBudget,
+    contextBudgetTokens: Math.max(
+      0,
+      contextBudget.contextBudgetTokens - reservedPrefixTokens,
+    ),
+  };
 
   if (!papers.length) {
     return {
       mode: "retrieval",
       contextText: "",
-      contextBudget,
+      contextBudget: adjustedContextBudget,
       usedContextTokens: 0,
       selectedPaperCount: 0,
       selectedChunkCount: 0,
@@ -643,12 +652,12 @@ export async function resolveMultiContextPlan(params: {
       selectContextAssemblyMode({
         fullContextText: full.contextText,
         fullContextTokens: full.estimatedTokens,
-        contextBudgetTokens: contextBudget.contextBudgetTokens,
+        contextBudgetTokens: adjustedContextBudget.contextBudgetTokens,
       }) === "full"
     ) {
       const remainingTokens = Math.max(
         0,
-        contextBudget.contextBudgetTokens - full.estimatedTokens,
+        adjustedContextBudget.contextBudgetTokens - full.estimatedTokens,
       );
       let extraUnpinned: RetrievedAssembly | null = null;
       if (remainingTokens >= 1024 && relevantUnpinned.length) {
@@ -680,7 +689,7 @@ export async function resolveMultiContextPlan(params: {
       return {
         mode: "full",
         contextText: combinedContext,
-        contextBudget,
+        contextBudget: adjustedContextBudget,
         usedContextTokens,
         selectedPaperCount,
         selectedChunkCount: extraUnpinned?.selectedChunkCount || 0,
@@ -693,7 +702,7 @@ export async function resolveMultiContextPlan(params: {
     return {
       mode: "retrieval",
       contextText: "",
-      contextBudget,
+      contextBudget: adjustedContextBudget,
       usedContextTokens: 0,
       selectedPaperCount: 0,
       selectedChunkCount: 0,
@@ -703,7 +712,7 @@ export async function resolveMultiContextPlan(params: {
   const retrieved = await assembleRetrievedMultiPaperContext({
     papers: retrievalPapers,
     question: params.question,
-    contextBudgetTokens: contextBudget.contextBudgetTokens,
+    contextBudgetTokens: adjustedContextBudget.contextBudgetTokens,
     minChunksByPaper: buildMinChunkMapForRetrievedPapers(retrievalPapers),
     apiOverrides: {
       apiBase: params.apiBase,
@@ -714,7 +723,7 @@ export async function resolveMultiContextPlan(params: {
   return {
     mode: "retrieval",
     contextText: retrieved.contextText,
-    contextBudget,
+    contextBudget: adjustedContextBudget,
     usedContextTokens,
     selectedPaperCount: retrieved.selectedPaperCount,
     selectedChunkCount: retrieved.selectedChunkCount,

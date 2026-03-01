@@ -12,6 +12,7 @@ import {
   callLLMStream,
   ChatFileAttachment,
   ChatMessage,
+  estimateAvailableContextBudget,
   getRuntimeReasoningOptions,
   ReasoningConfig as LLMReasoningConfig,
   ReasoningEvent,
@@ -19,7 +20,6 @@ import {
 } from "../../utils/llmClient";
 import {
   PERSISTED_HISTORY_LIMIT,
-  MAX_HISTORY_MESSAGES,
   AUTO_SCROLL_BOTTOM_THRESHOLD,
   MAX_SELECTED_IMAGES,
   formatFigureCountLabel,
@@ -77,17 +77,13 @@ import {
   setLastReasoningExpanded,
 } from "./prefHelpers";
 import { resolveMultiContextPlan } from "./multiContextPlanner";
-import { resolveAgentContext } from "./agentContext";
-import { planAgentQuery } from "./agentPlanner";
-import {
-  formatPaperCitationLabel,
-  resolvePaperContextRefFromAttachment,
-} from "./paperAttribution";
+import { formatPaperCitationLabel } from "./paperAttribution";
 import {
   getActiveContextAttachmentFromTabs,
   resolveContextSourceItem,
 } from "./contextResolution";
 import { isGlobalPortalItem } from "./portalScope";
+import { runAgentLoop } from "./agentLoop";
 import { buildChatHistoryNotePayload } from "./notes";
 import { extractManagedBlobHash } from "./attachmentStorage";
 import { toFileUrl } from "../../utils/pathFileUrl";
@@ -1030,106 +1026,61 @@ async function buildContextPlanForRequest(params: {
   let pinnedPaperContexts = params.pinnedPaperContexts;
   let recentPaperContexts = params.recentPaperContexts;
   const contextBlocks: string[] = [];
-  let agentContextResolved = false;
+  let contextPrefix = "";
+  const systemPrompt = getStringPref("systemPrompt") || undefined;
+  const baseContextBudget = estimateAvailableContextBudget({
+    model: params.effectiveRequestConfig.model,
+    prompt: params.question,
+    history: params.history,
+    images: params.images,
+    reasoning: params.effectiveRequestConfig.reasoning,
+    maxTokens: params.effectiveRequestConfig.advanced?.maxTokens,
+    inputTokenCap: params.effectiveRequestConfig.advanced?.inputTokenCap,
+    systemPrompt,
+  });
 
   if (params.agentEnabled) {
-    params.setAgentStatusSafely?.("Planning Zotero retrieval...");
-    const activePaperContext =
-      resolvePaperContextRefFromAttachment(activeContextItem);
-    const agentPlan = await planAgentQuery({
+    const agentLoop = await runAgentLoop({
+      item: params.item,
       question: params.question,
+      activeContextItem,
       conversationMode,
-      libraryID: Number(params.item.libraryID),
+      paperContexts,
+      pinnedPaperContexts,
+      recentPaperContexts,
       model: params.effectiveRequestConfig.model,
       apiBase: params.effectiveRequestConfig.apiBase,
       apiKey: params.effectiveRequestConfig.apiKey,
       reasoning: params.effectiveRequestConfig.reasoning,
-      activePaperContext,
-      paperContexts,
-      pinnedPaperContexts,
-      recentPaperContexts,
+      advanced: params.effectiveRequestConfig.advanced,
+      availableContextBudgetTokens: baseContextBudget.contextBudgetTokens,
+      onStatus: (statusText) => {
+        params.setStatusSafely(statusText, "sending");
+      },
+      onTrace: (traceLine) => {
+        params.setAgentStatusSafely?.(traceLine);
+      },
     });
-    ztoolkit.log("LLM: Agent planner decision", agentPlan);
-    for (const traceLine of agentPlan.traceLines) {
-      params.setAgentStatusSafely?.(traceLine);
-    }
-
-    if (
-      agentPlan.action === "library-overview" ||
-      agentPlan.action === "library-search"
-    ) {
-      params.setAgentStatusSafely?.("Checking Zotero access now...");
-      const agentContext = await resolveAgentContext({
-        question: params.question,
-        libraryID: Number(params.item.libraryID),
-        conversationMode,
-        plan: agentPlan,
-        onStatus: (statusText) => {
-          params.setStatusSafely(statusText, "sending");
-          params.setAgentStatusSafely?.(statusText);
-        },
-      });
-      if (agentContext) {
-        agentContextResolved = true;
-        conversationMode = "open";
-        activeContextItem = null;
-        paperContexts = agentContext.paperContexts;
-        pinnedPaperContexts = agentContext.pinnedPaperContexts;
-        recentPaperContexts = [];
-        const prefix = sanitizeText(agentContext.contextPrefix || "").trim();
-        if (prefix) {
-          contextBlocks.push(prefix);
-        }
-        params.setStatusSafely(agentContext.statusText, "sending");
-        params.setAgentStatusSafely?.(agentContext.statusText);
-        for (const traceLine of agentContext.traceLines) {
-          params.setAgentStatusSafely?.(traceLine);
-        }
-      } else {
-        activeContextItem = null;
-        paperContexts = [];
-        pinnedPaperContexts = [];
-        recentPaperContexts = [];
-        conversationMode = "open";
-        params.setAgentStatusSafely?.(
-          "Planner requested library access, but no library retrieval was available.",
-        );
-      }
-    } else if (agentPlan.action === "active-paper") {
-      paperContexts = [];
-      pinnedPaperContexts = [];
-      recentPaperContexts = [];
-      if (activePaperContext) {
-        params.setAgentStatusSafely?.(
-          `Using the active paper: ${formatPaperCitationLabel(activePaperContext)}.`,
-        );
-      } else {
-        activeContextItem = null;
-        params.setAgentStatusSafely?.(
-          "No active paper was available, so Zotero retrieval was skipped.",
-        );
-      }
-    } else if (agentPlan.action === "existing-paper-contexts") {
-      activeContextItem = null;
-      conversationMode = "open";
-      params.setAgentStatusSafely?.(
-        "Using existing selected, pinned, and recent paper contexts.",
-      );
-    } else {
-      activeContextItem = null;
-      conversationMode = "open";
-      paperContexts = [];
-      pinnedPaperContexts = [];
-      recentPaperContexts = [];
-      params.setAgentStatusSafely?.("No Zotero retrieval was needed.");
-    }
+    activeContextItem = agentLoop.activeContextItem;
+    conversationMode = agentLoop.conversationMode;
+    paperContexts = agentLoop.paperContexts;
+    pinnedPaperContexts = agentLoop.pinnedPaperContexts;
+    recentPaperContexts = agentLoop.recentPaperContexts;
+    contextPrefix = sanitizeText(agentLoop.contextPrefix || "").trim();
+    ztoolkit.log("LLM: Agent loop result", {
+      conversationMode,
+      paperContextCount: paperContexts.length,
+      pinnedPaperContextCount: pinnedPaperContexts.length,
+      recentPaperContextCount: recentPaperContexts.length,
+      hasContextPrefix: Boolean(contextPrefix),
+    });
   }
 
-  const systemPrompt = getStringPref("systemPrompt") || undefined;
   const plan = await resolveMultiContextPlan({
     activeContextItem,
     conversationMode,
     question: params.question,
+    contextPrefix,
     paperContexts,
     pinnedPaperContexts,
     historyPaperContexts: recentPaperContexts,
@@ -1162,6 +1113,9 @@ async function buildContextPlanForRequest(params: {
     contextBudgetTokens: plan.contextBudget.contextBudgetTokens,
     usedContextTokens: plan.usedContextTokens,
   });
+  if (contextPrefix) {
+    contextBlocks.push(contextPrefix);
+  }
   const planContext = sanitizeText(plan.contextText || "").trim();
   if (planContext) {
     contextBlocks.push(planContext);
@@ -1632,9 +1586,7 @@ export async function retryLatestAssistantResponse(
     assistantMessage,
   );
 
-  const historyForLLM = history
-    .slice(0, retryPair.userIndex)
-    .slice(-MAX_HISTORY_MESSAGES);
+  const historyForLLM = history.slice(0, retryPair.userIndex);
   const {
     question,
     screenshotImages,
@@ -1835,7 +1787,7 @@ export async function sendQuestion(
     chatHistory.set(conversationKey, []);
   }
   const history = chatHistory.get(conversationKey)!;
-  const historyForLLM = history.slice(-MAX_HISTORY_MESSAGES);
+  const historyForLLM = history.slice();
   const requestFileAttachments = normalizeModelFileAttachments(attachments);
   const effectiveRequestConfig = resolveEffectiveRequestConfig({
     item,

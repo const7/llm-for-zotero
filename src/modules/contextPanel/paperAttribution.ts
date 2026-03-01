@@ -8,6 +8,21 @@ function normalizeText(value: unknown): string {
     .trim();
 }
 
+function getAttachmentDisplayTitle(
+  contextItem: Zotero.Item | null | undefined,
+): string {
+  if (!contextItem?.isAttachment?.()) return "";
+  const title = normalizeText(String(contextItem.getField("title") || ""));
+  if (title) return title;
+  const filename = normalizeText(
+    String(
+      (contextItem as unknown as { attachmentFilename?: string })
+        .attachmentFilename || "",
+    ),
+  );
+  return filename;
+}
+
 function extractYearValue(value: unknown): string | undefined {
   const text = normalizeText(value);
   if (!text) return undefined;
@@ -97,6 +112,19 @@ export function formatPaperCitationLabel(
   return fallbackId > 0 ? `Paper ${fallbackId}` : "Paper";
 }
 
+export function formatPaperContextReferenceLabel(
+  paperContext: PaperContextRef | null | undefined,
+): string {
+  if (!paperContext) return "Paper";
+  const citation = formatPaperCitationLabel(paperContext);
+  const attachmentTitle = normalizeText(paperContext.attachmentTitle || "");
+  const paperTitle = normalizeText(paperContext.title || "");
+  const parts = [citation];
+  if (paperTitle) parts.push(paperTitle);
+  if (attachmentTitle) parts.push(`Attachment: ${attachmentTitle}`);
+  return parts.join(" - ");
+}
+
 export function formatOpenChatTextContextLabel(
   paperContext: PaperContextRef | null | undefined,
 ): string {
@@ -136,6 +164,7 @@ export function resolvePaperContextRefFromAttachment(
     ),
   );
   const citationKey = normalizeText(String(paperItem.getField("citationKey") || ""));
+  const attachmentTitle = getAttachmentDisplayTitle(contextItem);
   const firstCreator = normalizeText(
     String(
       paperItem.getField("firstCreator") ||
@@ -156,6 +185,7 @@ export function resolvePaperContextRefFromAttachment(
     itemId: normalizedPaperItemId,
     contextItemId: normalizedContextItemId,
     title: title || `Paper ${normalizedPaperItemId}`,
+    attachmentTitle: attachmentTitle || undefined,
     citationKey: citationKey || undefined,
     firstCreator: firstCreator || undefined,
     year: year || undefined,

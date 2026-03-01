@@ -312,6 +312,66 @@ export function buildFullPaperContext(
   );
 }
 
+export function buildTruncatedFullPaperContext(
+  paperContext: PaperContextRef,
+  pdfContext: PdfContext | undefined,
+  options: { maxTokens: number },
+): {
+  text: string;
+  estimatedTokens: number;
+  truncated: boolean;
+  fullLength: number;
+} {
+  const metadata = formatPaperMetadataLines(paperContext);
+  if (!pdfContext || !pdfContext.chunks.length) {
+    const text = [
+      ...metadata,
+      "",
+      "[No extractable PDF text available. Using metadata only.]",
+    ].join("\n");
+    return {
+      text,
+      estimatedTokens: estimateTextTokens(text),
+      truncated: false,
+      fullLength: pdfContext?.fullLength || 0,
+    };
+  }
+
+  const maxTokens = Math.max(1, Math.floor(options.maxTokens));
+  const parts = [...metadata, "", "Paper Text:"];
+  let text = parts.join("\n");
+  let estimatedTokens = estimateTextTokens(text);
+  let includedChunks = 0;
+
+  for (const chunk of pdfContext.chunks) {
+    const nextText = `${text}\n\n${chunk}`;
+    const nextTokens = estimateTextTokens(nextText);
+    if (nextTokens > maxTokens) {
+      break;
+    }
+    text = nextText;
+    estimatedTokens = nextTokens;
+    includedChunks += 1;
+  }
+
+  const truncated = includedChunks < pdfContext.chunks.length;
+  if (!includedChunks) {
+    text = [
+      ...metadata,
+      "",
+      "[Full paper text was available but exceeded the current tool budget before any chunk could be included.]",
+    ].join("\n");
+    estimatedTokens = estimateTextTokens(text);
+  }
+
+  return {
+    text,
+    estimatedTokens,
+    truncated,
+    fullLength: pdfContext.fullLength,
+  };
+}
+
 function shouldTryEmbeddings(overrides?: {
   apiBase?: string;
   apiKey?: string;

@@ -1,3 +1,5 @@
+import type { AgentToolCall } from "./agentTools/types";
+
 export type AgentPlannerAction =
   | "skip"
   | "active-paper"
@@ -10,4 +12,13 @@ export type AgentQueryPlan = {
   searchQuery?: string;
   maxPapersToRead: number;
   traceLines: string[];
+  toolCalls: AgentToolCall[];
+};
+
+export type AgentContinuationDecision = "stop" | "tool";
+
+export type AgentContinuationPlan = {
+  decision: AgentContinuationDecision;
+  traceLines: string[];
+  toolCalls: AgentToolCall[];
 };

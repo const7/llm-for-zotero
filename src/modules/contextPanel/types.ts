@@ -118,6 +118,7 @@ export type PaperContextRef = {
   contextItemId: number;
   citationKey?: string;
   title: string;
+  attachmentTitle?: string;
   firstCreator?: string;
   year?: string;
 };
