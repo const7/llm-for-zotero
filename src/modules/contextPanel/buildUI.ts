@@ -421,7 +421,23 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
       title: "Resolve the current PDF selection against the live reader text",
     },
   );
-  slashMenu.append(slashUploadBtn, slashReferenceBtn, slashLocateSelectionBtn);
+  const slashLocateQuoteBtn = createElement(
+    doc,
+    "button",
+    "llm-response-menu-item",
+    {
+      id: "llm-slash-locate-quote-option",
+      type: "button",
+      textContent: "Locate quote demo",
+      title: "Resolve the current input quote against the open PDF",
+    },
+  );
+  slashMenu.append(
+    slashUploadBtn,
+    slashReferenceBtn,
+    slashLocateSelectionBtn,
+    slashLocateQuoteBtn,
+  );
   container.appendChild(slashMenu);
 
   // Retry model menu (opened from latest assistant retry action)

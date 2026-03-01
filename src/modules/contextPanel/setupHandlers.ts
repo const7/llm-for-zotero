@@ -130,6 +130,7 @@ import {
 } from "./contextResolution";
 import {
   locateCurrentSelectionInLivePdfReader,
+  locateQuoteInLivePdfReader,
   type LivePdfSelectionLocateResult,
 } from "./livePdfSelectionLocator";
 import { resolvePaperContextRefFromAttachment } from "./paperAttribution";
@@ -313,6 +314,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     slashUploadOption,
     slashReferenceOption,
     slashLocateSelectionOption,
+    slashLocateQuoteOption,
     contextAgentToggleBtn,
     imagePreview,
     selectedContextList,
@@ -6895,6 +6897,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
 
   const renderLiveLocateDemo = (result: LivePdfSelectionLocateResult) => {
     if (!liveLocateDemo) return;
+    const queryLabel = result.queryLabel || "Selection";
     const expectedPage =
       result.expectedPageIndex !== null ? `${result.expectedPageIndex + 1}` : "n/a";
     const computedPage =
@@ -6911,13 +6914,19 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       `Matched pages: ${matchedPages}`,
       `Match count: ${result.totalMatches}`,
       `Pages scanned: ${result.pagesScanned}`,
-      `Selection: "${result.selectionText || "[empty]"}"`,
+      `${queryLabel}: "${result.selectionText || "[empty]"}"`,
     ];
     if (result.excerpt) {
       lines.push(`Excerpt: "${result.excerpt}"`);
     }
     if (result.reason) {
       lines.push(`Reason: ${result.reason}`);
+    }
+    if (result.debugSummary?.length) {
+      lines.push("Votes:");
+      for (const line of result.debugSummary.slice(0, 8)) {
+        lines.push(`- ${line}`);
+      }
     }
     liveLocateDemo.dataset.demoState = result.status;
     liveLocateDemo.textContent = lines.join("\n");
@@ -7019,6 +7028,102 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     }
   };
 
+  const getInputQuoteForLocateDemo = (): string => {
+    const selectionStart =
+      typeof inputBox.selectionStart === "number" ? inputBox.selectionStart : 0;
+    const selectionEnd =
+      typeof inputBox.selectionEnd === "number" ? inputBox.selectionEnd : selectionStart;
+    if (selectionEnd > selectionStart) {
+      return inputBox.value.slice(selectionStart, selectionEnd).trim();
+    }
+    return inputBox.value.trim();
+  };
+
+  const runLiveLocateQuoteDemo = async () => {
+    closeSlashMenu();
+    hideLiveLocateDemo();
+    const reader = getActiveReaderForSelectedTab();
+    const quoteText = getInputQuoteForLocateDemo();
+    if (!reader) {
+      if (status) {
+        setStatus(status, "Open a PDF reader tab to run the locate-quote demo", "error");
+      }
+      renderLiveLocateDemo({
+        status: "unavailable",
+        confidence: "none",
+        selectionText: "",
+        normalizedSelection: "",
+        queryLabel: "Quote",
+        expectedPageIndex: null,
+        computedPageIndex: null,
+        matchedPageIndexes: [],
+        totalMatches: 0,
+        pagesScanned: 0,
+        reason: "No active PDF reader was available.",
+      });
+      return;
+    }
+    if (!quoteText) {
+      if (status) {
+        setStatus(status, "Paste or select a quote in the input box, then rerun the demo", "error");
+      }
+      renderLiveLocateDemo({
+        status: "unavailable",
+        confidence: "none",
+        selectionText: "",
+        normalizedSelection: "",
+        queryLabel: "Quote",
+        expectedPageIndex: null,
+        computedPageIndex: null,
+        matchedPageIndexes: [],
+        totalMatches: 0,
+        pagesScanned: 0,
+        reason: "No quote text was found in the input box.",
+      });
+      return;
+    }
+
+    if (status) {
+      setStatus(status, "Resolving the current quote against the live PDF reader...", "sending");
+    }
+    try {
+      const result = await locateQuoteInLivePdfReader(reader, quoteText);
+      renderLiveLocateDemo(result);
+      ztoolkit.log("LLM: Live reader quote locator demo", result);
+      if (status) {
+        if (result.status === "resolved") {
+          setStatus(
+            status,
+            `Locate quote demo resolved to page ${result.computedPageIndex !== null ? result.computedPageIndex + 1 : "?"}.`,
+            result.totalMatches > 1 ? "warning" : "ready",
+          );
+        } else if (result.status === "ambiguous") {
+          setStatus(status, "Locate quote demo found matches on multiple pages; see the result panel.", "warning");
+        } else {
+          setStatus(status, result.reason || "Locate quote demo could not resolve the current quote.", "error");
+        }
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      renderLiveLocateDemo({
+        status: "unavailable",
+        confidence: "none",
+        selectionText: quoteText,
+        normalizedSelection: "",
+        queryLabel: "Quote",
+        expectedPageIndex: null,
+        computedPageIndex: null,
+        matchedPageIndexes: [],
+        totalMatches: 0,
+        pagesScanned: 0,
+        reason: `Locate quote demo crashed: ${message}`,
+      });
+      if (status) {
+        setStatus(status, `Locate quote demo crashed: ${message}`, "error");
+      }
+    }
+  };
+
   if (uploadBtn && uploadInput) {
     uploadBtn.addEventListener("click", (e: Event) => {
       e.preventDefault();
@@ -7076,6 +7181,14 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       e.preventDefault();
       e.stopPropagation();
       await runLiveLocateSelectionDemo();
+    });
+  }
+
+  if (slashLocateQuoteOption) {
+    slashLocateQuoteOption.addEventListener("click", async (e: Event) => {
+      e.preventDefault();
+      e.stopPropagation();
+      await runLiveLocateQuoteDemo();
     });
   }
 

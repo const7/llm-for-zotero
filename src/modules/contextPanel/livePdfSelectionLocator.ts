@@ -21,6 +21,7 @@ export type LivePdfSelectionLocateResult = {
   confidence: LivePdfSelectionLocateConfidence;
   selectionText: string;
   normalizedSelection: string;
+  queryLabel?: string;
   expectedPageIndex: number | null;
   computedPageIndex: number | null;
   matchedPageIndexes: number[];
@@ -28,12 +29,32 @@ export type LivePdfSelectionLocateResult = {
   pagesScanned: number;
   excerpt?: string;
   reason?: string;
+  debugSummary?: string[];
+};
+
+type LocatePageTextOptions = {
+  queryLabel?: string;
+  resolveSinglePageDuplicates?: boolean;
 };
 
 type PageMatch = {
   pageIndex: number;
   matchIndexes: number[];
   excerpt?: string;
+};
+
+type QuotePageScore = {
+  pageIndex: number;
+  matchedAnchorKeys: Set<string>;
+  totalMatches: number;
+  excerpt?: string;
+};
+
+type PageTextIndexEntry = {
+  pageIndex: number;
+  pageLabel?: string;
+  text: string;
+  normalizedText: string;
 };
 
 const PAGE_CONTAINER_SELECTOR = [
@@ -43,16 +64,244 @@ const PAGE_CONTAINER_SELECTOR = [
   "[data-page-index]",
 ].join(", ");
 
+const SEARCH_WORD_PATTERN = /[a-z0-9]+/g;
+const COMMON_SEARCH_STOP_WORDS = new Set([
+  "a",
+  "an",
+  "and",
+  "are",
+  "as",
+  "at",
+  "be",
+  "by",
+  "for",
+  "from",
+  "in",
+  "into",
+  "is",
+  "it",
+  "of",
+  "on",
+  "or",
+  "that",
+  "the",
+  "their",
+  "then",
+  "these",
+  "this",
+  "those",
+  "to",
+  "was",
+  "we",
+  "were",
+  "with",
+]);
+
 function normalizeLocatorText(value: string): string {
   return sanitizeText(value || "")
     .replace(/\u00ad/g, "")
     .replace(/([A-Za-z])-\s+([A-Za-z])/g, "$1$2")
-    .replace(/[“”]/g, '"')
-    .replace(/[‘’]/g, "'")
-    .replace(/[‐‑‒–—]/g, "-")
+    .replace(/[“”‘’]/g, " ")
+    .replace(/[‐‑‒–—-]/g, " ")
+    .replace(/[^a-zA-Z0-9\s]/g, " ")
     .replace(/\s+/g, " ")
     .trim()
     .toLowerCase();
+}
+
+function stripInlineLocatorNoise(value: string): string {
+  const cleaned = sanitizeText(value || "");
+  return cleaned
+    .replace(/\(([^)]{0,160})\)/gi, (_match, inner: string) =>
+      /\b(fig|figure|table|appendix|supp|supplement|eq|equation|section|sec\.?|et al|19\d{2}|20\d{2})\b/i.test(
+        inner,
+      )
+        ? " "
+        : ` ${inner} `,
+    )
+    .replace(/\[([^\]]{0,160})\]/gi, (_match, inner: string) =>
+      /\b(fig|figure|table|appendix|supp|supplement|eq|equation|section|sec\.?|et al|19\d{2}|20\d{2})\b/i.test(
+        inner,
+      )
+        ? " "
+        : ` ${inner} `,
+    );
+}
+
+function extractSearchTokens(value: string): string[] {
+  const normalized = normalizeLocatorText(stripInlineLocatorNoise(value));
+  return normalized.match(SEARCH_WORD_PATTERN) || [];
+}
+
+function scoreSearchToken(token: string): number {
+  if (!token) return Number.NEGATIVE_INFINITY;
+  if (COMMON_SEARCH_STOP_WORDS.has(token)) return 0.5;
+  if (/^\d+$/.test(token)) return 0.2;
+  if (token.length <= 2) return 0.2;
+  if (token.length === 3) return 1.5;
+  return Math.min(8, token.length + (/[a-z]/.test(token) ? 1 : 0));
+}
+
+function scoreTokenWindow(tokens: string[]): number {
+  if (tokens.length < 4) return Number.NEGATIVE_INFINITY;
+  const scores = tokens.map(scoreSearchToken);
+  const informativeTokenCount = scores.filter((score) => score >= 2).length;
+  if (informativeTokenCount < 2) return Number.NEGATIVE_INFINITY;
+  return scores.reduce((sum, score) => sum + score, 0);
+}
+
+function scoreAnchorTokenWindow(tokens: string[]): number {
+  if (tokens.length < 5) return Number.NEGATIVE_INFINITY;
+  const alphaTokens = tokens.filter((token) => /[a-z]/.test(token));
+  if (alphaTokens.length < 5) return Number.NEGATIVE_INFINITY;
+  const digitOnlyCount = tokens.filter((token) => /^\d+$/.test(token)).length;
+  const alphaRatio = alphaTokens.length / tokens.length;
+  const averageAlphaLength =
+    alphaTokens.reduce((sum, token) => sum + token.length, 0) / alphaTokens.length;
+  return alphaRatio * 10 + averageAlphaLength - digitOnlyCount * 3;
+}
+
+function buildFallbackAnchor(tokens: string[], windowSize: number): string[] {
+  if (tokens.length < 5) return [];
+  const anchorTokens = tokens.slice(0, Math.min(tokens.length, windowSize));
+  return anchorTokens.length >= 5 ? [anchorTokens.join(" ")] : [];
+}
+
+function buildQuoteAnchors(value: string): string[] {
+  const tokens = extractSearchTokens(value);
+  if (tokens.length < 5) return [];
+
+  const primaryWindowSize =
+    tokens.length >= 72 ? 11 : tokens.length >= 40 ? 9 : tokens.length >= 20 ? 8 : 6;
+  const secondaryWindowSize = Math.max(5, primaryWindowSize - 2);
+  const anchorCount = tokens.length >= 72 ? 5 : tokens.length >= 32 ? 4 : 3;
+  const maxStart = Math.max(0, tokens.length - primaryWindowSize);
+  if (tokens.length <= 12) {
+    return buildFallbackAnchor(tokens, primaryWindowSize);
+  }
+
+  const preferredMinStart = maxStart >= 2 ? 1 : 0;
+  const preferredMaxStart =
+    maxStart >= 2 ? Math.max(preferredMinStart, maxStart - 1) : maxStart;
+  const positions = new Set<number>();
+
+  if (maxStart === 0) {
+    positions.add(0);
+  } else {
+    const denominator = Math.max(1, anchorCount - 1);
+    for (let i = 0; i < anchorCount; i += 1) {
+      const ratio = denominator === 0 ? 0 : i / denominator;
+      const start = preferredMinStart + Math.round((preferredMaxStart - preferredMinStart) * ratio);
+      positions.add(Math.max(0, Math.min(maxStart, start)));
+    }
+    positions.add(Math.max(0, Math.min(maxStart, Math.floor((preferredMinStart + preferredMaxStart) / 2))));
+  }
+
+  const radius = Math.max(2, Math.min(8, Math.floor(primaryWindowSize / 2) + 1));
+  const anchors = new Set<string>();
+  for (const start of positions) {
+    let bestWindow: {
+      text: string;
+      score: number;
+      distance: number;
+      start: number;
+    } | null = null;
+    const minStart = Math.max(0, start - radius);
+    const maxCandidateStart = Math.min(maxStart, start + radius);
+    for (let candidateStart = minStart; candidateStart <= maxCandidateStart; candidateStart += 1) {
+      const anchorTokens = tokens.slice(
+        candidateStart,
+        candidateStart + primaryWindowSize,
+      );
+      const score = scoreAnchorTokenWindow(anchorTokens);
+      if (!Number.isFinite(score)) continue;
+      const candidate = {
+        text: anchorTokens.join(" "),
+        score,
+        distance: Math.abs(candidateStart - start),
+        start: candidateStart,
+      };
+      if (
+        !bestWindow ||
+        candidate.score > bestWindow.score ||
+        (candidate.score === bestWindow.score && candidate.distance < bestWindow.distance)
+      ) {
+        bestWindow = candidate;
+      }
+    }
+    if (bestWindow?.text) {
+      anchors.add(bestWindow.text);
+      const shorterTokens = tokens.slice(
+        bestWindow.start,
+        bestWindow.start + secondaryWindowSize,
+      );
+      if (shorterTokens.length >= 5) {
+        anchors.add(shorterTokens.join(" "));
+      }
+    }
+  }
+
+  if (!anchors.size) {
+    return buildFallbackAnchor(tokens, primaryWindowSize);
+  }
+
+  return Array.from(anchors);
+}
+
+function formatQuerySnippet(query: string, maxLength = 72): string {
+  if (query.length <= maxLength) return query;
+  return `${query.slice(0, maxLength - 3)}...`;
+}
+
+function buildPageTextIndex(pages: LivePdfPageText[]): PageTextIndexEntry[] {
+  return pages.map((page) => ({
+    pageIndex: page.pageIndex,
+    pageLabel: page.pageLabel,
+    text: page.text,
+    normalizedText: normalizeLocatorText(page.text),
+  }));
+}
+
+function searchPageIndexEntries(
+  pageIndexEntries: PageTextIndexEntry[],
+  query: string,
+): {
+  matchedPageIndexes: number[];
+  totalMatches: number;
+  excerpt?: string;
+} {
+  const normalizedQuery = normalizeLocatorText(query);
+  if (!normalizedQuery) {
+    return {
+      matchedPageIndexes: [],
+      totalMatches: 0,
+    };
+  }
+
+  const matchedPageIndexes: number[] = [];
+  let totalMatches = 0;
+  let excerpt: string | undefined;
+  for (const page of pageIndexEntries) {
+    const matchIndexes = findAllMatchIndexes(page.normalizedText, normalizedQuery);
+    if (!matchIndexes.length) continue;
+    matchedPageIndexes.push(page.pageIndex);
+    totalMatches += matchIndexes.length;
+    if (!excerpt) {
+      excerpt = buildExcerpt(page.normalizedText, matchIndexes[0], normalizedQuery.length);
+    }
+  }
+  return { matchedPageIndexes, totalMatches, excerpt };
+}
+
+function getProgressiveStartOffsets(tokens: string[]): number[] {
+  const offsets = [0];
+  if (tokens.length > 6 && scoreSearchToken(tokens[0]) < 2) {
+    offsets.push(1);
+  }
+  if (tokens.length > 8 && scoreSearchToken(tokens[0]) < 1 && scoreSearchToken(tokens[1]) < 2) {
+    offsets.push(2);
+  }
+  return offsets;
 }
 
 function findAllMatchIndexes(haystack: string, needle: string): number[] {
@@ -173,6 +422,7 @@ function buildDomResolvedResult(
     confidence: "high",
     selectionText: sanitizeText(selectionText || "").trim(),
     normalizedSelection: normalizeLocatorText(selectionText),
+    queryLabel: "Selection",
     expectedPageIndex,
     computedPageIndex: pageIndex,
     matchedPageIndexes: [pageIndex],
@@ -254,11 +504,233 @@ function collectPageMatches(
   };
 }
 
+function getQuoteAnchorSkipReason(anchor: string): string | null {
+  const tokens = extractSearchTokens(anchor);
+  if (tokens.length < 5) {
+    return "too short";
+  }
+  const alphaTokens = tokens.filter((token) => /[a-z]/.test(token));
+  if (alphaTokens.length < 5) {
+    return "too little plain text";
+  }
+  if (alphaTokens.length / tokens.length < 0.72) {
+    return "math-heavy or symbol-heavy";
+  }
+  return null;
+}
+
+function formatPageList(pageIndexes: number[]): string {
+  return pageIndexes.length
+    ? pageIndexes.map((pageIndex) => `p${pageIndex + 1}`).join(", ")
+    : "none";
+}
+
+function buildQuoteDebugSummary(
+  scoreByPage: Map<number, QuotePageScore>,
+  anchorSummaries: string[],
+  contextLabel: string,
+  earlyStopReason?: string,
+): string[] {
+  const pageLines = Array.from(scoreByPage.values())
+    .sort((left, right) => {
+      const anchorDelta =
+        right.matchedAnchorKeys.size - left.matchedAnchorKeys.size;
+      if (anchorDelta !== 0) return anchorDelta;
+      return right.totalMatches - left.totalMatches;
+    })
+    .slice(0, 4)
+    .map(
+      (score) =>
+        `${contextLabel} vote ${score.pageIndex + 1}: ${score.matchedAnchorKeys.size} anchors, ${score.totalMatches} matches`,
+    );
+  const anchorLines = anchorSummaries.slice(0, 6);
+  const lines = [...pageLines, ...anchorLines];
+  if (earlyStopReason) {
+    lines.push(earlyStopReason);
+  }
+  return lines;
+}
+
+function shouldEarlyStopQuoteVoting(
+  scoreByPage: Map<number, QuotePageScore>,
+  remainingAnchors: number,
+): boolean {
+  const scores = Array.from(scoreByPage.values()).sort(
+    (left, right) => right.matchedAnchorKeys.size - left.matchedAnchorKeys.size,
+  );
+  if (!scores.length) return false;
+  const leader = scores[0].matchedAnchorKeys.size;
+  const runnerUp = scores[1]?.matchedAnchorKeys.size || 0;
+  return leader >= 2 && leader > runnerUp + remainingAnchors;
+}
+
+function scoreQuoteAnchorsAcrossPages(
+  pages: LivePdfPageText[],
+  anchors: string[],
+): {
+  scoreByPage: Map<number, QuotePageScore>;
+  informativeAnchorCount: number;
+  anchorSummaries: string[];
+} {
+  const scoreByPage = new Map<number, QuotePageScore>();
+  const anchorSummaries: string[] = [];
+  for (const anchor of anchors) {
+    const skipReason = getQuoteAnchorSkipReason(anchor);
+    if (skipReason) {
+      anchorSummaries.push(`Anchor skipped: "${anchor}" (${skipReason})`);
+      continue;
+    }
+    const normalizedAnchor = normalizeLocatorText(anchor);
+    if (normalizedAnchor.split(" ").length < 5) continue;
+    const { matches } = collectPageMatches(pages, normalizedAnchor);
+    const matchedPageIndexes = Array.from(
+      new Set(matches.map((match) => match.pageIndex)),
+    );
+    if (!matchedPageIndexes.length) {
+      anchorSummaries.push(`Anchor miss: "${anchor}"`);
+      continue;
+    }
+    if (matchedPageIndexes.length > Math.max(3, Math.ceil(pages.length * 0.35))) {
+      anchorSummaries.push(
+        `Anchor skipped: "${anchor}" (too broad: ${formatPageList(matchedPageIndexes)})`,
+      );
+      continue;
+    }
+    anchorSummaries.push(
+      `Anchor hit: "${anchor}" -> ${formatPageList(matchedPageIndexes)}`,
+    );
+    for (const match of matches) {
+      const existing = scoreByPage.get(match.pageIndex) || {
+        pageIndex: match.pageIndex,
+        matchedAnchorKeys: new Set<string>(),
+        totalMatches: 0,
+        excerpt: match.excerpt,
+      };
+      existing.matchedAnchorKeys.add(normalizedAnchor);
+      existing.totalMatches += match.matchIndexes.length;
+      if (!existing.excerpt && match.excerpt) {
+        existing.excerpt = match.excerpt;
+      }
+      scoreByPage.set(match.pageIndex, existing);
+    }
+  }
+
+  const informativeAnchorKeys = new Set<string>();
+  for (const score of scoreByPage.values()) {
+    for (const key of score.matchedAnchorKeys) {
+      informativeAnchorKeys.add(key);
+    }
+  }
+  return {
+    scoreByPage,
+    informativeAnchorCount: informativeAnchorKeys.size,
+    anchorSummaries,
+  };
+}
+
+function buildQuoteAnchorResult(
+  scoreByPage: Map<number, QuotePageScore>,
+  informativeAnchorCount: number,
+  quoteText: string,
+  expectedPageIndex: number | null,
+  pagesScanned: number,
+  fallbackReason?: string,
+  debugSummary?: string[],
+): LivePdfSelectionLocateResult {
+  const selectionText = sanitizeText(quoteText || "").trim();
+  const normalizedSelection = normalizeLocatorText(selectionText);
+  const scoredPages = Array.from(scoreByPage.values()).sort((left, right) => {
+    const anchorDelta =
+      right.matchedAnchorKeys.size - left.matchedAnchorKeys.size;
+    if (anchorDelta !== 0) return anchorDelta;
+    const matchDelta = right.totalMatches - left.totalMatches;
+    if (matchDelta !== 0) return matchDelta;
+    return left.pageIndex - right.pageIndex;
+  });
+  const matchedPageIndexes = scoredPages.map((score) => score.pageIndex);
+  const totalMatches = scoredPages.reduce(
+    (sum, score) => sum + score.totalMatches,
+    0,
+  );
+
+  if (!scoredPages.length) {
+    return {
+      status: "not-found",
+      confidence: "none",
+      selectionText,
+      normalizedSelection,
+      queryLabel: "Quote",
+      expectedPageIndex,
+      computedPageIndex: null,
+      matchedPageIndexes,
+      totalMatches,
+      pagesScanned,
+      debugSummary,
+      reason:
+        fallbackReason ||
+        "The multi-anchor quote search did not find a reliable page candidate.",
+    };
+  }
+
+  const topScore = scoredPages[0];
+  const topAnchorCount = topScore.matchedAnchorKeys.size;
+  const tiedTopPages = scoredPages.filter(
+    (score) => score.matchedAnchorKeys.size === topAnchorCount,
+  );
+  const confidence: LivePdfSelectionLocateConfidence =
+    topAnchorCount >= 3 || informativeAnchorCount >= 4
+      ? "high"
+      : topAnchorCount >= 2
+        ? "medium"
+        : "low";
+  const sharedReason = `Matched ${topAnchorCount} of ${Math.max(
+    informativeAnchorCount,
+    topAnchorCount,
+  )} quote anchors to the page.`;
+
+  if (tiedTopPages.length === 1 && (topAnchorCount >= 2 || informativeAnchorCount <= 1)) {
+    return {
+      status: "resolved",
+      confidence,
+      selectionText,
+      normalizedSelection,
+      queryLabel: "Quote",
+      expectedPageIndex,
+      computedPageIndex: topScore.pageIndex,
+      matchedPageIndexes,
+      totalMatches,
+      pagesScanned,
+      excerpt: topScore.excerpt,
+      debugSummary,
+      reason: sharedReason,
+    };
+  }
+
+  return {
+    status: "ambiguous",
+    confidence: "low",
+    selectionText,
+    normalizedSelection,
+    queryLabel: "Quote",
+    expectedPageIndex,
+    computedPageIndex: null,
+    matchedPageIndexes,
+    totalMatches,
+    pagesScanned,
+    excerpt: topScore.excerpt,
+    debugSummary,
+    reason: `${sharedReason} Multiple pages tied for the strongest quote match.`,
+  };
+}
+
 export function locateSelectionInPageTexts(
   pages: LivePdfPageText[],
   selectionText: string,
   expectedPageIndex?: number | null,
+  options?: LocatePageTextOptions,
 ): LivePdfSelectionLocateResult {
+  const queryLabel = options?.queryLabel || "Selection";
+  const queryLabelLower = queryLabel.toLowerCase();
   const normalizedSelection = normalizeLocatorText(selectionText);
   if (!normalizedSelection) {
     return {
@@ -266,12 +738,13 @@ export function locateSelectionInPageTexts(
       confidence: "none",
       selectionText: sanitizeText(selectionText || "").trim(),
       normalizedSelection,
+      queryLabel,
       expectedPageIndex: expectedPageIndex ?? null,
       computedPageIndex: null,
       matchedPageIndexes: [],
       totalMatches: 0,
       pagesScanned: pages.length,
-      reason: "Selection text was empty.",
+      reason: `${queryLabel} text was empty.`,
     };
   }
   if (normalizedSelection.length < 12) {
@@ -280,12 +753,13 @@ export function locateSelectionInPageTexts(
       confidence: "none",
       selectionText: sanitizeText(selectionText || "").trim(),
       normalizedSelection,
+      queryLabel,
       expectedPageIndex: expectedPageIndex ?? null,
       computedPageIndex: null,
       matchedPageIndexes: [],
       totalMatches: 0,
       pagesScanned: pages.length,
-      reason: "Selection was too short for reliable page resolution.",
+      reason: `${queryLabel} was too short for reliable page resolution.`,
     };
   }
 
@@ -301,12 +775,29 @@ export function locateSelectionInPageTexts(
       confidence: "none",
       selectionText: sanitizeText(selectionText || "").trim(),
       normalizedSelection,
+      queryLabel,
       expectedPageIndex: expectedPageIndex ?? null,
       computedPageIndex: null,
       matchedPageIndexes,
       totalMatches,
       pagesScanned: pages.length,
-      reason: "The live PDF text search did not find the current selection.",
+      reason: `The live PDF text search did not find the current ${queryLabelLower}.`,
+    };
+  }
+  if (matches.length === 1 && totalMatches > 1 && options?.resolveSinglePageDuplicates) {
+    return {
+      status: "resolved",
+      confidence: confidence === "high" ? "low" : confidence,
+      selectionText: sanitizeText(selectionText || "").trim(),
+      normalizedSelection,
+      queryLabel,
+      expectedPageIndex: expectedPageIndex ?? null,
+      computedPageIndex: matches[0].pageIndex,
+      matchedPageIndexes,
+      totalMatches,
+      pagesScanned: pages.length,
+      excerpt: matches[0].excerpt,
+      reason: `The current ${queryLabelLower} matched multiple locations on the same page in the live PDF.`,
     };
   }
   if (matches.length > 1 || totalMatches > 1) {
@@ -315,13 +806,14 @@ export function locateSelectionInPageTexts(
       confidence: confidence === "high" ? "low" : confidence,
       selectionText: sanitizeText(selectionText || "").trim(),
       normalizedSelection,
+      queryLabel,
       expectedPageIndex: expectedPageIndex ?? null,
       computedPageIndex: null,
       matchedPageIndexes,
       totalMatches,
       pagesScanned: pages.length,
       excerpt: matches[0].excerpt,
-      reason: "The current selection matched more than one location in the live PDF.",
+      reason: `The current ${queryLabelLower} matched more than one location in the live PDF.`,
     };
   }
 
@@ -330,6 +822,7 @@ export function locateSelectionInPageTexts(
     confidence,
     selectionText: sanitizeText(selectionText || "").trim(),
     normalizedSelection,
+    queryLabel,
     expectedPageIndex: expectedPageIndex ?? null,
     computedPageIndex: matches[0].pageIndex,
     matchedPageIndexes,
@@ -337,6 +830,67 @@ export function locateSelectionInPageTexts(
     pagesScanned: pages.length,
     excerpt: matches[0].excerpt,
   };
+}
+
+export function locateQuoteInPageTexts(
+  pages: LivePdfPageText[],
+  quoteText: string,
+  expectedPageIndex?: number | null,
+): LivePdfSelectionLocateResult {
+  const cleanQuote = sanitizeText(quoteText || "").trim();
+  const exactResult = locateSelectionInPageTexts(
+    pages,
+    cleanQuote,
+    expectedPageIndex,
+    {
+      queryLabel: "Quote",
+      resolveSinglePageDuplicates: true,
+    },
+  );
+  if (exactResult.status === "resolved") {
+    return {
+      ...exactResult,
+      reason:
+        exactResult.reason ||
+        "The exact quote matched a single page in the live PDF text.",
+    };
+  }
+  if (
+    exactResult.status === "selection-too-short" ||
+    exactResult.status === "unavailable"
+  ) {
+    return exactResult;
+  }
+
+  const anchors = buildQuoteAnchors(cleanQuote);
+  if (!anchors.length) {
+    return exactResult;
+  }
+  const { scoreByPage, informativeAnchorCount, anchorSummaries } = scoreQuoteAnchorsAcrossPages(
+    pages,
+    anchors,
+  );
+  const debugSummary = buildQuoteDebugSummary(
+    scoreByPage,
+    anchorSummaries,
+    "Rendered",
+  );
+  const anchorResult = buildQuoteAnchorResult(
+    scoreByPage,
+    informativeAnchorCount,
+    cleanQuote,
+    expectedPageIndex ?? null,
+    pages.length,
+    exactResult.reason,
+    debugSummary,
+  );
+  if (
+    anchorResult.status === "resolved" ||
+    anchorResult.status === "ambiguous"
+  ) {
+    return anchorResult;
+  }
+  return exactResult.status === "ambiguous" ? exactResult : anchorResult;
 }
 
 function getPdfViewerApplication(reader: any): any | null {
@@ -438,6 +992,410 @@ function extractRenderedPageTexts(reader: any): {
   };
 }
 
+function getPagesCount(app: any): number {
+  const candidates = [app?.pagesCount, app?.pdfDocument?.numPages];
+  for (const candidate of candidates) {
+    const parsed = Number(candidate);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return Math.floor(parsed);
+    }
+  }
+  return 0;
+}
+
+function shouldRunExactQuoteQuery(quoteText: string): boolean {
+  const tokens = extractSearchTokens(quoteText);
+  return tokens.length > 0 && tokens.length <= 24 && quoteText.length <= 220;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForFindControllerPageMatches(
+  findController: any,
+  pagesCount: number,
+  expectedQuery: string,
+  timeoutMs = 4000,
+): Promise<unknown[]> {
+  const startedAt = Date.now();
+  let latestMatches: unknown[] = [];
+  while (Date.now() - startedAt < timeoutMs) {
+    if (String(findController?._rawQuery || "") !== expectedQuery) {
+      await delay(25);
+      continue;
+    }
+    const pageMatches = Array.isArray(findController?.pageMatches)
+      ? findController.pageMatches
+      : [];
+    if (pageMatches.length > latestMatches.length) {
+      latestMatches = pageMatches;
+    }
+    const pendingSize =
+      typeof findController?._pendingFindMatches?.size === "number"
+        ? findController._pendingFindMatches.size
+        : 0;
+    const pagesToSearch = Number.isFinite(findController?._pagesToSearch)
+      ? Number(findController._pagesToSearch)
+      : null;
+    if ((pageMatches.length >= pagesCount || pagesToSearch === 0) && pendingSize === 0) {
+      return pageMatches;
+    }
+    await delay(50);
+  }
+  return latestMatches;
+}
+
+function summarizeFindControllerMatches(pageMatches: unknown[]): {
+  matchedPageIndexes: number[];
+  totalMatches: number;
+  pageMatchCounts: number[];
+} {
+  const matchedPageIndexes: number[] = [];
+  const pageMatchCounts: number[] = [];
+  let totalMatches = 0;
+  for (let pageIndex = 0; pageIndex < pageMatches.length; pageIndex += 1) {
+    const matches: unknown[] = Array.isArray(pageMatches[pageIndex])
+      ? (pageMatches[pageIndex] as unknown[])
+      : [];
+    if (!matches.length) continue;
+    matchedPageIndexes.push(pageIndex);
+    pageMatchCounts[pageIndex] = matches.length;
+    totalMatches += matches.length;
+  }
+  return { matchedPageIndexes, totalMatches, pageMatchCounts };
+}
+
+async function searchFindControllerForQuery(
+  reader: any,
+  query: string,
+): Promise<{
+  matchedPageIndexes: number[];
+  totalMatches: number;
+  pagesCount: number;
+  pageMatchCounts: number[];
+} | null> {
+  const app = getPdfViewerApplication(reader);
+  const findController = app?.findController;
+  const eventBus = app?.eventBus;
+  const pagesCount = getPagesCount(app);
+  if (!findController || !eventBus || pagesCount < 1) {
+    return null;
+  }
+
+  eventBus.dispatch("find", {
+    source: { source: "llm-live-quote-demo" },
+    type: "",
+    query,
+    phraseSearch: true,
+    caseSensitive: false,
+    entireWord: false,
+    highlightAll: false,
+    findPrevious: false,
+    matchDiacritics: false,
+  });
+
+  const pageMatches = await waitForFindControllerPageMatches(
+    findController,
+    pagesCount,
+    query,
+  );
+  return {
+    ...summarizeFindControllerMatches(pageMatches),
+    pagesCount,
+  };
+}
+
+function buildFindControllerQuoteResult(
+  quoteText: string,
+  expectedPageIndex: number | null,
+  searchResult: {
+    matchedPageIndexes: number[];
+    totalMatches: number;
+    pagesCount: number;
+  },
+  reason: string,
+  confidence: LivePdfSelectionLocateConfidence,
+  computedPageIndex: number | null,
+  debugSummary?: string[],
+): LivePdfSelectionLocateResult {
+  return {
+    status: computedPageIndex === null ? "ambiguous" : "resolved",
+    confidence,
+    selectionText: sanitizeText(quoteText || "").trim(),
+    normalizedSelection: normalizeLocatorText(quoteText),
+    queryLabel: "Quote",
+    expectedPageIndex,
+    computedPageIndex,
+    matchedPageIndexes: searchResult.matchedPageIndexes,
+    totalMatches: searchResult.totalMatches,
+    pagesScanned: searchResult.pagesCount,
+    debugSummary,
+    reason,
+  };
+}
+
+function buildPageTextQuoteResult(
+  quoteText: string,
+  expectedPageIndex: number | null,
+  searchResult: {
+    matchedPageIndexes: number[];
+    totalMatches: number;
+    excerpt?: string;
+  },
+  pagesScanned: number,
+  reason: string,
+  confidence: LivePdfSelectionLocateConfidence,
+  computedPageIndex: number | null,
+  debugSummary?: string[],
+): LivePdfSelectionLocateResult {
+  return {
+    status: computedPageIndex === null ? "ambiguous" : "resolved",
+    confidence,
+    selectionText: sanitizeText(quoteText || "").trim(),
+    normalizedSelection: normalizeLocatorText(quoteText),
+    queryLabel: "Quote",
+    expectedPageIndex,
+    computedPageIndex,
+    matchedPageIndexes: searchResult.matchedPageIndexes,
+    totalMatches: searchResult.totalMatches,
+    pagesScanned,
+    excerpt: searchResult.excerpt,
+    debugSummary,
+    reason,
+  };
+}
+
+function locateQuoteProgressivelyInPageTexts(
+  pages: LivePdfPageText[],
+  quoteText: string,
+  expectedPageIndex: number | null,
+): {
+  result: LivePdfSelectionLocateResult | null;
+  debugSummary: string[];
+} {
+  const tokens = extractSearchTokens(quoteText);
+  const pageIndexEntries = buildPageTextIndex(pages);
+  const debugSummary: string[] = [];
+  const minQueryLength = tokens.length >= 12 ? 4 : 3;
+  const maxQueryLength = Math.min(tokens.length, 14);
+  for (const offset of getProgressiveStartOffsets(tokens)) {
+    for (
+      let queryLength = minQueryLength;
+      queryLength <= maxQueryLength && offset + queryLength <= tokens.length;
+      queryLength += 1
+    ) {
+      const query = tokens.slice(offset, offset + queryLength).join(" ");
+      const searchResult = searchPageIndexEntries(pageIndexEntries, query);
+      debugSummary.push(
+        `Rendered prefix query: "${formatQuerySnippet(query)}" -> ${formatPageList(searchResult.matchedPageIndexes)}`,
+      );
+      if (searchResult.matchedPageIndexes.length === 1) {
+        return {
+          result: buildPageTextQuoteResult(
+            quoteText,
+            expectedPageIndex,
+            searchResult,
+            pages.length,
+            "The progressive rendered-page quote search found a unique page.",
+            queryLength >= 6 ? "high" : "medium",
+            searchResult.matchedPageIndexes[0],
+            debugSummary,
+          ),
+          debugSummary,
+        };
+      }
+      if (!searchResult.matchedPageIndexes.length) {
+        break;
+      }
+    }
+  }
+  return { result: null, debugSummary };
+}
+
+async function locateQuoteProgressivelyWithFindController(
+  reader: any,
+  quoteText: string,
+  expectedPageIndex: number | null,
+): Promise<{
+  result: LivePdfSelectionLocateResult | null;
+  debugSummary: string[];
+}> {
+  const tokens = extractSearchTokens(quoteText);
+  const debugSummary: string[] = [];
+  const minQueryLength = tokens.length >= 12 ? 4 : 3;
+  const maxQueryLength = Math.min(tokens.length, 14);
+  for (const offset of getProgressiveStartOffsets(tokens)) {
+    for (
+      let queryLength = minQueryLength;
+      queryLength <= maxQueryLength && offset + queryLength <= tokens.length;
+      queryLength += 1
+    ) {
+      const query = tokens.slice(offset, offset + queryLength).join(" ");
+      const searchResult = await searchFindControllerForQuery(reader, query);
+      if (!searchResult) {
+        return { result: null, debugSummary };
+      }
+      debugSummary.push(
+        `Progressive query: "${formatQuerySnippet(query)}" -> ${formatPageList(searchResult.matchedPageIndexes)}`,
+      );
+      if (searchResult.matchedPageIndexes.length === 1) {
+        return {
+          result: buildFindControllerQuoteResult(
+            quoteText,
+            expectedPageIndex,
+            searchResult,
+            "The live reader progressive quote search found a unique page.",
+            searchResult.totalMatches > 1 ? "medium" : "high",
+            searchResult.matchedPageIndexes[0],
+            debugSummary,
+          ),
+          debugSummary,
+        };
+      }
+      if (!searchResult.matchedPageIndexes.length) {
+        break;
+      }
+    }
+  }
+  return { result: null, debugSummary };
+}
+
+async function locateQuoteWithFindController(
+  reader: any,
+  quoteText: string,
+): Promise<LivePdfSelectionLocateResult | null> {
+  const app = getPdfViewerApplication(reader);
+  const pagesCount = getPagesCount(app);
+  if (pagesCount < 1) {
+    return null;
+  }
+
+  const expectedPageIndex = getExpectedPageIndex(reader, app);
+  const cleanQuote = sanitizeText(quoteText || "").trim();
+  const exactQuery = extractSearchTokens(cleanQuote).join(" ");
+  const exactResult = shouldRunExactQuoteQuery(cleanQuote) && exactQuery
+    ? await searchFindControllerForQuery(reader, exactQuery)
+    : null;
+  if (exactResult?.matchedPageIndexes.length === 1) {
+    return buildFindControllerQuoteResult(
+      cleanQuote,
+      expectedPageIndex,
+      exactResult,
+      exactResult.totalMatches > 1
+        ? "The live reader full-document exact-quote search found the quote multiple times on the same page."
+        : "The live reader full-document exact-quote search found the quote on a single page.",
+      exactResult.totalMatches > 1 ? "low" : "high",
+      exactResult.matchedPageIndexes[0],
+      [`Exact query -> ${formatPageList(exactResult.matchedPageIndexes)}`],
+    );
+  }
+
+  const progressiveResult = await locateQuoteProgressivelyWithFindController(
+    reader,
+    cleanQuote,
+    expectedPageIndex,
+  );
+  if (progressiveResult.result) {
+    return progressiveResult.result;
+  }
+
+  const anchors = buildQuoteAnchors(cleanQuote);
+  const scoreByPage = new Map<number, QuotePageScore>();
+  const informativeAnchorKeys = new Set<string>();
+  const anchorSummaries = [...progressiveResult.debugSummary];
+  let earlyStopReason: string | undefined;
+  for (let anchorIndex = 0; anchorIndex < anchors.length; anchorIndex += 1) {
+    const anchor = anchors[anchorIndex];
+    const skipReason = getQuoteAnchorSkipReason(anchor);
+    if (skipReason) {
+      anchorSummaries.push(`Anchor skipped: "${anchor}" (${skipReason})`);
+      continue;
+    }
+    const anchorResult = await searchFindControllerForQuery(reader, anchor);
+    if (!anchorResult?.matchedPageIndexes.length) {
+      anchorSummaries.push(`Anchor miss: "${anchor}"`);
+      continue;
+    }
+    if (
+      anchorResult.matchedPageIndexes.length >
+      Math.max(3, Math.ceil(anchorResult.pagesCount * 0.35))
+    ) {
+      anchorSummaries.push(
+        `Anchor skipped: "${anchor}" (too broad: ${formatPageList(anchorResult.matchedPageIndexes)})`,
+      );
+      continue;
+    }
+    const normalizedAnchor = normalizeLocatorText(anchor);
+    informativeAnchorKeys.add(normalizedAnchor);
+    anchorSummaries.push(
+      `Anchor hit: "${anchor}" -> ${formatPageList(anchorResult.matchedPageIndexes)}`,
+    );
+    for (const pageIndex of anchorResult.matchedPageIndexes) {
+      const score = scoreByPage.get(pageIndex) || {
+        pageIndex,
+        matchedAnchorKeys: new Set<string>(),
+        totalMatches: 0,
+      };
+      score.matchedAnchorKeys.add(normalizedAnchor);
+      score.totalMatches += anchorResult.pageMatchCounts[pageIndex] || 0;
+      scoreByPage.set(pageIndex, score);
+    }
+    const remainingAnchors = anchors.length - anchorIndex - 1;
+    if (shouldEarlyStopQuoteVoting(scoreByPage, remainingAnchors)) {
+      const leadingPage = Array.from(scoreByPage.values()).sort(
+        (left, right) => right.matchedAnchorKeys.size - left.matchedAnchorKeys.size,
+      )[0];
+      earlyStopReason = `Early stop: page ${leadingPage.pageIndex + 1} cannot be overtaken with ${remainingAnchors} anchors remaining.`;
+      break;
+    }
+  }
+
+  const debugSummary = buildQuoteDebugSummary(
+    scoreByPage,
+    anchorSummaries,
+    "Find",
+    earlyStopReason,
+  );
+  const anchorScoreResult = buildQuoteAnchorResult(
+    scoreByPage,
+    informativeAnchorKeys.size,
+    cleanQuote,
+    expectedPageIndex,
+    pagesCount,
+    "The live reader full-document search did not find the current quote.",
+    debugSummary,
+  );
+  if (
+    anchorScoreResult.status === "resolved" ||
+    anchorScoreResult.status === "ambiguous"
+  ) {
+    return {
+      ...anchorScoreResult,
+      reason: anchorScoreResult.reason
+        ? `${anchorScoreResult.reason} This result came from the live reader full-document anchor search.`
+        : "This result came from the live reader full-document anchor search.",
+    };
+  }
+
+  if (exactResult?.matchedPageIndexes.length) {
+    return {
+      ...buildFindControllerQuoteResult(
+        cleanQuote,
+        expectedPageIndex,
+        exactResult,
+        "The live reader full-document exact-quote search found the quote on multiple pages.",
+        "low",
+        null,
+        [`Exact query -> ${formatPageList(exactResult.matchedPageIndexes)}`],
+      ),
+      status: "ambiguous",
+    };
+  }
+
+  return anchorScoreResult;
+}
+
 export async function locateCurrentSelectionInLivePdfReader(
   reader: any,
   selectionText: string,
@@ -449,6 +1407,7 @@ export async function locateCurrentSelectionInLivePdfReader(
       confidence: "none",
       selectionText: cleanSelection,
       normalizedSelection: "",
+      queryLabel: "Selection",
       expectedPageIndex: null,
       computedPageIndex: null,
       matchedPageIndexes: [],
@@ -471,6 +1430,7 @@ export async function locateCurrentSelectionInLivePdfReader(
         confidence: "none",
         selectionText: cleanSelection,
         normalizedSelection: normalizeLocatorText(cleanSelection),
+        queryLabel: "Selection",
         expectedPageIndex,
         computedPageIndex: null,
         matchedPageIndexes: [],
@@ -480,7 +1440,9 @@ export async function locateCurrentSelectionInLivePdfReader(
       };
     }
 
-    const result = locateSelectionInPageTexts(pages, cleanSelection, expectedPageIndex);
+    const result = locateSelectionInPageTexts(pages, cleanSelection, expectedPageIndex, {
+      queryLabel: "Selection",
+    });
     if (result.status === "resolved" && result.reason) {
       return {
         ...result,
@@ -495,12 +1457,129 @@ export async function locateCurrentSelectionInLivePdfReader(
       confidence: "none",
       selectionText: cleanSelection,
       normalizedSelection: normalizeLocatorText(cleanSelection),
+      queryLabel: "Selection",
       expectedPageIndex: getExpectedPageIndex(reader, getPdfViewerApplication(reader)),
       computedPageIndex: null,
       matchedPageIndexes: [],
       totalMatches: 0,
       pagesScanned: 0,
       reason: `Live reader locator failed: ${message}`,
+    };
+  }
+}
+
+export async function locateQuoteInLivePdfReader(
+  reader: any,
+  quoteText: string,
+): Promise<LivePdfSelectionLocateResult> {
+  const cleanQuote = sanitizeText(quoteText || "").trim();
+  if (!cleanQuote) {
+    return {
+      status: "unavailable",
+      confidence: "none",
+      selectionText: cleanQuote,
+      normalizedSelection: "",
+      queryLabel: "Quote",
+      expectedPageIndex: null,
+      computedPageIndex: null,
+      matchedPageIndexes: [],
+      totalMatches: 0,
+      pagesScanned: 0,
+      reason: "No quote text was provided.",
+    };
+  }
+
+  try {
+    const { pages, expectedPageIndex } = extractRenderedPageTexts(reader);
+    if (pages.length) {
+      const progressiveRenderedResult = locateQuoteProgressivelyInPageTexts(
+        pages,
+        cleanQuote,
+        expectedPageIndex,
+      );
+      if (progressiveRenderedResult.result) {
+        return progressiveRenderedResult.result;
+      }
+
+      const fullDocumentResult = await locateQuoteWithFindController(reader, cleanQuote);
+      if (
+        fullDocumentResult &&
+        (fullDocumentResult.status === "resolved" || fullDocumentResult.status === "ambiguous")
+      ) {
+        return fullDocumentResult;
+      }
+
+      const renderedResult = locateQuoteInPageTexts(
+        pages,
+        cleanQuote,
+        expectedPageIndex,
+      );
+      if (progressiveRenderedResult.debugSummary.length) {
+        renderedResult.debugSummary = [
+          ...progressiveRenderedResult.debugSummary,
+          ...(renderedResult.debugSummary || []),
+        ].slice(0, 10);
+      }
+      if (renderedResult.status !== "not-found") {
+        return {
+          ...renderedResult,
+          reason: renderedResult.reason
+            ? `${renderedResult.reason} This result came from the currently rendered live reader pages.`
+            : "This result came from the currently rendered live reader pages.",
+        };
+      }
+      if (fullDocumentResult?.reason) {
+        return {
+          ...renderedResult,
+          debugSummary: [
+            ...progressiveRenderedResult.debugSummary,
+            ...(renderedResult.debugSummary || []),
+          ].slice(0, 10),
+          reason: `${fullDocumentResult.reason} Rendered-page fallback also did not find it.`,
+        };
+      }
+      return renderedResult;
+    }
+
+    const fullDocumentResult = await locateQuoteWithFindController(reader, cleanQuote);
+    if (
+      fullDocumentResult &&
+      (fullDocumentResult.status === "resolved" || fullDocumentResult.status === "ambiguous")
+    ) {
+      return fullDocumentResult;
+    }
+
+    if (fullDocumentResult) {
+      return fullDocumentResult;
+    }
+
+    return {
+      status: "unavailable",
+      confidence: "none",
+      selectionText: cleanQuote,
+      normalizedSelection: normalizeLocatorText(cleanQuote),
+      queryLabel: "Quote",
+      expectedPageIndex: getExpectedPageIndex(reader, getPdfViewerApplication(reader)),
+      computedPageIndex: null,
+      matchedPageIndexes: [],
+      totalMatches: 0,
+      pagesScanned: 0,
+      reason: "The active reader did not expose a live quote-search path or rendered page text.",
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      status: "unavailable",
+      confidence: "none",
+      selectionText: cleanQuote,
+      normalizedSelection: normalizeLocatorText(cleanQuote),
+      queryLabel: "Quote",
+      expectedPageIndex: getExpectedPageIndex(reader, getPdfViewerApplication(reader)),
+      computedPageIndex: null,
+      matchedPageIndexes: [],
+      totalMatches: 0,
+      pagesScanned: 0,
+      reason: `Live quote locator failed: ${message}`,
     };
   }
 }

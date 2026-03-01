@@ -36,6 +36,7 @@ export type PanelDomRefs = {
   slashUploadOption: HTMLButtonElement | null;
   slashReferenceOption: HTMLButtonElement | null;
   slashLocateSelectionOption: HTMLButtonElement | null;
+  slashLocateQuoteOption: HTMLButtonElement | null;
   contextAgentToggleBtn: HTMLButtonElement | null;
   imagePreview: HTMLDivElement | null;
   selectedContextList: HTMLDivElement | null;
@@ -165,6 +166,9 @@ export function getPanelDomRefs(body: Element): PanelDomRefs {
     ) as HTMLButtonElement | null,
     slashLocateSelectionOption: body.querySelector(
       "#llm-slash-locate-selection-option",
+    ) as HTMLButtonElement | null,
+    slashLocateQuoteOption: body.querySelector(
+      "#llm-slash-locate-quote-option",
     ) as HTMLButtonElement | null,
     contextAgentToggleBtn: body.querySelector(
       "#llm-context-agent-toggle",
