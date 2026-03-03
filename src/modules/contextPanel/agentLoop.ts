@@ -164,6 +164,7 @@ function buildToolContext(
     availableContextBudgetTokens: params.availableContextBudgetTokens,
     apiBase: params.apiBase,
     apiKey: params.apiKey,
+    model: params.model,
     onTrace: params.onTrace,
     onStatus: params.onStatus,
   };

@@ -171,6 +171,9 @@ function buildAgentTraceHtml(
     read_paper_text: "Read Paper",
     read_references: "Read References",
     list_papers: "Search Library",
+    get_paper_sections: "Paper Sections",
+    search_paper_content: "Search Content",
+    write_note: "Write Note",
   };
 
   function prettyTarget(raw: string): string {
@@ -441,6 +444,49 @@ function buildAgentTraceHtml(
     // ── Grounding done — intentionally suppressed from display ────────────────
     if (/^Grounding the answer from \d+ paper/i.test(t)) {
       continue;
+    }
+
+    // ── Paper sections found ──────────────────────────────────────────────────
+    {
+      const m = t.match(/^Found (\d+) sections? in (.+?)\.$/);
+      if (m) {
+        const r = row("ok");
+        r.appendChild(el("span", "llm-at-icon", "\u2726"));
+        r.appendChild(el("span", "llm-at-ok-text", `${m[1]} section${Number(m[1]) !== 1 ? "s" : ""}`))
+        r.appendChild(el("span", "llm-at-sep", "\u00B7"));
+        r.appendChild(el("span", "llm-at-paper-label", trunc(m[2]!)));
+        container.appendChild(r);
+        continue;
+      }
+    }
+
+    // ── Content search matches ────────────────────────────────────────────────
+    {
+      const m = t.match(/^Found (\d+) matches? for \u201C(.+?)\u201D in (.+?)\.$/) ||
+                t.match(/^Found (\d+) matches? for "(.+?)" in (.+?)\.?$/);
+      if (m) {
+        const r = row("ok");
+        r.appendChild(el("span", "llm-at-icon", "\u2726"));
+        r.appendChild(el("span", "llm-at-ok-text", `${m[1]} match${Number(m[1]) !== 1 ? "es" : ""}`));
+        r.appendChild(el("span", "llm-at-sep", "\u00B7"));
+        r.appendChild(el("span", "llm-at-paper-label", `\u201C${trunc(m[2]!, 30)}\u201D`));
+        container.appendChild(r);
+        continue;
+      }
+    }
+
+    // ── Note written ──────────────────────────────────────────────────────────
+    {
+      const m = t.match(/^Note written for (.+?)\.$/);
+      if (m) {
+        const r = row("ok");
+        r.appendChild(el("span", "llm-at-icon", "\uD83D\uDCDD"));
+        r.appendChild(el("span", "llm-at-ok-text", "Note saved"));
+        r.appendChild(el("span", "llm-at-sep", "\u00B7"));
+        r.appendChild(el("span", "llm-at-paper-label", trunc(m[1]!)));
+        container.appendChild(r);
+        continue;
+      }
     }
 
     // ── LLM thought fallback ──────────────────────────────────────────────────

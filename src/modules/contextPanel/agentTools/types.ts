@@ -4,7 +4,10 @@ export type AgentToolName =
   | "read_paper_text"
   | "find_claim_evidence"
   | "read_references"
-  | "list_papers";
+  | "list_papers"
+  | "get_paper_sections"
+  | "search_paper_content"
+  | "write_note";
 
 export type AgentToolTarget =
   | { scope: "active-paper" }
@@ -60,6 +63,7 @@ export type AgentToolExecutionContext = {
   availableContextBudgetTokens?: number;
   apiBase?: string;
   apiKey?: string;
+  model?: string;
   onTrace?: (line: string) => void;
   onStatus?: (line: string) => void;
 };

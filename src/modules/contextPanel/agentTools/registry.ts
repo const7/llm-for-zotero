@@ -18,6 +18,18 @@ import {
   validateReadReferencesCall,
 } from "./tools/readReferences";
 import { validateListPapersCall } from "./tools/listPapers";
+import {
+  executeGetPaperSectionsCall,
+  validateGetPaperSectionsCall,
+} from "./tools/getPaperSections";
+import {
+  executeSearchPaperContentCall,
+  validateSearchPaperContentCall,
+} from "./tools/searchPaperContent";
+import {
+  executeWriteNoteCall,
+  validateWriteNoteCall,
+} from "./tools/writeNote";
 
 export type AgentToolDefinition = {
   name: AgentToolName;
@@ -67,6 +79,30 @@ const AGENT_TOOL_DEFINITIONS: AgentToolDefinition[] = [
     callExample: '{"name":"read_references","target":{"scope":"selected-paper","index":1}}',
     validate: validateReadReferencesCall,
     execute: executeReadReferencesCall,
+  },
+  {
+    name: "get_paper_sections",
+    plannerDescription:
+      "list the sections and structure of one paper; useful for understanding layout before targeted retrieval",
+    callExample: '{"name":"get_paper_sections","target":{"scope":"active-paper"}}',
+    validate: validateGetPaperSectionsCall,
+    execute: executeGetPaperSectionsCall,
+  },
+  {
+    name: "search_paper_content",
+    plannerDescription:
+      "keyword search inside one paper's full text; use when you need to find all passages mentioning a specific term or phrase",
+    callExample: '{"name":"search_paper_content","target":{"scope":"active-paper"},"query":"keyword or phrase"}',
+    validate: validateSearchPaperContentCall,
+    execute: executeSearchPaperContentCall,
+  },
+  {
+    name: "write_note",
+    plannerDescription:
+      "generate and save a structured reading note for one paper to Zotero; use the query field to specify what the note should contain (extracted from the user's request)",
+    callExample: '{"name":"write_note","target":{"scope":"active-paper"},"query":"one sentence key point"}',
+    validate: validateWriteNoteCall,
+    execute: executeWriteNoteCall,
   },
 ];
 

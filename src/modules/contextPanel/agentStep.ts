@@ -137,6 +137,9 @@ function buildStepPrompt(ctx: AgentStepContext): string {
     "- Never repeat a tool call that already appears in \"Steps taken so far\". If a tool shows \"complete\" in the steps, choose stop instead.",
     "- Use find_claim_evidence only when you need specific quoted evidence. For general or conceptual questions already covered by paper context, stop instead.",
     "- Prefer read_references when the user asks what a paper cites.",
+    "- Use write_note when the user explicitly asks to write, create, or save a note for a paper. Always populate the query field with the note content instruction extracted from the user's request, stripping agent-directive phrases like 'into the note' or 'save to Zotero'. Example: user says 'write one sentence key point into the note' → query: \"write one sentence key point\". If no specific format is requested, omit query.",
+    "- Use search_paper_content when the user asks to find or locate a specific term, phrase, or passage within a paper.",
+    "- Use get_paper_sections to inspect a paper's structure before targeted retrieval.",
     "- Call list_papers before using retrieved-paper#N targets (they don't exist yet otherwise).",
     "- traceLines: exactly 1 short action line (\u2264 80 chars). State what you are doing or why you are stopping. No multi-sentence reasoning.",
     "",
@@ -251,14 +254,28 @@ function normalizeToolCall(value: unknown): AgentToolCall | null {
     return { name: "list_papers", query: query || undefined, limit };
   }
 
-  const paperTools = ["read_paper_text", "find_claim_evidence", "read_references"] as const;
-  if (paperTools.includes(name as (typeof paperTools)[number])) {
+  const targetOnlyTools = ["read_paper_text", "find_claim_evidence", "read_references", "get_paper_sections", "write_note"] as const;
+  if (targetOnlyTools.includes(name as (typeof targetOnlyTools)[number])) {
     const target = normalizeToolTarget(typed.target);
     if (!target) return null;
-    return {
-      name: name as (typeof paperTools)[number],
+    const call: AgentToolCall = {
+      name: name as (typeof targetOnlyTools)[number],
       target,
     };
+    // write_note accepts an optional query as a topic focus
+    if (name === "write_note") {
+      const query = sanitizeText(String(typed.query || "")).trim();
+      if (query) (call as AgentToolCall).query = query;
+    }
+    return call;
+  }
+
+  if (name === "search_paper_content") {
+    const target = normalizeToolTarget(typed.target);
+    if (!target) return null;
+    const query = sanitizeText(String(typed.query || "")).trim();
+    if (!query) return null;
+    return { name: "search_paper_content", target, query };
   }
 
   return null;
