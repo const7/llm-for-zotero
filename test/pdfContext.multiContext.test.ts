@@ -1,5 +1,6 @@
 import { assert } from "chai";
 import {
+  buildChunkMetadata,
   buildFullPaperContext,
   buildPaperKey,
   buildPaperRetrievalCandidates,
@@ -43,6 +44,7 @@ function buildPdfContext(chunks: string[]): PdfContext {
   return {
     title: "Mock Paper",
     chunks,
+    chunkMeta: buildChunkMetadata(chunks),
     chunkStats,
     docFreq,
     avgChunkLength,
@@ -91,19 +93,24 @@ describe("pdfContext multi-context helpers", function () {
     const text = buildFullPaperContext(paper, context);
     assert.include(text, "Title: Paper B");
     assert.include(text, "Citation key: Smith2023");
+    assert.include(text, "Source label: (Smith et al., 2023)");
+    assert.include(text, "Answer format when quoting this paper:");
     assert.include(text, "Paper Text:");
   });
 
-  it("renders evidence pack with stable chunk labels", function () {
+  it("renders evidence pack with quote-plus-source formatting", function () {
     const paperA: PaperContextRef = {
       itemId: 1,
       contextItemId: 11,
       title: "Paper A",
+      firstCreator: "Zheng",
+      year: "2026",
     };
     const paperB: PaperContextRef = {
       itemId: 2,
       contextItemId: 22,
       title: "Paper B",
+      citationKey: "Smith2023",
     };
     const rendered = renderEvidencePack({
       papers: [paperA, paperB],
@@ -113,8 +120,11 @@ describe("pdfContext multi-context helpers", function () {
           itemId: 1,
           contextItemId: 11,
           title: "Paper A",
+          firstCreator: "Zheng",
+          year: "2026",
           chunkIndex: 3,
-          chunkText: "Shared claim A",
+          chunkText:
+            "Abstract\nDespite global representational drift, the relative geometry remained stable across conditions.",
           estimatedTokens: 8,
           bm25Score: 0.7,
           embeddingScore: 0.1,
@@ -125,6 +135,7 @@ describe("pdfContext multi-context helpers", function () {
           itemId: 2,
           contextItemId: 22,
           title: "Paper B",
+          citationKey: "Smith2023",
           chunkIndex: 1,
           chunkText: "Shared claim B",
           estimatedTokens: 8,
@@ -134,7 +145,31 @@ describe("pdfContext multi-context helpers", function () {
         },
       ],
     });
-    assert.include(rendered, "[P1-C4]");
-    assert.include(rendered, "[P2-C2]");
+    assert.include(
+      rendered,
+      "Paper-grounded citation format for the final answer:",
+    );
+    assert.include(rendered, "Source label: (Zheng et al., 2026)");
+    assert.include(
+      rendered,
+      "> Despite global representational drift, the relative geometry remained stable across conditions.",
+    );
+    assert.include(rendered, "Source label: (Paper 2)");
+    assert.include(rendered, "> Shared claim B");
+    assert.notInclude(rendered, "[P1-C4]");
+  });
+
+  it("builds chunk metadata with section labels and cleaned anchors", function () {
+    const metadata = buildChunkMetadata([
+      "Results\n\n23 activity. Representational drift increases over days.",
+    ]);
+    assert.lengthOf(metadata, 1);
+    assert.equal(metadata[0].sectionLabel, "Results");
+    assert.equal(metadata[0].chunkKind, "results");
+    assert.equal(
+      metadata[0].anchorText,
+      "Representational drift increases over days.",
+    );
+    assert.isTrue(Boolean(metadata[0].leadingNoiseRemoved));
   });
 });

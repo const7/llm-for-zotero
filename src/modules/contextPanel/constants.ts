@@ -6,6 +6,7 @@ import { ReasoningLevel as LLMReasoningLevel } from "../../utils/llmClient";
 // =============================================================================
 
 export const PANE_ID = "llm-context-panel";
+export const PREFERENCES_PANE_ID = `${config.addonRef}-preferences`;
 export const CHUNK_TARGET_LENGTH = 2000;
 export const CHUNK_OVERLAP = 200;
 export const EMBEDDING_BATCH_SIZE = 16;
@@ -15,7 +16,6 @@ export const RETRIEVAL_TOP_K_PER_PAPER = 24;
 export const RETRIEVAL_MMR_LAMBDA = 0.7;
 export const RETRIEVAL_MIN_ACTIVE_PAPER_CHUNKS = 2;
 export const RETRIEVAL_MIN_OTHER_PAPER_CHUNKS = 1;
-export const MAX_HISTORY_MESSAGES = 12;
 export const PERSISTED_HISTORY_LIMIT = 200;
 export const AUTO_SCROLL_BOTTOM_THRESHOLD = 64;
 export const FONT_SCALE_DEFAULT_PERCENT = 120;
@@ -28,7 +28,7 @@ export const MAX_SELECTED_TEXT_CONTEXTS = 5;
 export const MAX_EDITABLE_SHORTCUTS = 10;
 export const MAX_SELECTED_IMAGES = 10;
 export const MAX_UPLOAD_PDF_SIZE_BYTES = 50 * 1024 * 1024;
-export const MAX_SELECTED_PAPER_CONTEXTS = 5;
+export const MAX_SELECTED_PAPER_CONTEXTS = 10;
 export const CHAT_ATTACHMENTS_DIR_NAME = "chat-attachments";
 export const PAPER_CONVERSATION_KEY_BASE = 1_500_000_000;
 export const GLOBAL_CONVERSATION_KEY_BASE = 2_000_000_000;

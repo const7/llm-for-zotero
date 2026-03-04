@@ -57,6 +57,7 @@ export function normalizePaperContextRefs(
     if (!itemId || !contextItemId) continue;
     const title = normalizeText(typed.title, sanitize);
     if (!title) continue;
+    const attachmentTitle = normalizeText(typed.attachmentTitle, sanitize);
     const citationKey = normalizeText(typed.citationKey, sanitize);
     const firstCreator = normalizeText(typed.firstCreator, sanitize);
     const year = normalizeText(typed.year, sanitize);
@@ -67,6 +68,7 @@ export function normalizePaperContextRefs(
       itemId,
       contextItemId,
       title,
+      attachmentTitle: attachmentTitle || undefined,
       citationKey: citationKey || undefined,
       firstCreator: firstCreator || undefined,
       year: year || undefined,
@@ -101,12 +103,14 @@ export function normalizeSelectedTextPaperContexts(
       continue;
     }
     const citationKey = normalizeText(typed.citationKey, sanitize);
+    const attachmentTitle = normalizeText(typed.attachmentTitle, sanitize);
     const firstCreator = normalizeText(typed.firstCreator, sanitize);
     const year = normalizeText(typed.year, sanitize);
     out.push({
       itemId,
       contextItemId,
       title,
+      attachmentTitle: attachmentTitle || undefined,
       citationKey: citationKey || undefined,
       firstCreator: firstCreator || undefined,
       year: year || undefined,

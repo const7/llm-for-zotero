@@ -11,6 +11,7 @@ import { normalizePaperContextRefs } from "./normalizers";
 import { resolvePaperContextRefFromAttachment } from "./paperAttribution";
 import {
   buildFullPaperContext,
+  buildTruncatedFullPaperContext,
   buildPaperKey,
   buildPaperRetrievalCandidates,
   ensurePDFTextCached,
@@ -307,6 +308,97 @@ export function assembleFullMultiPaperContext(params: {
   };
 }
 
+function formatFullPaperBlock(params: {
+  paper: PlannerPaperEntry;
+  index: number;
+  text: string;
+}): string {
+  return `Paper ${params.index + 1}\n${params.text.trim()}`;
+}
+
+function buildFullPaperContextWrapper(blocks: string[]): string {
+  if (!blocks.length) return "";
+  return `Full Paper Contexts:\n\n${blocks.join("\n\n---\n\n")}`;
+}
+
+function assembleBestEffortFullMultiPaperContext(params: {
+  papers: PlannerPaperEntry[];
+  contextBudgetTokens: number;
+}): {
+  contextText: string;
+  estimatedTokens: number;
+  selectedPaperCount: number;
+  includedPaperKeys: Set<string>;
+} {
+  const blocks: string[] = [];
+  const includedPaperKeys = new Set<string>();
+  const budget = Math.max(0, Math.floor(params.contextBudgetTokens));
+  if (!params.papers.length || budget <= 0) {
+    return {
+      contextText: "",
+      estimatedTokens: 0,
+      selectedPaperCount: 0,
+      includedPaperKeys,
+    };
+  }
+
+  for (const [index, paper] of params.papers.entries()) {
+    const fullBlock = formatFullPaperBlock({
+      paper,
+      index,
+      text: buildFullPaperContext(paper.paperContext, paper.pdfContext),
+    });
+    const fullCombined = buildFullPaperContextWrapper([...blocks, fullBlock]);
+    const fullCombinedTokens = estimateTextTokens(fullCombined);
+    if (fullCombinedTokens <= budget) {
+      blocks.push(fullBlock);
+      includedPaperKeys.add(paper.paperKey);
+      continue;
+    }
+
+    const currentCombined = buildFullPaperContextWrapper(blocks);
+    const currentTokens = estimateTextTokens(currentCombined);
+    const separatorTokens = estimateTextTokens(blocks.length ? "\n\n---\n\n" : "");
+    const paperHeadingTokens = estimateTextTokens(`Paper ${index + 1}\n`);
+    const wrapperTokens = blocks.length
+      ? 0
+      : estimateTextTokens("Full Paper Contexts:\n\n");
+    const remainingForPaper =
+      budget - currentTokens - separatorTokens - paperHeadingTokens - wrapperTokens;
+    if (remainingForPaper <= 0) {
+      continue;
+    }
+
+    const truncated = buildTruncatedFullPaperContext(
+      paper.paperContext,
+      paper.pdfContext,
+      { maxTokens: remainingForPaper },
+    );
+    const truncatedBlock = formatFullPaperBlock({
+      paper,
+      index,
+      text: truncated.text,
+    });
+    const truncatedCombined = buildFullPaperContextWrapper([
+      ...blocks,
+      truncatedBlock,
+    ]);
+    if (estimateTextTokens(truncatedCombined) > budget) {
+      continue;
+    }
+    blocks.push(truncatedBlock);
+    includedPaperKeys.add(paper.paperKey);
+  }
+
+  const contextText = buildFullPaperContextWrapper(blocks);
+  return {
+    contextText,
+    estimatedTokens: estimateTextTokens(contextText),
+    selectedPaperCount: includedPaperKeys.size,
+    includedPaperKeys,
+  };
+}
+
 export function selectContextAssemblyMode(params: {
   fullContextText: string;
   fullContextTokens: number;
@@ -582,6 +674,7 @@ export async function resolveMultiContextPlan(params: {
   conversationMode: ConversationMode;
   activeContextItem: Zotero.Item | null;
   question: string;
+  contextPrefix?: string;
   paperContexts?: PaperContextRef[];
   pinnedPaperContexts?: PaperContextRef[];
   historyPaperContexts?: PaperContextRef[];
@@ -613,12 +706,20 @@ export async function resolveMultiContextPlan(params: {
     inputTokenCap: params.advanced?.inputTokenCap,
     systemPrompt: params.systemPrompt,
   });
+  const reservedPrefixTokens = estimateTextTokens(params.contextPrefix || "");
+  const adjustedContextBudget = {
+    ...contextBudget,
+    contextBudgetTokens: Math.max(
+      0,
+      contextBudget.contextBudgetTokens - reservedPrefixTokens,
+    ),
+  };
 
   if (!papers.length) {
     return {
       mode: "retrieval",
       contextText: "",
-      contextBudget,
+      contextBudget: adjustedContextBudget,
       usedContextTokens: 0,
       selectedPaperCount: 0,
       selectedChunkCount: 0,
@@ -632,23 +733,21 @@ export async function resolveMultiContextPlan(params: {
     papers: unpinned,
     question: params.question,
   });
-  const hasExplicitPinned = explicitPinned.length > 0;
-  const forceRetrievalForImplicitOnly =
-    params.conversationMode === "paper" && !hasExplicitPinned;
-  const fullEligiblePapers = forceRetrievalForImplicitOnly ? [] : pinned;
+  const fullPreferredPapers =
+    params.conversationMode === "paper" ? pinned : explicitPinned;
 
-  if (fullEligiblePapers.length) {
-    const full = assembleFullMultiPaperContext({ papers: fullEligiblePapers });
+  if (fullPreferredPapers.length) {
+    const full = assembleFullMultiPaperContext({ papers: fullPreferredPapers });
     if (
       selectContextAssemblyMode({
         fullContextText: full.contextText,
         fullContextTokens: full.estimatedTokens,
-        contextBudgetTokens: contextBudget.contextBudgetTokens,
+        contextBudgetTokens: adjustedContextBudget.contextBudgetTokens,
       }) === "full"
     ) {
       const remainingTokens = Math.max(
         0,
-        contextBudget.contextBudgetTokens - full.estimatedTokens,
+        adjustedContextBudget.contextBudgetTokens - full.estimatedTokens,
       );
       let extraUnpinned: RetrievedAssembly | null = null;
       if (remainingTokens >= 1024 && relevantUnpinned.length) {
@@ -673,17 +772,77 @@ export async function resolveMultiContextPlan(params: {
       ]);
       const usedContextTokens = estimateTextTokens(combinedContext);
       const selectedPaperCount =
-        fullEligiblePapers.length +
+        fullPreferredPapers.length +
         (extraUnpinned?.selectedChunkCount
           ? extraUnpinned.selectedPaperCount
           : 0);
       return {
         mode: "full",
         contextText: combinedContext,
-        contextBudget,
+        contextBudget: adjustedContextBudget,
         usedContextTokens,
         selectedPaperCount,
         selectedChunkCount: extraUnpinned?.selectedChunkCount || 0,
+      };
+    }
+
+    const partialFull = assembleBestEffortFullMultiPaperContext({
+      papers: fullPreferredPapers,
+      contextBudgetTokens: adjustedContextBudget.contextBudgetTokens,
+    });
+    if (partialFull.selectedPaperCount > 0) {
+      const remainingTokens = Math.max(
+        0,
+        adjustedContextBudget.contextBudgetTokens - partialFull.estimatedTokens,
+      );
+      const hasOverflowPreferredPapers = fullPreferredPapers.some(
+        (paper) => !partialFull.includedPaperKeys.has(paper.paperKey),
+      );
+      const retrievalCompanionPapers = [
+        ...fullPreferredPapers.filter(
+          (paper) => !partialFull.includedPaperKeys.has(paper.paperKey),
+        ),
+        ...relevantUnpinned.filter(
+          (paper) => !partialFull.includedPaperKeys.has(paper.paperKey),
+        ),
+      ];
+      let extraRetrieved: RetrievedAssembly | null = null;
+      if (
+        retrievalCompanionPapers.length &&
+        (hasOverflowPreferredPapers
+          ? remainingTokens > 0
+          : remainingTokens >= 1024)
+      ) {
+        extraRetrieved = await assembleRetrievedMultiPaperContext({
+          papers: retrievalCompanionPapers,
+          question: params.question,
+          contextBudgetTokens: remainingTokens,
+          minChunksByPaper: buildMinChunkMapForRetrievedPapers(
+            retrievalCompanionPapers,
+          ),
+          apiOverrides: {
+            apiBase: params.apiBase,
+            apiKey: params.apiKey,
+          },
+        });
+      }
+      const combinedContext = appendContextBlocks([
+        partialFull.contextText,
+        extraRetrieved?.selectedChunkCount ? extraRetrieved.contextText : "",
+      ]);
+      const usedContextTokens = estimateTextTokens(combinedContext);
+      const selectedPaperCount =
+        partialFull.selectedPaperCount +
+        (extraRetrieved?.selectedChunkCount
+          ? extraRetrieved.selectedPaperCount
+          : 0);
+      return {
+        mode: "full",
+        contextText: combinedContext,
+        contextBudget: adjustedContextBudget,
+        usedContextTokens,
+        selectedPaperCount,
+        selectedChunkCount: extraRetrieved?.selectedChunkCount || 0,
       };
     }
   }
@@ -693,7 +852,7 @@ export async function resolveMultiContextPlan(params: {
     return {
       mode: "retrieval",
       contextText: "",
-      contextBudget,
+      contextBudget: adjustedContextBudget,
       usedContextTokens: 0,
       selectedPaperCount: 0,
       selectedChunkCount: 0,
@@ -703,7 +862,7 @@ export async function resolveMultiContextPlan(params: {
   const retrieved = await assembleRetrievedMultiPaperContext({
     papers: retrievalPapers,
     question: params.question,
-    contextBudgetTokens: contextBudget.contextBudgetTokens,
+    contextBudgetTokens: adjustedContextBudget.contextBudgetTokens,
     minChunksByPaper: buildMinChunkMapForRetrievedPapers(retrievalPapers),
     apiOverrides: {
       apiBase: params.apiBase,
@@ -714,7 +873,7 @@ export async function resolveMultiContextPlan(params: {
   return {
     mode: "retrieval",
     contextText: retrieved.contextText,
-    contextBudget,
+    contextBudget: adjustedContextBudget,
     usedContextTokens,
     selectedPaperCount: retrieved.selectedPaperCount,
     selectedChunkCount: retrieved.selectedChunkCount,

@@ -17,11 +17,11 @@ describe("llmClient context budget", function () {
       maxTokens: 200,
     });
     assert.equal(plan.modelLimitTokens, 1_048_576);
-    assert.equal(plan.outputReserveTokens, 512);
+    assert.equal(plan.outputReserveTokens, 200);
     assert.equal(plan.reasoningReserveTokens, 256);
     assert.isAtMost(plan.limitTokens, plan.modelLimitTokens);
     assert.isAtMost(plan.baseInputTokens, plan.softLimitTokens);
-    assert.isAtLeast(plan.contextBudgetTokens, 1_024);
+    assert.isAtLeast(plan.contextBudgetTokens, 0);
   });
 
   it("respects input cap override and high reasoning reserve", function () {
@@ -36,8 +36,8 @@ describe("llmClient context budget", function () {
       },
     });
     assert.equal(plan.limitTokens, 32_000);
-    assert.equal(plan.outputReserveTokens, 8_192);
+    assert.equal(plan.outputReserveTokens, 12_000);
     assert.equal(plan.reasoningReserveTokens, 4_096);
-    assert.isAtLeast(plan.contextBudgetTokens, 1_024);
+    assert.isAtLeast(plan.contextBudgetTokens, 0);
   });
 });

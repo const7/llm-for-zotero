@@ -72,11 +72,45 @@ describe("sendFlowController", function () {
         setActiveEditSessionCalls += 1;
       },
       getLatestEditablePair: async () => null,
-      editLatestUserMessageAndRetry: async () => {
+      editLatestUserMessageAndRetry: async (
+        _body: Element,
+        _item: Zotero.Item,
+        _displayQuestion: string,
+        _selectedTexts?: string[],
+        _selectedTextSources?: unknown,
+        _selectedTextPaperContexts?: unknown,
+        _screenshotImages?: string[],
+        _paperContexts?: PaperContextRef[],
+        _pinnedPaperContexts?: PaperContextRef[],
+        _attachments?: ChatAttachment[],
+        _expected?: unknown,
+        _model?: string,
+        _apiBase?: string,
+        _apiKey?: string,
+        _reasoning?: unknown,
+        _advanced?: unknown,
+      ) => {
         editCalled += 1;
         return "ok" as const;
       },
-      sendQuestion: async () => {
+      sendQuestion: async (
+        _body: Element,
+        _item: Zotero.Item,
+        _question: string,
+        _screenshotImages?: string[],
+        _model?: string,
+        _apiBase?: string,
+        _apiKey?: string,
+        _reasoning?: unknown,
+        _advanced?: unknown,
+        _displayQuestion?: string,
+        _selectedTexts?: string[],
+        _selectedTextSources?: unknown,
+        _selectedTextPaperContexts?: unknown,
+        _paperContexts?: PaperContextRef[],
+        _pinnedPaperContexts?: PaperContextRef[],
+        _attachments?: ChatAttachment[],
+      ) => {
         sendCalled += 1;
       },
       retainPinnedImageState: () => {

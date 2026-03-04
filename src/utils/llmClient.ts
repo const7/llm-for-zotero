@@ -47,6 +47,10 @@ import {
   normalizeInputTokenCap,
 } from "./normalization";
 import {
+  getDefaultModelEntry,
+  getDefaultProviderGroup,
+} from "./modelProviders";
+import {
   applyModelInputTokenCap,
   estimateConversationTokens,
   getModelInputTokenLimit,
@@ -132,6 +136,12 @@ export type ContextBudgetPlan = {
   contextBudgetTokens: number;
 };
 
+export type UsageStats = {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+};
+
 interface StreamChoice {
   delta?: {
     content?: unknown;
@@ -190,16 +200,28 @@ function getApiConfig(overrides?: {
   apiKey?: string;
   model?: string;
 }) {
-  const prefApiBase = getPref("apiBasePrimary") || getPref("apiBase") || "";
+  const defaultEntry = getDefaultModelEntry();
+  const defaultProviderGroup = getDefaultProviderGroup();
+  const prefApiBase =
+    defaultEntry?.apiBase ||
+    defaultProviderGroup?.apiBase ||
+    getPref("apiBasePrimary") ||
+    getPref("apiBase") ||
+    "";
   const apiBase = (overrides?.apiBase || prefApiBase).trim().replace(/\/$/, "");
   const apiKey = (
     overrides?.apiKey ||
+    defaultEntry?.apiKey ||
+    defaultProviderGroup?.apiKey ||
     getPref("apiKeyPrimary") ||
     getPref("apiKey") ||
     ""
   ).trim();
   const modelPrimary =
-    getPref("modelPrimary") || getPref("model") || DEFAULT_MODEL;
+    defaultEntry?.model ||
+    getPref("modelPrimary") ||
+    getPref("model") ||
+    DEFAULT_MODEL;
   const model = (overrides?.model || modelPrimary).trim();
   const embeddingModel = getPref("embeddingModel") || DEFAULT_EMBEDDING_MODEL;
   const customSystemPrompt = getPref("systemPrompt") || "";
@@ -689,10 +711,6 @@ function buildMessages(
   return messages;
 }
 
-function clampNumber(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
-}
-
 function getReasoningReserveTokens(reasoning?: ReasoningConfig): number {
   const level = reasoning?.level || "none";
   switch (level) {
@@ -731,12 +749,8 @@ export function estimateAvailableContextBudget(params: {
     params.inputTokenCap,
     modelLimitTokens,
   );
-  const softLimitTokens = Math.max(1_024, Math.floor(limitTokens * 0.9));
-  const outputReserveTokens = clampNumber(
-    normalizeMaxTokens(params.maxTokens),
-    512,
-    8_192,
-  );
+  const softLimitTokens = Math.max(1, Math.floor(limitTokens * 0.9));
+  const outputReserveTokens = normalizeMaxTokens(params.maxTokens);
   const reasoningReserveTokens = getReasoningReserveTokens(params.reasoning);
 
   const baseMessages = buildMessages(
@@ -750,7 +764,7 @@ export function estimateAvailableContextBudget(params: {
   );
   const baseInputTokens = estimateConversationTokens(baseMessages);
   const contextBudgetTokens = Math.max(
-    1_024,
+    0,
     softLimitTokens -
       baseInputTokens -
       outputReserveTokens -
@@ -1360,6 +1374,8 @@ function createChatPayloadBuilder(params: {
       return {
         ...payload,
         stream: true,
+        // Ask OpenAI-compatible endpoints to include usage in the final stream chunk
+        ...(useResponses ? {} : { stream_options: { include_usage: true } }),
       } as Record<string, unknown>;
     }
     return payload as Record<string, unknown>;
@@ -1698,6 +1714,7 @@ export async function callLLMStream(
   params: ChatParams,
   onDelta: (delta: string) => void,
   onReasoning?: (event: ReasoningEvent) => void,
+  onUsage?: (usage: UsageStats) => void,
 ): Promise<string> {
   const { apiBase, apiKey, model, systemPrompt } = getApiConfig({
     apiBase: params.apiBase,
@@ -1761,8 +1778,8 @@ export async function callLLMStream(
   }
 
   return useResponses
-    ? parseResponsesStream(res.body, onDelta, onReasoning)
-    : parseStreamResponse(res.body, onDelta, onReasoning);
+    ? parseResponsesStream(res.body, onDelta, onReasoning, onUsage)
+    : parseStreamResponse(res.body, onDelta, onReasoning, onUsage);
 }
 
 /**
@@ -1805,6 +1822,7 @@ async function parseStreamResponse(
   body: ReadableStream<Uint8Array>,
   onDelta: (delta: string) => void,
   onReasoning?: (event: ReasoningEvent) => void,
+  onUsage?: (usage: UsageStats) => void,
 ): Promise<string> {
   const reader = body.getReader() as ReadableStreamDefaultReader<Uint8Array>;
   const decoder = new TextDecoder("utf-8");
@@ -1829,7 +1847,26 @@ async function parseStreamResponse(
         if (!data || data === "[DONE]") continue;
 
         try {
-          const parsed = JSON.parse(data) as { choices?: StreamChoice[] };
+          const parsed = JSON.parse(data) as {
+            choices?: StreamChoice[];
+            usage?: {
+              prompt_tokens?: number;
+              completion_tokens?: number;
+              total_tokens?: number;
+            };
+          };
+          if (parsed.usage && onUsage) {
+            const totalTokens =
+              parsed.usage.total_tokens ??
+              (parsed.usage.prompt_tokens ?? 0) + (parsed.usage.completion_tokens ?? 0);
+            if (totalTokens > 0) {
+              onUsage({
+                promptTokens: parsed.usage.prompt_tokens ?? 0,
+                completionTokens: parsed.usage.completion_tokens ?? 0,
+                totalTokens,
+              });
+            }
+          }
           const choice = parsed?.choices?.[0];
           const reasoningDelta = normalizeStreamText(
             choice?.delta?.reasoning_content ??
@@ -1885,6 +1922,7 @@ async function parseResponsesStream(
   body: ReadableStream<Uint8Array>,
   onDelta: (delta: string) => void,
   onReasoning?: (event: ReasoningEvent) => void,
+  onUsage?: (usage: UsageStats) => void,
 ): Promise<string> {
   const reader = body.getReader() as ReadableStreamDefaultReader<Uint8Array>;
   const decoder = new TextDecoder("utf-8");
@@ -2113,6 +2151,11 @@ async function parseResponsesStream(
             response?: {
               output_text?: unknown;
               output?: unknown;
+              usage?: {
+                input_tokens?: number;
+                output_tokens?: number;
+                total_tokens?: number;
+              };
             };
           };
 
@@ -2277,6 +2320,17 @@ async function parseResponsesStream(
                 extractOutputTextFromOutputs(parsed.response?.output),
               "final",
             );
+            const u = parsed.response?.usage;
+            if (u && onUsage) {
+              const total = u.total_tokens ?? (u.input_tokens ?? 0) + (u.output_tokens ?? 0);
+              if (total > 0) {
+                onUsage({
+                  promptTokens: u.input_tokens ?? 0,
+                  completionTokens: u.output_tokens ?? 0,
+                  totalTokens: total,
+                });
+              }
+            }
           }
 
           if (

@@ -137,49 +137,37 @@
 }
 
 .llm-history-toggle {
-  position: absolute;
-  left: 0;
-  top: 50%;
-  transform: translateY(-50%);
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 0;
-  min-height: 22px;
-  max-width: min(42vw, 220px);
-  padding: 0 16px 0 10px;
-  border: 1px solid var(--stroke-secondary);
-  border-radius: 999px;
-  background: var(--fill-quinary);
-  font-weight: 600;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  transition:
-    color 0.15s,
-    background 0.15s,
-    border-color 0.15s;
+  width: 20px;
+  min-width: 20px;
+  height: 20px;
+  min-height: 20px;
+  font-size: 0;
+  line-height: 0;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
 }
 
-.llm-history-mode-indicator {
-  text-align: center;
-}
-
-.llm-history-toggle::after {
-  content: "▾";
-  position: absolute;
-  right: 5px;
-  top: 50%;
-  transform: translateY(-54%);
-  font-size: 14px;
-  font-weight: 700;
-  line-height: 1;
+.llm-history-toggle::before {
+  content: "";
+  display: block;
+  width: 16px;
+  height: 16px;
+  background-color: currentColor;
+  mask-image: url("icons/action-history-clock.svg");
+  mask-repeat: no-repeat;
+  mask-position: center;
+  mask-size: contain;
+  -webkit-mask-image: url("icons/action-history-clock.svg");
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  -webkit-mask-size: contain;
   pointer-events: none;
-  opacity: 0.9;
-}
-
-.llm-history-toggle[aria-expanded="true"]::after {
-  content: "▴";
 }
 
 .llm-history-new-menu {
@@ -248,15 +236,6 @@
   color: var(--color-accent);
 }
 
-.llm-history-toggle:hover {
-  border-color: color-mix(
-    in srgb,
-    var(--color-accent) 50%,
-    var(--stroke-secondary)
-  );
-  background: color-mix(in srgb, var(--color-accent) 10%, var(--fill-quinary));
-}
-
 .llm-history-new:disabled {
   color: var(--fill-tertiary);
   opacity: 0.55;
@@ -275,14 +254,106 @@
 
 .llm-history-toggle:disabled:hover {
   color: var(--fill-tertiary);
-  border-color: var(--stroke-secondary);
-  background: var(--fill-quinary);
 }
 
 .llm-history-new:focus-visible,
 .llm-history-toggle:focus-visible {
   outline: 1px solid var(--color-accent);
   outline-offset: 2px;
+}
+
+/* ---- Mode chip: single pill showing current mode + lock ---- */
+
+.llm-mode-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+}
+
+.llm-mode-chip {
+  appearance: none;
+  -moz-appearance: none;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--stroke-secondary);
+  background: var(--fill-quinary);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--llm-fs-12);
+  font-weight: 600;
+  color: var(--fill-primary);
+  padding: 2px 9px;
+  border-radius: 999px;
+  white-space: nowrap;
+  line-height: 1.5;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
+}
+
+.llm-mode-chip:hover {
+  background: var(--fill-secondary);
+  border-color: var(--stroke-secondary);
+}
+
+.llm-mode-chip:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* ---- Lock icon (after 'Open chat' label) ---- */
+
+.llm-mode-lock {
+  appearance: none;
+  -moz-appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--fill-tertiary);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  min-width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  padding: 0;
+  font-size: 0;
+  line-height: 0;
+  transition:
+    color 0.15s,
+    background 0.15s;
+}
+
+.llm-mode-lock[data-locked="true"] {
+  color: var(--color-accent);
+}
+
+.llm-mode-lock:not([data-locked="true"]):hover {
+  color: var(--fill-secondary);
+}
+
+.llm-mode-lock:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+.llm-mode-lock::before {
+  content: "";
+  display: block;
+  width: 11px;
+  height: 11px;
+  background-color: currentColor;
+  mask-image: url("icons/action-mode-lock.svg");
+  mask-repeat: no-repeat;
+  mask-position: center;
+  mask-size: contain;
+  -webkit-mask-image: url("icons/action-mode-lock.svg");
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  -webkit-mask-size: contain;
+  pointer-events: none;
 }
 
 .llm-subtitle {
@@ -292,11 +363,15 @@
 }
 
 .llm-btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   background: none;
   border: none;
   cursor: pointer;
   padding: 4px 6px;
   border-radius: 4px;
+  line-height: 1;
   opacity: 0.7;
   transition:
     opacity 0.15s,
@@ -306,6 +381,37 @@
 .llm-btn-icon:hover {
   opacity: 1;
   background: var(--fill-quinary);
+}
+
+.llm-settings-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  min-height: 28px;
+  font-size: 0;
+  line-height: 0;
+  padding: 0;
+}
+
+.llm-settings-btn::before {
+  content: "";
+  display: block;
+  width: 16px;
+  height: 16px;
+  background-color: currentColor;
+  mask-image: url("icons/action-settings.svg");
+  mask-repeat: no-repeat;
+  mask-position: center;
+  mask-size: contain;
+  -webkit-mask-image: url("icons/action-settings.svg");
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  -webkit-mask-size: contain;
+  pointer-events: none;
 }
 
 /* Context Section */
@@ -483,6 +589,7 @@
 }
 
 .llm-history-menu {
+  --llm-history-row-gap: 4px;
   position: absolute;
   z-index: 13;
   display: none;
@@ -614,6 +721,19 @@
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
+}
+
+.llm-history-menu-section-viewport {
+  display: block;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.llm-history-menu-section-viewport[data-scroll-limited="true"] {
+  max-height: 320px;
 }
 
 .llm-history-menu-section-rows {
@@ -956,7 +1076,7 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  text-align: center;
+  text-align: left;
   padding: 30px 20px;
   color: var(--fill-tertiary);
   flex: 1;
@@ -971,7 +1091,23 @@
 .llm-welcome-text {
   font-size: var(--llm-fs-12);
   line-height: 1.5;
-  max-width: 200px;
+  max-width: 420px;
+}
+
+.llm-welcome-title {
+  margin-bottom: 10px;
+  color: var(--fill-secondary);
+}
+
+.llm-welcome-list {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 8px;
+}
+
+.llm-welcome-list li {
+  margin: 0;
 }
 
 /* Message Wrapper */
@@ -1013,7 +1149,74 @@
 .llm-bubble.user {
   background: var(--color-accent);
   color: white;
-  border-bottom-right-radius: 4px;
+  border-radius: 6px;
+  border-bottom-right-radius: 2px;
+}
+
+/* Editable user bubble — shows a pointer and subtle hover feedback */
+.llm-bubble-editable {
+  cursor: pointer;
+}
+.llm-bubble-editable:hover {
+  opacity: 0.88;
+}
+
+/* Inline edit widget — the full .llm-input-section is physically moved here */
+.llm-inline-edit-wrapper {
+  background: var(--material-background);
+  border: 1px solid var(--color-accent);
+  border-radius: 10px;
+  padding: 0;
+  max-width: 100%;
+  width: 100%;
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+/* "Editing · Cancel" chip above the input section */
+.llm-inline-edit-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px 4px;
+  justify-content: space-between;
+}
+
+.llm-inline-edit-header-label {
+  font-size: var(--llm-fs-11, 11px);
+  font-weight: 600;
+  color: var(--color-accent);
+  user-select: none;
+}
+
+.llm-inline-edit-header-cancel {
+  appearance: none;
+  -moz-appearance: none;
+  border: none;
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: var(--llm-fs-11, 11px);
+  font-weight: 500;
+  padding: 2px 10px;
+  font-family: inherit;
+  line-height: 1.5;
+  background: var(--fill-quinary, var(--fill-quaternary));
+  color: var(--fill-secondary);
+}
+
+.llm-inline-edit-header-cancel:hover {
+  opacity: 0.8;
+}
+
+/* The borrowed input section sits flush inside the widget */
+.llm-inline-edit-wrapper > .llm-input-section {
+  border: none;
+  border-radius: 0;
+  margin: 0;
+  box-shadow: none;
 }
 
 .llm-user-selected-text {
@@ -1333,7 +1536,6 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 2px;
-  min-height: 50px;
   padding: 7px 9px;
   border: 1px solid var(--stroke-secondary);
   border-radius: 10px;
@@ -1787,6 +1989,77 @@
   text-decoration: underline;
 }
 
+.llm-bubble.assistant .llm-paper-citation-row {
+  margin-top: 4px;
+  display: block;
+  max-width: 100%;
+  padding-left: 0;
+  overflow: visible;
+}
+
+.llm-bubble.assistant .llm-paper-citation-link {
+  appearance: none;
+  -moz-appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  border: none;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--fill-secondary);
+  text-decoration: none;
+  font: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  line-height: inherit;
+  cursor: pointer;
+  max-width: none;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.llm-bubble.assistant .llm-paper-citation-link:hover:not(:disabled),
+.llm-bubble.assistant .llm-paper-citation-link:focus-visible {
+  color: inherit;
+  background: transparent;
+}
+
+.llm-bubble.assistant .llm-paper-citation-link:focus-visible {
+  outline: 1px solid var(--color-accent);
+  outline-offset: 1px;
+  border-radius: 8px;
+}
+
+.llm-bubble.assistant .llm-paper-citation-link-label {
+  display: inline-block;
+  min-width: 0;
+  max-width: none;
+  white-space: nowrap;
+  overflow: visible;
+  text-overflow: clip;
+}
+
+.llm-bubble.assistant .llm-paper-citation-link .llm-paper-context-chip-label {
+  padding: 2px 6px;
+  font-size: var(--llm-fs-11);
+  max-width: none;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: nowrap;
+}
+
+.llm-bubble.assistant
+  .llm-paper-citation-link:hover
+  .llm-paper-context-chip-label {
+  color: var(--fill-primary);
+}
+
+.llm-bubble.assistant .llm-paper-citation-link[data-loading="true"] {
+  opacity: 0.68;
+  cursor: progress;
+}
+
 .llm-bubble.assistant hr {
   border: none;
   border-top: 1px solid var(--stroke-secondary);
@@ -2141,11 +2414,7 @@
   align-items: center;
   padding: 1px 6px;
   border-radius: 999px;
-  background: color-mix(
-    in srgb,
-    var(--color-accent, #3584e4) 14%,
-    transparent
-  );
+  background: color-mix(in srgb, var(--color-accent, #3584e4) 14%, transparent);
   color: var(--fill-secondary);
   font-size: var(--llm-fs-10);
   line-height: 1.2;
@@ -2153,9 +2422,26 @@
 
 .llm-paper-picker-group-chevron {
   flex: 0 0 auto;
-  color: var(--fill-tertiary);
-  font-size: var(--llm-fs-10);
-  line-height: 1;
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  background-color: var(--fill-tertiary);
+  mask-repeat: no-repeat;
+  mask-position: center;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  -webkit-mask-size: contain;
+}
+
+.llm-paper-picker-group-chevron.llm-folder-closed {
+  mask-image: url("icons/folder-closed.svg");
+  -webkit-mask-image: url("icons/folder-closed.svg");
+}
+
+.llm-paper-picker-group-chevron.llm-folder-open {
+  mask-image: url("icons/folder-open.svg");
+  -webkit-mask-image: url("icons/folder-open.svg");
 }
 
 .llm-paper-picker-attachment-row {
@@ -2619,10 +2905,18 @@
 }
 
 /* Status */
+.llm-status-bar {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
 .llm-status {
   font-size: var(--llm-fs-11);
   color: var(--fill-tertiary);
-  grid-column: 1 / -1;
   min-width: 0;
   overflow-wrap: anywhere;
 }
@@ -2645,6 +2939,49 @@
 
 .llm-status-context-missing {
   color: var(--fill-tertiary);
+}
+
+.llm-token-usage {
+  font-size: var(--llm-fs-11);
+  color: var(--fill-tertiary);
+  white-space: nowrap;
+  flex-shrink: 0;
+  display: none;
+}
+
+.llm-live-locate-demo {
+  margin-top: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--stroke-secondary);
+  border-radius: 10px;
+  background: color-mix(
+    in srgb,
+    var(--material-background) 88%,
+    var(--fill-quinary)
+  );
+  color: var(--fill-secondary);
+  font-size: var(--llm-fs-11);
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.llm-live-locate-demo[data-demo-state="resolved"] {
+  border-color: color-mix(
+    in srgb,
+    var(--color-accent) 35%,
+    var(--stroke-secondary)
+  );
+}
+
+.llm-live-locate-demo[data-demo-state="ambiguous"],
+.llm-live-locate-demo[data-demo-state="selection-too-short"] {
+  border-color: color-mix(in srgb, #f39c12 45%, var(--stroke-secondary));
+}
+
+.llm-live-locate-demo[data-demo-state="not-found"],
+.llm-live-locate-demo[data-demo-state="unavailable"] {
+  border-color: color-mix(in srgb, #e74c3c 38%, var(--stroke-secondary));
 }
 
 /* Scrollbar Styling */
@@ -2810,12 +3147,17 @@
 .llm-reasoning-btn-active {
   border-color: transparent;
   background: transparent;
-  color: var(--fill-primary);
+  color: var(--color-accent);
 }
 
 .llm-reasoning-btn-active:hover:not(:disabled) {
   background: transparent;
   border-color: transparent;
+}
+
+.llm-action-slot.llm-reasoning-dropdown
+  > .llm-reasoning-btn.llm-reasoning-btn-collapsed.llm-reasoning-btn-active::before {
+  background-color: var(--color-accent);
 }
 
 .llm-action-slot {
@@ -2838,9 +3180,11 @@
   z-index: 12;
   display: none;
   gap: 2px;
+  box-sizing: border-box;
   min-width: calc(64px * var(--llm-font-scale, 1));
   max-width: min(88vw, 360px);
   max-height: 60vh;
+  overflow-x: hidden;
   overflow-y: auto;
   background: var(--material-background);
   border: 1px solid var(--stroke-secondary);
@@ -2888,6 +3232,35 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.llm-model-menu-divider {
+  height: 1px;
+  margin: 4px 0;
+  background: var(--stroke-secondary);
+}
+
+.llm-model-menu-section,
+.llm-reasoning-menu-section {
+  display: flex;
+  align-items: center;
+  min-height: calc(24px * var(--llm-font-scale, 1));
+  padding: calc(4px * var(--llm-font-scale, 1))
+    calc(8px * var(--llm-font-scale, 1));
+  font-size: var(--llm-fs-10);
+  line-height: 1.2;
+  font-weight: 600;
+  color: var(--fill-tertiary);
+  user-select: none;
+}
+
+.llm-model-menu-empty,
+.llm-reasoning-menu-empty {
+  padding: calc(4px * var(--llm-font-scale, 1))
+    calc(8px * var(--llm-font-scale, 1));
+  font-size: var(--llm-fs-11);
+  line-height: 1.3;
+  color: var(--fill-tertiary);
 }
 
 .llm-model-option:hover,

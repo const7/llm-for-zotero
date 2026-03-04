@@ -6,6 +6,7 @@ import {
   pruneConversation,
   updateLatestUserMessage as updateStoredLatestUserMessage,
   updateLatestAssistantMessage as updateStoredLatestAssistantMessage,
+  deleteTurnMessages as deleteStoredTurnMessages,
   StoredChatMessage,
 } from "../../utils/chatStore";
 import {
@@ -16,10 +17,11 @@ import {
   ReasoningConfig as LLMReasoningConfig,
   ReasoningEvent,
   ReasoningLevel as LLMReasoningLevel,
+  UsageStats,
 } from "../../utils/llmClient";
+import { estimateConversationTokens } from "../../utils/modelInputCap";
 import {
   PERSISTED_HISTORY_LIMIT,
-  MAX_HISTORY_MESSAGES,
   AUTO_SCROLL_BOTTOM_THRESHOLD,
   MAX_SELECTED_IMAGES,
   formatFigureCountLabel,
@@ -47,13 +49,26 @@ import {
   currentAbortController,
   setCurrentAbortController,
   nextRequestId,
+  pendingRequestId,
+  setPendingRequestId,
   setResponseMenuTarget,
   setPromptMenuTarget,
+  inlineEditTarget,
+  setInlineEditTarget,
+  inlineEditCleanup,
+  setInlineEditCleanup,
+  inlineEditInputSectionEl,
+  inlineEditInputSectionParent,
+  inlineEditInputSectionNextSib,
+  inlineEditSavedDraft,
+  setInlineEditInputSection,
+  setInlineEditSavedDraft,
 } from "./state";
 import {
   sanitizeText,
   formatTime,
   setStatus,
+  setTokenUsage,
   getSelectedTextWithinBubble,
   getAttachmentTypeLabel,
   buildQuestionWithSelectedTextContexts,
@@ -69,11 +84,12 @@ import {
 } from "./normalizers";
 import { positionMenuAtPointer } from "./menuPositioning";
 import {
-  getSelectedProfileForItem,
-  getAdvancedModelParamsForProfile,
-  getStringPref,
+  getAvailableModelEntries,
+  getAdvancedModelParamsForEntry,
   getLastReasoningExpanded,
   getLastUsedReasoningLevel,
+  getSelectedModelEntryForItem,
+  getStringPref,
   setLastReasoningExpanded,
 } from "./prefHelpers";
 import { resolveMultiContextPlan } from "./multiContextPlanner";
@@ -87,6 +103,7 @@ import { buildChatHistoryNotePayload } from "./notes";
 import { extractManagedBlobHash } from "./attachmentStorage";
 import { toFileUrl } from "../../utils/pathFileUrl";
 import { replaceOwnerAttachmentRefs } from "../../utils/attachmentRefStore";
+import { decorateAssistantCitationLinks } from "./assistantCitationLinks";
 
 /** Get AbortController constructor from global scope */
 function getAbortController(): new () => AbortController {
@@ -341,6 +358,45 @@ const followBottomStabilizers = new Map<
   number,
   { rafId: number | null; timeoutId: number | null }
 >();
+
+/** Cumulative API token usage per conversation key for the current session. */
+const sessionTokenTotals = new Map<number, number>();
+
+function accumulateSessionTokens(
+  conversationKey: number,
+  delta: number,
+): number {
+  const prev = sessionTokenTotals.get(conversationKey) ?? 0;
+  const next = prev + delta;
+  sessionTokenTotals.set(conversationKey, next);
+  return next;
+}
+
+/**
+ * Seed the session token total from the existing chat history if it hasn't
+ * been set yet in this Zotero session. Returns the seeded (or existing) total.
+ */
+function getOrSeedSessionTokens(
+  conversationKey: number,
+  history: Message[],
+): number {
+  if (sessionTokenTotals.has(conversationKey)) {
+    return sessionTokenTotals.get(conversationKey)!;
+  }
+  if (history.length === 0) {
+    sessionTokenTotals.set(conversationKey, 0);
+    return 0;
+  }
+  const estimated = estimateConversationTokens(
+    history.map((m) => ({ role: m.role, content: m.text || "" })),
+  );
+  sessionTokenTotals.set(conversationKey, estimated);
+  return estimated;
+}
+
+export function resetSessionTokens(conversationKey: number): void {
+  sessionTokenTotals.delete(conversationKey);
+}
 
 /**
  * Guard flag: when `true` the scroll-event handler in setupHandlers must
@@ -609,6 +665,8 @@ function toPanelMessage(message: StoredChatMessage): Message {
     screenshotExpanded: false,
     screenshotActiveIndex: screenshotImages?.length ? 0 : undefined,
     modelName: message.modelName,
+    modelEntryId: message.modelEntryId,
+    modelProviderLabel: message.modelProviderLabel,
     reasoningSummary: message.reasoningSummary,
     reasoningDetails: message.reasoningDetails,
     reasoningOpen: isReasoningExpandedByDefault(),
@@ -813,6 +871,7 @@ type PanelRequestUI = {
   sendBtn: HTMLButtonElement | null;
   cancelBtn: HTMLButtonElement | null;
   status: HTMLElement | null;
+  tokenUsageEl: HTMLElement | null;
 };
 
 function getPanelRequestUI(body: Element): PanelRequestUI {
@@ -822,6 +881,7 @@ function getPanelRequestUI(body: Element): PanelRequestUI {
     sendBtn: body.querySelector("#llm-send") as HTMLButtonElement | null,
     cancelBtn: body.querySelector("#llm-cancel") as HTMLButtonElement | null,
     status: body.querySelector("#llm-status") as HTMLElement | null,
+    tokenUsageEl: body.querySelector("#llm-token-usage") as HTMLElement | null,
   };
 }
 
@@ -841,21 +901,26 @@ function setRequestUIBusy(
 }
 
 function restoreRequestUIIdle(
-  ui: PanelRequestUI,
+  body: Element,
   conversationKey: number,
   requestId: number,
 ): void {
   if (cancelledRequestId >= requestId) return;
-  withScrollGuard(ui.chatBox, conversationKey, () => {
-    if (ui.inputBox) {
-      ui.inputBox.disabled = false;
-      ui.inputBox.focus({ preventScroll: true });
+  // Re-query the DOM at restore time: buildUI() wipes body.textContent when the
+  // user navigates to a new item while streaming, making any previously-captured
+  // ui references point to detached (removed) elements.  Querying from the
+  // stable `body` container always returns the current live elements.
+  const freshUi = getPanelRequestUI(body);
+  withScrollGuard(freshUi.chatBox, conversationKey, () => {
+    if (freshUi.inputBox) {
+      freshUi.inputBox.disabled = false;
+      freshUi.inputBox.focus({ preventScroll: true });
     }
-    if (ui.sendBtn) {
-      ui.sendBtn.style.display = "";
-      ui.sendBtn.disabled = false;
+    if (freshUi.sendBtn) {
+      freshUi.sendBtn.style.display = "";
+      freshUi.sendBtn.disabled = false;
     }
-    if (ui.cancelBtn) ui.cancelBtn.style.display = "none";
+    if (freshUi.cancelBtn) freshUi.cancelBtn.style.display = "none";
   });
 }
 
@@ -883,15 +948,20 @@ function createPanelUpdateHelpers(
       setStatus(ui.status as HTMLElement, text, kind);
     });
   };
-  return { refreshChatSafely, setStatusSafely };
+  return {
+    refreshChatSafely,
+    setStatusSafely,
+  };
 }
 
 type EffectiveRequestConfig = {
   model: string;
   apiBase: string;
   apiKey: string;
+  modelEntryId?: string;
+  modelProviderLabel?: string;
   reasoning: LLMReasoningConfig | undefined;
-  advanced: AdvancedModelParams;
+  advanced: AdvancedModelParams | undefined;
 };
 
 function resolveEffectiveRequestConfig(params: {
@@ -899,25 +969,50 @@ function resolveEffectiveRequestConfig(params: {
   model?: string;
   apiBase?: string;
   apiKey?: string;
+  modelEntryId?: string;
+  modelProviderLabel?: string;
   reasoning?: LLMReasoningConfig;
   advanced?: AdvancedModelParams;
 }): EffectiveRequestConfig {
-  const fallbackProfile = getSelectedProfileForItem(params.item.id);
+  const fallbackEntry = getSelectedModelEntryForItem(params.item.id);
+  const explicitEntry =
+    params.model || params.apiBase || params.apiKey
+      ? getAvailableModelEntries().find(
+          (entry) =>
+            entry.model === (params.model || "").trim() &&
+            entry.apiBase === (params.apiBase || "").trim() &&
+            entry.apiKey === (params.apiKey || "").trim(),
+        ) || null
+      : null;
   const model = (
     params.model ||
-    fallbackProfile.model ||
+    fallbackEntry?.model ||
     getStringPref("modelPrimary") ||
     getStringPref("model") ||
     "gpt-4o-mini"
   ).trim();
-  const apiBase = (params.apiBase || fallbackProfile.apiBase).trim();
-  const apiKey = (params.apiKey || fallbackProfile.apiKey).trim();
+  const apiBase = (params.apiBase || fallbackEntry?.apiBase || "").trim();
+  const apiKey = (params.apiKey || fallbackEntry?.apiKey || "").trim();
   const reasoning =
     params.reasoning ||
     getSelectedReasoningForItem(params.item.id, model, apiBase);
   const advanced =
-    params.advanced || getAdvancedModelParamsForProfile(fallbackProfile.key);
-  return { model, apiBase, apiKey, reasoning, advanced };
+    params.advanced ||
+    getAdvancedModelParamsForEntry(fallbackEntry?.entryId) ||
+    fallbackEntry?.advanced;
+  return {
+    model,
+    apiBase,
+    apiKey,
+    modelEntryId:
+      params.modelEntryId || explicitEntry?.entryId || fallbackEntry?.entryId,
+    modelProviderLabel:
+      params.modelProviderLabel ||
+      explicitEntry?.providerLabel ||
+      fallbackEntry?.providerLabel,
+    reasoning,
+    advanced,
+  };
 }
 
 async function buildContextPlanForRequest(params: {
@@ -933,14 +1028,25 @@ async function buildContextPlanForRequest(params: {
     text: string,
     kind: Parameters<typeof setStatus>[2],
   ) => void;
-}): Promise<string> {
+}): Promise<{
+  combinedContext: string;
+  paperContexts: PaperContextRef[];
+  pinnedPaperContexts: PaperContextRef[];
+  recentPaperContexts: PaperContextRef[];
+}> {
   const contextSource = resolveContextSourceItem(params.item);
   params.setStatusSafely(contextSource.statusText, "sending");
+  const activeContextItem = contextSource.contextItem;
+  const conversationMode: "open" | "paper" = isGlobalPortalItem(params.item)
+    ? "open"
+    : "paper";
   const systemPrompt = getStringPref("systemPrompt") || undefined;
+
   const plan = await resolveMultiContextPlan({
-    activeContextItem: contextSource.contextItem,
-    conversationMode: isGlobalPortalItem(params.item) ? "open" : "paper",
+    activeContextItem,
+    conversationMode,
     question: params.question,
+    contextPrefix: "",
     paperContexts: params.paperContexts,
     pinnedPaperContexts: params.pinnedPaperContexts,
     historyPaperContexts: params.recentPaperContexts,
@@ -968,7 +1074,13 @@ async function buildContextPlanForRequest(params: {
     contextBudgetTokens: plan.contextBudget.contextBudgetTokens,
     usedContextTokens: plan.usedContextTokens,
   });
-  return sanitizeText(plan.contextText || "").trim();
+  const planContext = sanitizeText(plan.contextText || "").trim();
+  return {
+    combinedContext: planContext,
+    paperContexts: params.paperContexts,
+    pinnedPaperContexts: params.pinnedPaperContexts,
+    recentPaperContexts: params.recentPaperContexts,
+  };
 }
 
 function createQueuedRefresh(refresh: () => void): () => void {
@@ -994,6 +1106,8 @@ type AssistantMessageSnapshot = Pick<
   | "text"
   | "timestamp"
   | "modelName"
+  | "modelEntryId"
+  | "modelProviderLabel"
   | "reasoningSummary"
   | "reasoningDetails"
   | "reasoningOpen"
@@ -1019,6 +1133,8 @@ function takeAssistantSnapshot(message: Message): AssistantMessageSnapshot {
     text: message.text,
     timestamp: message.timestamp,
     modelName: message.modelName,
+    modelEntryId: message.modelEntryId,
+    modelProviderLabel: message.modelProviderLabel,
     reasoningSummary: message.reasoningSummary,
     reasoningDetails: message.reasoningDetails,
     reasoningOpen: message.reasoningOpen,
@@ -1032,6 +1148,8 @@ function restoreAssistantSnapshot(
   message.text = snapshot.text;
   message.timestamp = snapshot.timestamp;
   message.modelName = snapshot.modelName;
+  message.modelEntryId = snapshot.modelEntryId;
+  message.modelProviderLabel = snapshot.modelProviderLabel;
   message.reasoningSummary = snapshot.reasoningSummary;
   message.reasoningDetails = snapshot.reasoningDetails;
   message.reasoningOpen = snapshot.reasoningOpen;
@@ -1399,7 +1517,15 @@ export async function retryLatestAssistantResponse(
   }
 
   const thisRequestId = nextRequestId();
+  setPendingRequestId(thisRequestId);
   setRequestUIBusy(body, ui, conversationKey, "Preparing retry...");
+  const assistantMessage = retryPair.assistantMessage;
+  const assistantSnapshot = takeAssistantSnapshot(assistantMessage);
+  assistantMessage.text = "";
+  assistantMessage.reasoningSummary = undefined;
+  assistantMessage.reasoningDetails = undefined;
+  assistantMessage.reasoningOpen = isReasoningExpandedByDefault();
+  assistantMessage.streaming = true;
   const { refreshChatSafely, setStatusSafely } = createPanelUpdateHelpers(
     body,
     item,
@@ -1407,9 +1533,7 @@ export async function retryLatestAssistantResponse(
     ui,
   );
 
-  const historyForLLM = history
-    .slice(0, retryPair.userIndex)
-    .slice(-MAX_HISTORY_MESSAGES);
+  const historyForLLM = history.slice(0, retryPair.userIndex);
   const {
     question,
     screenshotImages,
@@ -1419,7 +1543,7 @@ export async function retryLatestAssistantResponse(
   } = reconstructRetryPayload(retryPair.userMessage);
   if (!question.trim()) {
     setStatusSafely("Nothing to retry for latest turn", "error");
-    restoreRequestUIIdle(ui, conversationKey, thisRequestId);
+    restoreRequestUIIdle(body, conversationKey, thisRequestId);
     setHistoryControlsDisabled(body, false);
     return;
   }
@@ -1432,14 +1556,10 @@ export async function retryLatestAssistantResponse(
     reasoning,
     advanced,
   });
-
-  const assistantMessage = retryPair.assistantMessage;
-  const assistantSnapshot = takeAssistantSnapshot(assistantMessage);
-  assistantMessage.text = "";
-  assistantMessage.reasoningSummary = undefined;
-  assistantMessage.reasoningDetails = undefined;
-  assistantMessage.reasoningOpen = isReasoningExpandedByDefault();
-  assistantMessage.streaming = true;
+  // Update model name before first refresh so streaming UI shows the correct model immediately
+  assistantMessage.modelName = effectiveRequestConfig.model;
+  assistantMessage.modelEntryId = effectiveRequestConfig.modelEntryId;
+  assistantMessage.modelProviderLabel = effectiveRequestConfig.modelProviderLabel;
   refreshChatSafely();
   let streamedAnswer = "";
   let streamedReasoningSummary: string | undefined;
@@ -1453,7 +1573,7 @@ export async function retryLatestAssistantResponse(
   try {
     const llmHistory = buildLLMHistoryMessages(historyForLLM);
     const recentPaperContexts = collectRecentPaperContexts(historyForLLM);
-    const combinedContext = await buildContextPlanForRequest({
+    const contextPlan = await buildContextPlanForRequest({
       item,
       question,
       images: screenshotImages,
@@ -1463,6 +1583,26 @@ export async function retryLatestAssistantResponse(
       history: llmHistory,
       effectiveRequestConfig,
       setStatusSafely,
+    });
+    const combinedContext = contextPlan.combinedContext;
+    retryPair.userMessage.paperContexts = contextPlan.paperContexts.length
+      ? contextPlan.paperContexts
+      : undefined;
+    retryPair.userMessage.pinnedPaperContexts = contextPlan.pinnedPaperContexts
+      .length
+      ? contextPlan.pinnedPaperContexts
+      : undefined;
+    await updateStoredLatestUserMessage(conversationKey, {
+      text: retryPair.userMessage.text,
+      timestamp: retryPair.userMessage.timestamp,
+      selectedText: retryPair.userMessage.selectedText,
+      selectedTexts: retryPair.userMessage.selectedTexts,
+      selectedTextSources: retryPair.userMessage.selectedTextSources,
+      selectedTextPaperContexts:
+        retryPair.userMessage.selectedTextPaperContexts,
+      screenshotImages: retryPair.userMessage.screenshotImages,
+      paperContexts: retryPair.userMessage.paperContexts,
+      attachments: retryPair.userMessage.attachments,
     });
     if (cancelledRequestId >= thisRequestId) {
       restoreOriginalAssistant();
@@ -1522,6 +1662,13 @@ export async function retryLatestAssistantResponse(
         }
         queueRefresh();
       },
+      (usage: UsageStats) => {
+        const total = accumulateSessionTokens(
+          conversationKey,
+          usage.totalTokens,
+        );
+        if (ui.tokenUsageEl) setTokenUsage(ui.tokenUsageEl, total);
+      },
     );
 
     if (
@@ -1537,6 +1684,9 @@ export async function retryLatestAssistantResponse(
       sanitizeText(answer) || streamedAnswer || "No response.";
     assistantMessage.timestamp = Date.now();
     assistantMessage.modelName = effectiveRequestConfig.model;
+    assistantMessage.modelEntryId = effectiveRequestConfig.modelEntryId;
+    assistantMessage.modelProviderLabel =
+      effectiveRequestConfig.modelProviderLabel;
     assistantMessage.reasoningSummary = streamedReasoningSummary;
     assistantMessage.reasoningDetails = streamedReasoningDetails;
     assistantMessage.reasoningOpen = isReasoningExpandedByDefault();
@@ -1547,6 +1697,8 @@ export async function retryLatestAssistantResponse(
       text: assistantMessage.text,
       timestamp: assistantMessage.timestamp,
       modelName: assistantMessage.modelName,
+      modelEntryId: assistantMessage.modelEntryId,
+      modelProviderLabel: assistantMessage.modelProviderLabel,
       reasoningSummary: assistantMessage.reasoningSummary,
       reasoningDetails: assistantMessage.reasoningDetails,
     });
@@ -1575,9 +1727,112 @@ export async function retryLatestAssistantResponse(
     );
   } finally {
     setHistoryControlsDisabled(body, false);
-    restoreRequestUIIdle(ui, conversationKey, thisRequestId);
+    restoreRequestUIIdle(body, conversationKey, thisRequestId);
     setCurrentAbortController(null);
+    setPendingRequestId(0);
   }
+}
+
+/**
+ * Edit the user message in any turn (not just the latest) and retry.
+ * Truncates all subsequent turns from memory and storage, updates the
+ * user message text, then retries using the currently selected model.
+ */
+export async function editUserTurnAndRetry(
+  body: Element,
+  item: Zotero.Item,
+  userTimestamp: number,
+  assistantTimestamp: number,
+  newText: string,
+): Promise<void> {
+  await ensureConversationLoaded(item);
+  const conversationKey = getConversationKey(item);
+  const history = chatHistory.get(conversationKey) || [];
+
+  const userIndex = history.findIndex(
+    (m) => m.role === "user" && m.timestamp === userTimestamp,
+  );
+  if (userIndex < 0) {
+    ztoolkit.log("LLM: editUserTurnAndRetry — user message not found");
+    return;
+  }
+  const assistantIndex = userIndex + 1;
+  if (
+    assistantIndex >= history.length ||
+    history[assistantIndex]?.role !== "assistant"
+  ) {
+    ztoolkit.log("LLM: editUserTurnAndRetry — assistant message not found");
+    return;
+  }
+  if (history[assistantIndex]!.streaming) {
+    ztoolkit.log("LLM: editUserTurnAndRetry — assistant is still streaming");
+    return;
+  }
+
+  // Collect subsequent pairs for persistence deletion
+  const subsequentPairs: Array<{ userTs: number; assistantTs: number }> = [];
+  for (let i = assistantIndex + 1; i + 1 < history.length; i += 2) {
+    const u = history[i];
+    const a = history[i + 1];
+    if (u?.role === "user" && a?.role === "assistant") {
+      subsequentPairs.push({
+        userTs: Math.floor(u.timestamp),
+        assistantTs: Math.floor(a.timestamp),
+      });
+    }
+  }
+
+  // Truncate in-memory history to this pair
+  history.splice(assistantIndex + 1);
+
+  // Delete persisted subsequent turns
+  for (const p of subsequentPairs) {
+    try {
+      await deleteStoredTurnMessages(conversationKey, p.userTs, p.assistantTs);
+    } catch (err) {
+      ztoolkit.log("LLM: Failed to delete subsequent stored turn", err);
+    }
+  }
+
+  // Update user message text + timestamp
+  const userMsg = history[userIndex]!;
+  userMsg.text = sanitizeText(newText) || newText;
+  userMsg.timestamp = Date.now();
+
+  // Persist the updated user message
+  try {
+    await updateStoredLatestUserMessage(conversationKey, {
+      text: userMsg.text,
+      timestamp: userMsg.timestamp,
+      selectedText: userMsg.selectedText,
+      selectedTexts: userMsg.selectedTexts,
+      selectedTextSources: userMsg.selectedTextSources,
+      selectedTextPaperContexts: userMsg.selectedTextPaperContexts,
+      screenshotImages: userMsg.screenshotImages,
+      paperContexts: userMsg.paperContexts,
+      attachments: userMsg.attachments,
+    });
+  } catch (err) {
+    ztoolkit.log("LLM: Failed to persist edited user message", err);
+  }
+
+  // Resolve current model settings and retry
+  const profile = getSelectedModelEntryForItem(item.id);
+  const reasoning = getSelectedReasoningForItem(
+    item.id,
+    profile?.model || "",
+    profile?.apiBase,
+  );
+  const advanced = getAdvancedModelParamsForEntry(profile?.entryId);
+  await retryLatestAssistantResponse(
+    body,
+    item,
+    profile?.model,
+    profile?.apiBase,
+    profile?.apiKey,
+    reasoning,
+    advanced,
+  );
 }
 
 export async function sendQuestion(
@@ -1602,6 +1857,7 @@ export async function sendQuestion(
 
   // Track this request
   const thisRequestId = nextRequestId();
+  setPendingRequestId(thisRequestId);
   const initialConversationKey = getConversationKey(item);
 
   // Show cancel, hide send
@@ -1609,19 +1865,13 @@ export async function sendQuestion(
 
   await ensureConversationLoaded(item);
   const conversationKey = getConversationKey(item);
-  const { refreshChatSafely, setStatusSafely } = createPanelUpdateHelpers(
-    body,
-    item,
-    conversationKey,
-    ui,
-  );
 
   // Add user message with attached selected text / screenshots metadata
   if (!chatHistory.has(conversationKey)) {
     chatHistory.set(conversationKey, []);
   }
   const history = chatHistory.get(conversationKey)!;
-  const historyForLLM = history.slice(-MAX_HISTORY_MESSAGES);
+  const historyForLLM = history.slice();
   const requestFileAttachments = normalizeModelFileAttachments(attachments);
   const effectiveRequestConfig = resolveEffectiveRequestConfig({
     item,
@@ -1706,6 +1956,8 @@ export async function sendQuestion(
     text: "",
     timestamp: Date.now(),
     modelName: effectiveRequestConfig.model,
+    modelEntryId: effectiveRequestConfig.modelEntryId,
+    modelProviderLabel: effectiveRequestConfig.modelProviderLabel,
     streaming: true,
     reasoningOpen: isReasoningExpandedByDefault(),
   };
@@ -1713,6 +1965,12 @@ export async function sendQuestion(
   if (history.length > PERSISTED_HISTORY_LIMIT) {
     history.splice(0, history.length - PERSISTED_HISTORY_LIMIT);
   }
+  const { refreshChatSafely, setStatusSafely } = createPanelUpdateHelpers(
+    body,
+    item,
+    conversationKey,
+    ui,
+  );
   refreshChatSafely();
 
   let assistantPersisted = false;
@@ -1724,6 +1982,8 @@ export async function sendQuestion(
       text: assistantMessage.text,
       timestamp: assistantMessage.timestamp,
       modelName: assistantMessage.modelName,
+      modelEntryId: assistantMessage.modelEntryId,
+      modelProviderLabel: assistantMessage.modelProviderLabel,
       reasoningSummary: assistantMessage.reasoningSummary,
       reasoningDetails: assistantMessage.reasoningDetails,
     });
@@ -1742,7 +2002,7 @@ export async function sendQuestion(
   try {
     const llmHistory = buildLLMHistoryMessages(historyForLLM);
     const recentPaperContexts = collectRecentPaperContexts(historyForLLM);
-    const combinedContext = await buildContextPlanForRequest({
+    const contextPlan = await buildContextPlanForRequest({
       item,
       question,
       images,
@@ -1752,6 +2012,24 @@ export async function sendQuestion(
       history: llmHistory,
       effectiveRequestConfig,
       setStatusSafely,
+    });
+    const combinedContext = contextPlan.combinedContext;
+    userMessage.paperContexts = contextPlan.paperContexts.length
+      ? contextPlan.paperContexts
+      : undefined;
+    userMessage.pinnedPaperContexts = contextPlan.pinnedPaperContexts.length
+      ? contextPlan.pinnedPaperContexts
+      : undefined;
+    await updateStoredLatestUserMessage(conversationKey, {
+      text: userMessage.text,
+      timestamp: userMessage.timestamp,
+      selectedText: userMessage.selectedText,
+      selectedTexts: userMessage.selectedTexts,
+      selectedTextSources: userMessage.selectedTextSources,
+      selectedTextPaperContexts: userMessage.selectedTextPaperContexts,
+      screenshotImages: userMessage.screenshotImages,
+      paperContexts: userMessage.paperContexts,
+      attachments: userMessage.attachments,
     });
 
     const AbortControllerCtor = getAbortController();
@@ -1795,6 +2073,13 @@ export async function sendQuestion(
         }
         queueRefresh();
       },
+      (usage: UsageStats) => {
+        const total = accumulateSessionTokens(
+          conversationKey,
+          usage.totalTokens,
+        );
+        if (ui.tokenUsageEl) setTokenUsage(ui.tokenUsageEl, total);
+      },
     );
 
     if (
@@ -1832,9 +2117,142 @@ export async function sendQuestion(
     setStatusSafely(`Error: ${`${errMsg}${retryHint}`.slice(0, 40)}`, "error");
   } finally {
     setHistoryControlsDisabled(body, false);
-    restoreRequestUIIdle(ui, conversationKey, thisRequestId);
+    restoreRequestUIIdle(body, conversationKey, thisRequestId);
     setCurrentAbortController(null);
+    setPendingRequestId(0);
   }
+}
+
+/** Build the inline edit textarea + action bar that replaces a user bubble. */
+function buildInlineEditWidget(
+  doc: Document,
+  body: Element,
+  item: Zotero.Item,
+  _userMsg: Message,
+  _assistantMsg: Message,
+  _conversationKey: number,
+): HTMLDivElement {
+  const widgetRoot = doc.createElement("div") as HTMLDivElement;
+  widgetRoot.className = "llm-inline-edit-wrapper";
+
+  // On first entry, grab the real input section and the inputBox from the panel.
+  // Subsequent refreshes (e.g. streaming) reuse the saved reference so the
+  // already-detached element can be re-attached into the new widget root.
+  const isFirstEntry = !inlineEditInputSectionEl;
+  let inputSectionEl = inlineEditInputSectionEl;
+  if (isFirstEntry) {
+    inputSectionEl = body.querySelector(
+      ".llm-input-section",
+    ) as HTMLElement | null;
+    if (inputSectionEl) {
+      setInlineEditInputSection(
+        inputSectionEl,
+        inputSectionEl.parentElement,
+        inputSectionEl.nextSibling,
+      );
+    }
+  }
+
+  // The real input <textarea>
+  const inputBoxEl =
+    (body.querySelector("#llm-input") as HTMLTextAreaElement | null) ??
+    (inputSectionEl?.querySelector("#llm-input") as HTMLTextAreaElement | null);
+
+  // On first entry: save draft and pre-fill with the user message
+  if (isFirstEntry) {
+    setInlineEditSavedDraft(inputBoxEl?.value ?? "");
+    if (inputBoxEl && inlineEditTarget) {
+      inputBoxEl.value = inlineEditTarget.currentText;
+    }
+  }
+
+  // Keep inlineEditTarget.currentText in sync with what the user types
+  // (so text is preserved if chatBox rebuilds while still in edit mode).
+  // Use a one-time marker to avoid stacking duplicate listeners.
+  if (inputBoxEl && !inputBoxEl.dataset.inlineEditListening) {
+    inputBoxEl.dataset.inlineEditListening = "1";
+    inputBoxEl.addEventListener("input", () => {
+      if (inlineEditTarget) inlineEditTarget.currentText = inputBoxEl.value;
+    });
+  }
+
+  // Register cleanup (idempotent — only set once per edit session).
+  if (!inlineEditCleanup) {
+    setInlineEditCleanup(() => {
+      // Restore input section to its original position in the panel.
+      const el = inlineEditInputSectionEl;
+      const parent = inlineEditInputSectionParent;
+      const next = inlineEditInputSectionNextSib;
+      if (el && parent) {
+        parent.insertBefore(el, next);
+      }
+      // Restore the draft text.
+      if (inputBoxEl) {
+        inputBoxEl.value = inlineEditSavedDraft;
+        inputBoxEl.style.height = "auto";
+        if (inputBoxEl.scrollHeight) {
+          inputBoxEl.style.height = `${inputBoxEl.scrollHeight}px`;
+        }
+        delete inputBoxEl.dataset.inlineEditListening;
+        delete inputBoxEl.dataset.inlineEditFocused;
+      }
+      setInlineEditInputSection(null, null, null);
+      setInlineEditSavedDraft("");
+    });
+  }
+
+  const doCancel = () => {
+    inlineEditCleanup?.();
+    setInlineEditCleanup(null);
+    setInlineEditTarget(null);
+    const win = body.ownerDocument?.defaultView;
+    if (win) win.setTimeout(() => refreshChat(body, item), 0);
+  };
+
+  // Header: "Editing" label + Cancel button
+  const header = doc.createElement("div") as HTMLDivElement;
+  header.className = "llm-inline-edit-header";
+  const headerLabel = doc.createElement("span") as HTMLSpanElement;
+  headerLabel.className = "llm-inline-edit-header-label";
+  headerLabel.textContent = "Editing";
+  const cancelBtn = doc.createElement("button") as HTMLButtonElement;
+  cancelBtn.type = "button";
+  cancelBtn.className = "llm-inline-edit-header-cancel";
+  cancelBtn.textContent = "Cancel";
+  cancelBtn.addEventListener("mousedown", (e: Event) => {
+    (e as MouseEvent).preventDefault();
+    (e as MouseEvent).stopPropagation();
+    doCancel();
+  });
+  cancelBtn.addEventListener("click", (e: Event) => {
+    e.preventDefault();
+    e.stopPropagation();
+  });
+  header.append(headerLabel, cancelBtn);
+  widgetRoot.appendChild(header);
+
+  // Move the real input section into the widget
+  if (inputSectionEl) widgetRoot.appendChild(inputSectionEl);
+
+  // Focus on first entry only (don't steal focus on streaming refreshes)
+  const win = body.ownerDocument?.defaultView;
+  if (
+    win &&
+    inputBoxEl &&
+    isFirstEntry &&
+    !inputBoxEl.dataset.inlineEditFocused
+  ) {
+    inputBoxEl.dataset.inlineEditFocused = "1";
+    win.setTimeout(() => {
+      inputBoxEl.focus({ preventScroll: true });
+      inputBoxEl.setSelectionRange(
+        inputBoxEl.value.length,
+        inputBoxEl.value.length,
+      );
+    }, 0);
+  }
+
+  return widgetRoot;
 }
 
 export function refreshChat(body: Element, item?: Zotero.Item | null) {
@@ -1850,10 +2268,18 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
         <div class="llm-welcome-text">Select an item or open a PDF to start.</div>
       </div>
     `;
+    const tokenUsageEl = body.querySelector(
+      "#llm-token-usage",
+    ) as HTMLElement | null;
+    if (tokenUsageEl) tokenUsageEl.style.display = "none";
     return;
   }
 
   const conversationKey = getConversationKey(item);
+  // Sync token counter for this conversation
+  const tokenUsageEl = body.querySelector(
+    "#llm-token-usage",
+  ) as HTMLElement | null;
   const panelRoot = body.querySelector("#llm-main") as HTMLDivElement | null;
   const isGlobalConversation =
     isGlobalPortalItem(item) ||
@@ -1868,12 +2294,26 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
       ? cachedSnapshot
       : buildChatScrollSnapshot(chatBox);
   const history = chatHistory.get(conversationKey) || [];
+  if (tokenUsageEl)
+    setTokenUsage(
+      tokenUsageEl,
+      getOrSeedSessionTokens(conversationKey, history),
+    );
 
   if (history.length === 0) {
     chatBox.innerHTML = `
       <div class="llm-welcome">
         <div class="llm-welcome-icon">💬</div>
-        <div class="llm-welcome-text">Start a conversation by asking a question or using one of the quick actions below.</div>
+        <div class="llm-welcome-text">
+          <div class="llm-welcome-title">LLM-for-Zotero helps answer questions about the current paper.</div>
+          <ul class="llm-welcome-list">
+            <li><strong>Paper chat</strong> loads the paper's full text as context. <strong>Open chat</strong> gives you a clean slate to add context yourself for questions across papers.</li>
+            <li>Switch between <strong>Paper chat</strong> and <strong>Open chat</strong> by clicking the mode chip. To keep one Open chat across different paper tabs, click the lock icon.</li>
+            <li>Use <strong>Add Text</strong> to include selected PDF passages, and <strong>Screenshots</strong> to attach figures. For multimodal models, screenshots also work well for math equations.</li>
+            <li>Right-click a context item to pin it. Left-click a text context item to jump back to the page where it was selected.</li>
+            <li>Type <strong>/</strong> or use <strong>Context actions</strong> to add other papers or upload files.</li>
+          </ul>
+        </div>
       </div>
     `;
     return;
@@ -1885,23 +2325,18 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
   const latestAssistantIndex = latestRetryPair
     ? latestRetryPair.userIndex + 1
     : -1;
-  const latestEditableUserIndex = latestRetryPair?.userIndex ?? -1;
-  const latestEditableUserTimestamp = latestRetryPair?.userMessage.timestamp;
-  const latestEditableAssistantTimestamp =
-    latestRetryPair?.assistantMessage.timestamp;
-  const latestEditableIsIdle = Boolean(
-    latestRetryPair && !latestRetryPair.assistantMessage.streaming,
-  );
-
+  const conversationIsIdle = !history.some((m) => m.streaming);
   for (const [index, msg] of history.entries()) {
     const isUser = msg.role === "user";
-    const canEditLatestUserPrompt = Boolean(
-      isUser &&
-      item &&
-      latestEditableIsIdle &&
-      index === latestEditableUserIndex &&
-      Number.isFinite(latestEditableUserTimestamp) &&
-      Number.isFinite(latestEditableAssistantTimestamp),
+    const assistantPairMsg = history[index + 1];
+    const hasAssistantPair = isUser && assistantPairMsg?.role === "assistant";
+    const canEditUserPrompt = Boolean(
+      isUser && item && conversationIsIdle && hasAssistantPair,
+    );
+    const isInlineEditBubble = Boolean(
+      canEditUserPrompt &&
+      inlineEditTarget?.conversationKey === conversationKey &&
+      inlineEditTarget.userTimestamp === msg.timestamp,
     );
     let hasUserContext = false;
     const wrapper = doc.createElement("div") as HTMLDivElement;
@@ -1909,6 +2344,7 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
 
     const bubble = doc.createElement("div") as HTMLDivElement;
     bubble.className = `llm-bubble ${isUser ? "user" : "assistant"}`;
+    let inlineEditEl: HTMLElement | null = null;
 
     if (isUser) {
       const contextBadgesRow = doc.createElement("div") as HTMLDivElement;
@@ -2088,14 +2524,6 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
         for (const paperContext of paperContexts) {
           const paperItem = doc.createElement("div") as HTMLDivElement;
           paperItem.className = "llm-user-papers-item";
-
-          if (paperContext.citationKey) {
-            const keyBadge = doc.createElement("span") as HTMLSpanElement;
-            keyBadge.className = "llm-user-papers-item-key";
-            keyBadge.textContent = paperContext.citationKey;
-            keyBadge.title = paperContext.citationKey;
-            paperItem.appendChild(keyBadge);
-          }
 
           const paperTitle = doc.createElement("span") as HTMLSpanElement;
           paperTitle.className = "llm-user-papers-item-title";
@@ -2375,15 +2803,40 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
         });
         renderSelectedTextStates();
       }
-      bubble.textContent = sanitizeText(msg.text || "");
-      const assistantTurnMessage = history[index + 1];
-      const hasPromptTurnPair = Boolean(
-        assistantTurnMessage?.role === "assistant",
-      );
+      const hasPromptTurnPair = Boolean(assistantPairMsg?.role === "assistant");
       const canDeletePromptTurn = Boolean(
-        hasPromptTurnPair && !assistantTurnMessage?.streaming,
+        hasPromptTurnPair && !assistantPairMsg?.streaming,
       );
-      if (hasPromptTurnPair || canEditLatestUserPrompt) {
+      if (isInlineEditBubble) {
+        inlineEditEl = buildInlineEditWidget(
+          doc,
+          body,
+          item,
+          msg,
+          assistantPairMsg!,
+          conversationKey,
+        );
+      } else {
+        bubble.textContent = sanitizeText(msg.text || "");
+        if (canEditUserPrompt) {
+          bubble.classList.add("llm-bubble-editable");
+          bubble.addEventListener("click", (e: Event) => {
+            if ((e.target as Element | null)?.closest("a, button")) return;
+            e.preventDefault();
+            e.stopPropagation();
+            const win = body.ownerDocument?.defaultView;
+            if (!win) return;
+            setInlineEditTarget({
+              conversationKey,
+              userTimestamp: msg.timestamp,
+              assistantTimestamp: Math.floor(assistantPairMsg!.timestamp),
+              currentText: msg.text || "",
+            });
+            win.setTimeout(() => refreshChat(body, item), 0);
+          });
+        }
+      }
+      if (hasPromptTurnPair) {
         bubble.addEventListener("contextmenu", (e: Event) => {
           const me = e as MouseEvent;
           me.preventDefault();
@@ -2403,20 +2856,14 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
           const retryModelMenu = body.querySelector(
             "#llm-retry-model-menu",
           ) as HTMLDivElement | null;
-          const promptMenuEditBtn = promptMenu?.querySelector(
-            "#llm-prompt-menu-edit",
-          ) as HTMLButtonElement | null;
           const promptMenuDeleteBtn = promptMenu?.querySelector(
             "#llm-prompt-menu-delete",
           ) as HTMLButtonElement | null;
           if (!promptMenu) return;
-          if (promptMenuEditBtn) {
-            promptMenuEditBtn.disabled = !canEditLatestUserPrompt;
-          }
           if (promptMenuDeleteBtn) {
             promptMenuDeleteBtn.disabled = !canDeletePromptTurn;
           }
-          if (!canEditLatestUserPrompt && !canDeletePromptTurn) return;
+          if (!canDeletePromptTurn) return;
           if (responseMenu) responseMenu.style.display = "none";
           if (exportMenu) exportMenu.style.display = "none";
           if (retryModelMenu) {
@@ -2429,9 +2876,9 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
             conversationKey,
             userTimestamp: Math.floor(msg.timestamp),
             assistantTimestamp: hasPromptTurnPair
-              ? Math.floor(assistantTurnMessage?.timestamp || 0)
+              ? Math.floor(assistantPairMsg?.timestamp || 0)
               : 0,
-            editable: canEditLatestUserPrompt,
+            editable: false,
           });
           positionMenuAtPointer(body, promptMenu, me.clientX, me.clientY);
         });
@@ -2447,6 +2894,32 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
         } catch (err) {
           ztoolkit.log("LLM render error:", err);
           bubble.textContent = safeText;
+        }
+        if (!msg.streaming) {
+          try {
+            const pairedUserMessage =
+              history[index - 1]?.role === "user" ? history[index - 1] : null;
+            ztoolkit.log(
+              "LLM: calling decorateAssistantCitationLinks",
+              "msgLen =",
+              msg.text.length,
+              "bubbleHTML =",
+              String(bubble.innerHTML || "").length,
+              "hasPairedUser =",
+              Boolean(pairedUserMessage),
+              "pairedPaperContexts =",
+              pairedUserMessage?.paperContexts?.length ?? "none",
+            );
+            decorateAssistantCitationLinks({
+              body,
+              panelItem: item,
+              bubble,
+              assistantMessage: msg,
+              pairedUserMessage,
+            });
+          } catch (decorateErr) {
+            ztoolkit.log("LLM citation decoration error:", decorateErr);
+          }
         }
         bubble.addEventListener("contextmenu", (e: Event) => {
           const me = e as MouseEvent;
@@ -2505,6 +2978,15 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
           });
           positionMenuAtPointer(body, responseMenu, me.clientX, me.clientY);
         });
+      }
+
+      const bubbleHeaderNodes: HTMLElement[] = [];
+
+      if (hasModelName) {
+        const modelName = doc.createElement("div") as HTMLDivElement;
+        modelName.className = "llm-model-name";
+        modelName.textContent = msg.modelName?.trim() || "";
+        bubbleHeaderNodes.push(modelName);
       }
 
       const hasReasoningSummary = Boolean(msg.reasoningSummary?.trim());
@@ -2579,7 +3061,11 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
         }
 
         details.appendChild(bodyWrap);
-        bubble.insertBefore(details, bubble.firstChild);
+        bubbleHeaderNodes.push(details);
+      }
+
+      for (let i = bubbleHeaderNodes.length - 1; i >= 0; i -= 1) {
+        bubble.insertBefore(bubbleHeaderNodes[i], bubble.firstChild);
       }
 
       if (!hasAnswerText) {
@@ -2589,13 +3075,6 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
           '<span class="llm-typing-dot"></span><span class="llm-typing-dot"></span><span class="llm-typing-dot"></span>';
         bubble.appendChild(typing);
       }
-
-      if (hasModelName) {
-        const modelName = doc.createElement("div") as HTMLDivElement;
-        modelName.className = "llm-model-name";
-        modelName.textContent = msg.modelName?.trim() || "";
-        bubble.insertBefore(modelName, bubble.firstChild);
-      }
     }
 
     const meta = doc.createElement("div") as HTMLDivElement;
@@ -2604,21 +3083,6 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
     const time = doc.createElement("span") as HTMLSpanElement;
     time.className = "llm-message-time";
     time.textContent = formatTime(msg.timestamp);
-    if (canEditLatestUserPrompt) {
-      const editBtn = doc.createElement("button") as HTMLButtonElement;
-      editBtn.type = "button";
-      editBtn.className = "llm-edit-latest";
-      editBtn.textContent = "✎";
-      editBtn.title = "Edit latest prompt";
-      editBtn.setAttribute("aria-label", "Edit latest prompt");
-      editBtn.dataset.userTimestamp = String(
-        latestEditableUserTimestamp as number,
-      );
-      editBtn.dataset.assistantTimestamp = String(
-        latestEditableAssistantTimestamp as number,
-      );
-      meta.appendChild(editBtn);
-    }
     meta.appendChild(time);
     if (
       !isUser &&
@@ -2635,7 +3099,11 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
       meta.appendChild(retryBtn);
     }
 
-    wrapper.appendChild(bubble);
+    if (isUser && inlineEditEl) {
+      wrapper.appendChild(inlineEditEl);
+    } else {
+      wrapper.appendChild(bubble);
+    }
     wrapper.appendChild(meta);
     chatBox.appendChild(wrapper);
     if (isUser && hasUserContext) {
