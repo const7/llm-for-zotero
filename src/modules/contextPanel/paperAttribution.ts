@@ -8,6 +8,21 @@ function normalizeText(value: unknown): string {
     .trim();
 }
 
+function getAttachmentDisplayTitle(
+  contextItem: Zotero.Item | null | undefined,
+): string {
+  if (!contextItem?.isAttachment?.()) return "";
+  const title = normalizeText(String(contextItem.getField("title") || ""));
+  if (title) return title;
+  const filename = normalizeText(
+    String(
+      (contextItem as unknown as { attachmentFilename?: string })
+        .attachmentFilename || "",
+    ),
+  );
+  return filename;
+}
+
 function extractYearValue(value: unknown): string | undefined {
   const text = normalizeText(value);
   if (!text) return undefined;
@@ -84,9 +99,10 @@ export function formatPaperCitationLabel(
   const authorLastName = extractFirstAuthorLastName(paperContext);
   const year = resolvePaperContextDisplayMetadata(paperContext).year;
   if (authorLastName !== "Paper") {
-    return year
+    const authorYearLabel = year
       ? `${authorLastName} et al., ${year}`
       : `${authorLastName} et al.`;
+    return authorYearLabel;
   }
   const fallbackId =
     Number.isFinite(paperContext.itemId) && paperContext.itemId > 0
@@ -95,6 +111,40 @@ export function formatPaperCitationLabel(
         ? Math.floor(paperContext.contextItemId)
         : 0;
   return fallbackId > 0 ? `Paper ${fallbackId}` : "Paper";
+}
+
+export function formatPaperSourceLabel(
+  paperContext: PaperContextRef | null | undefined,
+): string {
+  return `(${formatPaperCitationLabel(paperContext)})`;
+}
+
+export function buildPaperQuoteCitationGuidance(
+  paperContext?: PaperContextRef | null,
+): string[] {
+  return [
+    "Paper-grounded citation format for the final answer:",
+    "> quoted text from the paper",
+    paperContext
+      ? formatPaperSourceLabel(paperContext)
+      : "(Author et al., Year)",
+    "- Put the source label on the line immediately after the quote.",
+    "- Use the matching paper metadata for the source label.",
+    "- Do not cite raw chunk ids, citation keys, or invented page numbers unless they are explicitly provided.",
+  ];
+}
+
+export function formatPaperContextReferenceLabel(
+  paperContext: PaperContextRef | null | undefined,
+): string {
+  if (!paperContext) return "Paper";
+  const citation = formatPaperCitationLabel(paperContext);
+  const attachmentTitle = normalizeText(paperContext.attachmentTitle || "");
+  const paperTitle = normalizeText(paperContext.title || "");
+  const parts = [citation];
+  if (paperTitle) parts.push(paperTitle);
+  if (attachmentTitle) parts.push(`Attachment: ${attachmentTitle}`);
+  return parts.join(" - ");
 }
 
 export function formatOpenChatTextContextLabel(
@@ -136,6 +186,7 @@ export function resolvePaperContextRefFromAttachment(
     ),
   );
   const citationKey = normalizeText(String(paperItem.getField("citationKey") || ""));
+  const attachmentTitle = getAttachmentDisplayTitle(contextItem);
   const firstCreator = normalizeText(
     String(
       paperItem.getField("firstCreator") ||
@@ -156,6 +207,7 @@ export function resolvePaperContextRefFromAttachment(
     itemId: normalizedPaperItemId,
     contextItemId: normalizedContextItemId,
     title: title || `Paper ${normalizedPaperItemId}`,
+    attachmentTitle: attachmentTitle || undefined,
     citationKey: citationKey || undefined,
     firstCreator: firstCreator || undefined,
     year: year || undefined,

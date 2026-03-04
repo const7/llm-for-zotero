@@ -55,11 +55,12 @@ import {
   applySelectedTextPreview,
 } from "./contextResolution";
 import { ensurePDFTextCached } from "./pdfContext";
+import { resolveCurrentSelectionPageLocationFromReader } from "./livePdfSelectionLocator";
 import {
   getFirstSelectionFromReader,
   getSelectionFromDocument,
 } from "./readerSelection";
-import { resolvePaperContextRefFromAttachment } from "./paperAttribution";
+import { resolveReaderPopupPaperContext } from "./readerPopup";
 import { resolveInitialPanelItemState } from "./portalScope";
 
 // =============================================================================
@@ -212,7 +213,7 @@ export function registerReaderSelectionTracking() {
 
     if (selectedText || showAddTextInPopup) {
       let popupSentinelEl: HTMLElement | null = null;
-      const addTextToPanel = () => {
+      const addTextToPanel = async () => {
         const effectiveSelectedText =
           normalizeSelectedText(selectedText) ||
           resolveSelectedTextForPopupAction();
@@ -297,7 +298,10 @@ export function registerReaderSelectionTracking() {
                   ),
                 )
               : 0;
-          const readerPaperContext = resolvePaperContextRefFromAttachment(item);
+          const readerPaperContext = resolveReaderPopupPaperContext(
+            item,
+            getActiveContextAttachmentFromTabs(),
+          );
           const readerPaperItemID =
             readerPaperContext && Number.isFinite(readerPaperContext.itemId)
               ? Math.floor(readerPaperContext.itemId)
@@ -454,11 +458,17 @@ export function registerReaderSelectionTracking() {
           const selectedPaperContext = isGlobalConversation
             ? readerPaperContext
             : null;
+          const selectedTextLocation =
+            await resolveCurrentSelectionPageLocationFromReader(
+              event.reader as any,
+              effectiveSelectedText,
+            );
           const added = appendSelectedTextContextForItem(
             conversationKey,
             effectiveSelectedText,
             "pdf",
             selectedPaperContext,
+            selectedTextLocation,
           );
           let refreshedPanels = 0;
           for (const [
@@ -567,7 +577,7 @@ export function registerReaderSelectionTracking() {
             addTextHandled = true;
             e.preventDefault();
             e.stopPropagation();
-            addTextToPanel();
+            void addTextToPanel();
           };
           const isPrimaryButton = (e: Event): boolean => {
             const maybeMouse = e as MouseEvent;
@@ -666,7 +676,7 @@ export function registerReaderSelectionTracking() {
 }
 
 export function clearConversation(itemId: number) {
-  chatHistory.delete(itemId);
+  chatHistory.set(itemId, []);
   loadedConversationKeys.add(itemId);
   void clearStoredConversation(itemId).catch((err) => {
     ztoolkit.log("LLM: Failed to clear persisted chat history", err);

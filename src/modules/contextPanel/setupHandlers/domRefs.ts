@@ -12,6 +12,7 @@ export type PanelDomRefs = {
   actionsRow: HTMLDivElement | null;
   actionsLeft: HTMLDivElement | null;
   actionsRight: HTMLDivElement | null;
+  settingsBtn: HTMLButtonElement | null;
   exportBtn: HTMLButtonElement | null;
   clearBtn: HTMLButtonElement | null;
   titleStatic: HTMLDivElement | null;
@@ -23,6 +24,9 @@ export type PanelDomRefs = {
   historyToggleBtn: HTMLButtonElement | null;
   historyModeIndicator: HTMLButtonElement | null;
   historyMenu: HTMLDivElement | null;
+  modeCapsule: HTMLElement | null;
+  modeChipBtn: HTMLButtonElement | null;
+  modeLockBtn: HTMLButtonElement | null;
   historyRowMenu: HTMLDivElement | null;
   historyRowRenameBtn: HTMLButtonElement | null;
   historyUndo: HTMLDivElement | null;
@@ -35,6 +39,8 @@ export type PanelDomRefs = {
   slashMenu: HTMLDivElement | null;
   slashUploadOption: HTMLButtonElement | null;
   slashReferenceOption: HTMLButtonElement | null;
+  slashLocateSelectionOption: HTMLButtonElement | null;
+  slashLocateQuoteOption: HTMLButtonElement | null;
   imagePreview: HTMLDivElement | null;
   selectedContextList: HTMLDivElement | null;
   previewStrip: HTMLDivElement | null;
@@ -57,13 +63,14 @@ export type PanelDomRefs = {
   responseMenuNoteBtn: HTMLButtonElement | null;
   responseMenuDeleteBtn: HTMLButtonElement | null;
   promptMenu: HTMLDivElement | null;
-  promptMenuEditBtn: HTMLButtonElement | null;
   promptMenuDeleteBtn: HTMLButtonElement | null;
   exportMenu: HTMLDivElement | null;
   exportMenuCopyBtn: HTMLButtonElement | null;
   exportMenuNoteBtn: HTMLButtonElement | null;
   retryModelMenu: HTMLDivElement | null;
   status: HTMLElement | null;
+  tokenUsageEl: HTMLElement | null;
+  liveLocateDemo: HTMLDivElement | null;
   chatBox: HTMLDivElement | null;
   panelRoot: HTMLDivElement | null;
 };
@@ -99,6 +106,7 @@ export function getPanelDomRefs(body: Element): PanelDomRefs {
     actionsRight: body.querySelector(
       ".llm-actions-right",
     ) as HTMLDivElement | null,
+    settingsBtn: body.querySelector("#llm-settings") as HTMLButtonElement | null,
     exportBtn: body.querySelector("#llm-export") as HTMLButtonElement | null,
     clearBtn: body.querySelector("#llm-clear") as HTMLButtonElement | null,
     titleStatic: body.querySelector(
@@ -122,6 +130,15 @@ export function getPanelDomRefs(body: Element): PanelDomRefs {
     ) as HTMLButtonElement | null,
     historyModeIndicator: body.querySelector(
       "#llm-history-toggle",
+    ) as HTMLButtonElement | null,
+    modeCapsule: body.querySelector(
+      "#llm-mode-capsule",
+    ) as HTMLElement | null,
+    modeChipBtn: body.querySelector(
+      "#llm-mode-chip",
+    ) as HTMLButtonElement | null,
+    modeLockBtn: body.querySelector(
+      "#llm-mode-lock",
     ) as HTMLButtonElement | null,
     historyMenu: body.querySelector(
       "#llm-history-menu",
@@ -159,6 +176,12 @@ export function getPanelDomRefs(body: Element): PanelDomRefs {
     ) as HTMLButtonElement | null,
     slashReferenceOption: body.querySelector(
       "#llm-slash-reference-option",
+    ) as HTMLButtonElement | null,
+    slashLocateSelectionOption: body.querySelector(
+      "#llm-slash-locate-selection-option",
+    ) as HTMLButtonElement | null,
+    slashLocateQuoteOption: body.querySelector(
+      "#llm-slash-locate-quote-option",
     ) as HTMLButtonElement | null,
     imagePreview: body.querySelector(
       "#llm-image-preview",
@@ -224,9 +247,6 @@ export function getPanelDomRefs(body: Element): PanelDomRefs {
       "#llm-response-menu-delete",
     ) as HTMLButtonElement | null,
     promptMenu: body.querySelector("#llm-prompt-menu") as HTMLDivElement | null,
-    promptMenuEditBtn: body.querySelector(
-      "#llm-prompt-menu-edit",
-    ) as HTMLButtonElement | null,
     promptMenuDeleteBtn: body.querySelector(
       "#llm-prompt-menu-delete",
     ) as HTMLButtonElement | null,
@@ -241,6 +261,10 @@ export function getPanelDomRefs(body: Element): PanelDomRefs {
       "#llm-retry-model-menu",
     ) as HTMLDivElement | null,
     status: body.querySelector("#llm-status") as HTMLElement | null,
+    tokenUsageEl: body.querySelector("#llm-token-usage") as HTMLElement | null,
+    liveLocateDemo: body.querySelector(
+      "#llm-live-locate-demo",
+    ) as HTMLDivElement | null,
     chatBox: body.querySelector("#llm-chat-box") as HTMLDivElement | null,
     panelRoot: body.querySelector("#llm-main") as HTMLDivElement | null,
   };

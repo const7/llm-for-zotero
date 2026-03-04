@@ -1,4 +1,3 @@
-import type { ModelProfileKey } from "./constants";
 import type {
   Message,
   PdfContext,
@@ -16,7 +15,7 @@ import type {
 export const chatHistory = new Map<number, Message[]>();
 export const loadedConversationKeys = new Set<number>();
 export const loadingConversationTasks = new Map<number, Promise<void>>();
-export const selectedModelCache = new Map<number, ModelProfileKey>();
+export const selectedModelCache = new Map<number, string>();
 export const selectedReasoningCache = new Map<
   number,
   ReasoningLevelSelection
@@ -41,6 +40,15 @@ export function setReaderContextPanelRegistered(value: boolean) {
 export let currentRequestId = 0;
 export function nextRequestId(): number {
   return ++currentRequestId;
+}
+/**
+ * Set to the current request ID when a request starts and cleared back to 0
+ * in the finally block. Unlike currentAbortController, this stays non-null for
+ * the entire lifecycle of a request, including pre-stream work.
+ */
+export let pendingRequestId = 0;
+export function setPendingRequestId(id: number): void {
+  pendingRequestId = id;
 }
 export let cancelledRequestId = -1;
 export function setCancelledRequestId(value: number) {
@@ -101,3 +109,46 @@ export const pinnedPaperKeys = new Map<number, Set<string>>();
 export const recentReaderSelectionCache = new Map<number, string>();
 
 export const activePaperConversationByPaper = new Map<string, number>();
+
+// ── Inline edit state ───────────────────────────────────────────────────────
+
+export type InlineEditTarget = {
+  conversationKey: number;
+  userTimestamp: number;
+  assistantTimestamp: number;
+  /** Text currently typed in the inline textarea (preserved across refreshes). */
+  currentText: string;
+};
+
+export let inlineEditTarget: InlineEditTarget | null = null;
+export function setInlineEditTarget(value: InlineEditTarget | null): void {
+  inlineEditTarget = value;
+}
+
+/** Cleanup callback to restore borrowed DOM elements when the inline edit widget is dismissed. */
+export let inlineEditCleanup: (() => void) | null = null;
+export function setInlineEditCleanup(fn: (() => void) | null): void {
+  inlineEditCleanup = fn;
+}
+
+/** The .llm-input-section element borrowed into the chat widget during inline edit. */
+export let inlineEditInputSectionEl: HTMLElement | null = null;
+/** Original parent of the borrowed input section (for restoring). */
+export let inlineEditInputSectionParent: Element | null = null;
+/** Original next-sibling of the borrowed input section (for restoring). */
+export let inlineEditInputSectionNextSib: Node | null = null;
+/** Draft text that was in the inputBox when edit mode was entered. */
+export let inlineEditSavedDraft: string = "";
+
+export function setInlineEditInputSection(
+  el: HTMLElement | null,
+  parent: Element | null,
+  nextSib: Node | null,
+): void {
+  inlineEditInputSectionEl = el;
+  inlineEditInputSectionParent = parent;
+  inlineEditInputSectionNextSib = nextSib;
+}
+export function setInlineEditSavedDraft(text: string): void {
+  inlineEditSavedDraft = text;
+}
