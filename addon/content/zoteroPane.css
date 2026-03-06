@@ -2314,6 +2314,7 @@
 .llm-paper-context-chip-header {
   gap: 0;
   padding-right: 4px;
+  cursor: pointer;
 }
 
 .llm-paper-context-chip-header .llm-paper-context-clear {
@@ -2327,6 +2328,34 @@
   padding: 0;
   margin-left: -2px;
   transform: translateY(-1px);
+}
+
+.llm-paper-chip-menu {
+  min-width: min(240px, calc(100vw - 24px));
+  max-width: min(360px, calc(100vw - 24px));
+}
+
+.llm-paper-chip-menu-row .llm-paper-picker-title,
+.llm-paper-chip-menu-row .llm-paper-picker-meta {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  overflow-wrap: anywhere;
+}
+
+.llm-paper-context-card-attachment {
+  color: var(--fill-secondary);
+}
+
+/* Paper chip inline expanded popup (same hover/sticky pattern as .llm-selected-context-expanded) */
+.llm-paper-context-chip-expanded {
+  padding: 6px;
+}
+
+/* The paper card fills the full popup width */
+.llm-paper-context-chip-expanded .llm-paper-chip-menu-row {
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .llm-paper-picker {

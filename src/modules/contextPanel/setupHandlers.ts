@@ -257,7 +257,6 @@ import {
   retainPinnedSelectedTextContexts,
   togglePinnedFile,
   togglePinnedImage,
-  togglePinnedPaper,
   togglePinnedSelectedText,
 } from "./setupHandlers/controllers/pinnedContextController";
 import {
@@ -1401,6 +1400,335 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     return resolvePaperContextRefFromAttachment(contextSource.contextItem);
   };
 
+  let paperChipMenu: HTMLDivElement | null = null;
+  let paperChipMenuAnchor: HTMLDivElement | null = null;
+  let paperChipMenuSticky = false;
+  let paperChipMenuTarget: PaperContextRef | null = null;
+  let paperChipMenuHideTimer: number | null = null;
+  const clearPaperChipMenuHideTimer = () => {
+    if (paperChipMenuHideTimer === null) return;
+    const win = body.ownerDocument?.defaultView;
+    if (win) {
+      win.clearTimeout(paperChipMenuHideTimer);
+    } else {
+      clearTimeout(paperChipMenuHideTimer as unknown as ReturnType<
+        typeof setTimeout
+      >);
+    }
+    paperChipMenuHideTimer = null;
+  };
+  const closePaperChipMenu = () => {
+    clearPaperChipMenuHideTimer();
+    if (paperChipMenu) {
+      paperChipMenu.style.display = "none";
+    }
+    paperChipMenuAnchor = null;
+    paperChipMenuTarget = null;
+    paperChipMenuSticky = false;
+  };
+  const buildPaperChipAttachmentText = (
+    paperContext: PaperContextRef,
+  ): string => {
+    const attachmentTitle = sanitizeText(paperContext.attachmentTitle || "").trim();
+    const paperTitle = sanitizeText(paperContext.title || "").trim();
+    if (!attachmentTitle || attachmentTitle === paperTitle) return "";
+    return attachmentTitle;
+  };
+  const buildPaperChipMenuCard = (
+    ownerDoc: Document,
+    paperContext: PaperContextRef,
+  ): HTMLButtonElement => {
+    const card = createElement(
+      ownerDoc,
+      "button",
+      "llm-paper-picker-item llm-paper-picker-group-row llm-paper-chip-menu-row",
+      {
+        type: "button",
+        title: `Jump to ${paperContext.title}`,
+      },
+    ) as HTMLButtonElement;
+    const rowMain = createElement(
+      ownerDoc,
+      "div",
+      "llm-paper-picker-group-row-main",
+    );
+    const titleLine = createElement(
+      ownerDoc,
+      "div",
+      "llm-paper-picker-group-title-line",
+    );
+    const title = createElement(ownerDoc, "span", "llm-paper-picker-title", {
+      textContent: paperContext.title,
+      title: paperContext.title,
+    });
+    titleLine.appendChild(title);
+    const attachmentText = buildPaperChipAttachmentText(paperContext);
+    if (attachmentText) {
+      titleLine.appendChild(
+        createElement(ownerDoc, "span", "llm-paper-picker-badge", {
+          textContent: "PDF",
+        }),
+      );
+    }
+    rowMain.appendChild(titleLine);
+    const metaText = buildPaperMetaText(paperContext);
+    if (metaText) {
+      rowMain.appendChild(
+        createElement(ownerDoc, "span", "llm-paper-picker-meta", {
+          textContent: metaText,
+          title: metaText,
+        }),
+      );
+    }
+    if (attachmentText) {
+      rowMain.appendChild(
+        createElement(
+          ownerDoc,
+          "span",
+          "llm-paper-picker-meta llm-paper-context-card-attachment",
+          {
+            textContent: attachmentText,
+            title: attachmentText,
+          },
+        ),
+      );
+    }
+    card.appendChild(rowMain);
+    return card;
+  };
+  const ensurePaperChipMenu = (): HTMLDivElement | null => {
+    if (paperChipMenu?.isConnected) return paperChipMenu;
+    const ownerDoc = body.ownerDocument;
+    if (!ownerDoc) return null;
+    const menu = createElement(ownerDoc, "div", "llm-model-menu llm-paper-chip-menu");
+    menu.style.display = "none";
+    menu.addEventListener("mouseenter", () => {
+      clearPaperChipMenuHideTimer();
+    });
+    menu.addEventListener("mouseleave", () => {
+      if (!paperChipMenuSticky) {
+        const win = body.ownerDocument?.defaultView;
+        if (!win) {
+          closePaperChipMenu();
+          return;
+        }
+        clearPaperChipMenuHideTimer();
+        paperChipMenuHideTimer = win.setTimeout(() => {
+          closePaperChipMenu();
+        }, 100);
+      }
+    });
+    menu.addEventListener("click", (e: Event) => {
+      const target = e.target as Element | null;
+      if (!target) return;
+      const card = target.closest(
+        ".llm-paper-chip-menu-row",
+      ) as HTMLButtonElement | null;
+      if (!card || !paperChipMenuTarget) return;
+      e.preventDefault();
+      e.stopPropagation();
+      void focusPaperContextInActiveTab(paperChipMenuTarget)
+        .then((focused) => {
+          if (!focused && status) {
+            setStatus(status, "Could not focus this paper", "error");
+          }
+        })
+        .catch((err) => {
+          ztoolkit.log("LLM: Failed to focus paper context from menu", err);
+          if (status) {
+            setStatus(status, "Could not focus this paper", "error");
+          }
+        });
+    });
+    body.appendChild(menu);
+    paperChipMenu = menu;
+    return menu;
+  };
+  const positionPaperChipMenuAboveAnchor = (
+    menu: HTMLDivElement,
+    anchor: HTMLElement,
+  ) => {
+    const win = body.ownerDocument?.defaultView;
+    if (!win) return;
+
+    const viewportMargin = 8;
+    const gap = 6;
+    const panelRect = body.getBoundingClientRect();
+    const minLeftBound = Math.max(viewportMargin, Math.round(panelRect.left) + 2);
+    const minTopBound = Math.max(viewportMargin, Math.round(panelRect.top) + 2);
+    const maxRightBound = Math.round(panelRect.right) - 2;
+    const maxBottomBound = Math.round(panelRect.bottom) - 2;
+    const anchorRect = anchor.getBoundingClientRect();
+    const availableWidth = Math.max(
+      160,
+      Math.floor(panelRect.width) - viewportMargin * 2 - 4,
+    );
+
+    menu.style.position = "fixed";
+    menu.style.display = "grid";
+    menu.style.visibility = "hidden";
+    menu.style.boxSizing = "border-box";
+    menu.style.maxWidth = `${availableWidth}px`;
+    menu.style.maxHeight = `${Math.max(120, Math.floor(panelRect.height) - viewportMargin * 2)}px`;
+    menu.style.overflowY = "auto";
+    menu.style.overflowX = "hidden";
+
+    const menuRect = menu.getBoundingClientRect();
+    const maxLeft = Math.max(
+      minLeftBound,
+      Math.min(
+        win.innerWidth - menuRect.width - viewportMargin,
+        maxRightBound - menuRect.width,
+      ),
+    );
+    const maxTop = Math.max(
+      minTopBound,
+      Math.min(
+        win.innerHeight - menuRect.height - viewportMargin,
+        maxBottomBound - menuRect.height,
+      ),
+    );
+    const preferredLeft =
+      anchorRect.left + menuRect.width <= maxRightBound
+        ? anchorRect.left
+        : anchorRect.right - menuRect.width;
+    const spaceAbove = anchorRect.top - minTopBound;
+    const spaceBelow = maxBottomBound - anchorRect.bottom;
+    const preferredTop =
+      spaceAbove >= menuRect.height || spaceAbove >= spaceBelow
+        ? anchorRect.top - menuRect.height - gap
+        : anchorRect.bottom + gap;
+    const left = Math.min(Math.max(minLeftBound, preferredLeft), maxLeft);
+    const top = Math.min(Math.max(minTopBound, preferredTop), maxTop);
+    menu.style.left = `${Math.round(left)}px`;
+    menu.style.top = `${Math.round(top)}px`;
+    menu.style.visibility = "visible";
+  };
+  const openPaperChipMenu = (
+    chip: HTMLDivElement,
+    paperContext: PaperContextRef,
+    options?: { sticky?: boolean },
+  ) => {
+    const menu = ensurePaperChipMenu();
+    const ownerDoc = body.ownerDocument;
+    if (!menu || !ownerDoc) return;
+    clearPaperChipMenuHideTimer();
+    paperChipMenuAnchor = chip;
+    paperChipMenuSticky = options?.sticky === true;
+    paperChipMenuTarget = paperContext;
+    menu.innerHTML = "";
+    menu.appendChild(buildPaperChipMenuCard(ownerDoc, paperContext));
+    positionPaperChipMenuAboveAnchor(menu, chip);
+    menu.style.display = "grid";
+  };
+  const schedulePaperChipMenuClose = () => {
+    if (paperChipMenuSticky) return;
+    const win = body.ownerDocument?.defaultView;
+    if (!win) {
+      closePaperChipMenu();
+      return;
+    }
+    clearPaperChipMenuHideTimer();
+    paperChipMenuHideTimer = win.setTimeout(() => {
+      closePaperChipMenu();
+    }, 100);
+  };
+  const resolvePaperContextFromChipElement = (
+    chip: HTMLElement,
+  ): PaperContextRef | null => {
+    if (chip.dataset.autoLoaded === "true") {
+      return resolveAutoLoadedPaperContext();
+    }
+    const paperItemId = Number.parseInt(chip.dataset.paperItemId || "", 10);
+    const contextItemId = Number.parseInt(
+      chip.dataset.paperContextItemId || "",
+      10,
+    );
+    if (
+      !Number.isFinite(paperItemId) ||
+      paperItemId <= 0 ||
+      !Number.isFinite(contextItemId) ||
+      contextItemId <= 0
+    ) {
+      return null;
+    }
+    if (item) {
+      const selectedPapers = normalizePaperContextEntries(
+        selectedPaperContextCache.get(item.id) || [],
+      );
+      const matchedPaper = selectedPapers.find(
+        (paperContext) =>
+          paperContext.itemId === paperItemId &&
+          paperContext.contextItemId === contextItemId,
+      );
+      if (matchedPaper) {
+        return matchedPaper;
+      }
+    }
+    const attachment = Zotero.Items.get(contextItemId) || null;
+    return resolvePaperContextRefFromAttachment(attachment);
+  };
+  const focusPaperContextInActiveTab = async (
+    paperContext: PaperContextRef,
+  ): Promise<boolean> => {
+    const tabs = (Zotero as unknown as {
+      Tabs?: {
+        selectedType?: string;
+        getTabIDByItemID?: (itemID: number) => string;
+        select?: (id: string, reopening?: boolean, options?: unknown) => void;
+      };
+    }).Tabs;
+    const selectedType = String(tabs?.selectedType || "").toLowerCase();
+    if (selectedType.includes("reader")) {
+      const existingReaderTabId =
+        tabs?.getTabIDByItemID?.(paperContext.contextItemId) ||
+        tabs?.getTabIDByItemID?.(paperContext.itemId);
+      if (existingReaderTabId && typeof tabs?.select === "function") {
+        tabs.select(existingReaderTabId);
+        return true;
+      }
+      const readerApi = Zotero.Reader as
+        | {
+            open?: (
+              itemID: number,
+              location?: _ZoteroTypes.Reader.Location,
+            ) => Promise<void | _ZoteroTypes.ReaderInstance>;
+          }
+        | undefined;
+      if (typeof readerApi?.open === "function") {
+        await readerApi.open(paperContext.contextItemId);
+        return true;
+      }
+    }
+    const pane = Zotero.getActiveZoteroPane?.() as
+      | _ZoteroTypes.ZoteroPane
+      | undefined;
+    if (pane) {
+      if (typeof pane.selectItems === "function") {
+        const selected = await pane.selectItems([paperContext.itemId], true);
+        if (selected !== false) return true;
+      }
+      if (typeof pane.selectItem === "function") {
+        const selected = pane.selectItem(paperContext.itemId, true);
+        if (selected !== false) return true;
+      }
+      if (paperContext.contextItemId !== paperContext.itemId) {
+        if (typeof pane.selectItems === "function") {
+          const selected = await pane.selectItems(
+            [paperContext.contextItemId],
+            true,
+          );
+          if (selected !== false) return true;
+        }
+        if (typeof pane.selectItem === "function") {
+          const selected = pane.selectItem(paperContext.contextItemId, true);
+          if (selected !== false) return true;
+        }
+      }
+    }
+    return false;
+  };
+
   const appendPaperChip = (
     ownerDoc: Document,
     list: HTMLDivElement,
@@ -1423,6 +1751,8 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       chip.classList.add("llm-paper-context-chip-autoloaded");
       chip.dataset.autoLoaded = "true";
     }
+    chip.dataset.paperItemId = `${paperContext.itemId}`;
+    chip.dataset.paperContextItemId = `${paperContext.contextItemId}`;
     if (removable) {
       chip.dataset.paperContextIndex = `${options?.removableIndex ?? -1}`;
     }
@@ -1462,12 +1792,32 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       chipHeader.append(removeBtn);
     }
 
-    chip.append(chipHeader);
+    // Inline expanded paper card (shown on hover via CSS, or sticky when .expanded class present)
+    const chipExpanded = createElement(
+      ownerDoc,
+      "div",
+      "llm-selected-context-expanded llm-paper-context-chip-expanded",
+    );
+    chipExpanded.appendChild(buildPaperChipMenuCard(ownerDoc, paperContext));
+    chip.append(chipExpanded, chipHeader);
+
+    // Restore expanded (sticky) state after re-render
+    const currentExpandedId = item
+      ? selectedPaperPreviewExpandedCache.get(item.id)
+      : undefined;
+    if (
+      typeof currentExpandedId === "number" &&
+      currentExpandedId === paperContext.contextItemId
+    ) {
+      chip.classList.add("expanded");
+      chip.classList.remove("collapsed");
+    }
     list.appendChild(chip);
   };
 
   const updatePaperPreview = () => {
     if (!item || !paperPreview || !paperPreviewList) return;
+    closePaperChipMenu();
     const itemId = item.id;
     const selectedPapers = normalizePaperContextEntries(
       selectedPaperContextCache.get(itemId) || [],
@@ -1485,7 +1835,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     } else {
       clearSelectedPaperState(itemId);
     }
-    selectedPaperPreviewExpandedCache.set(itemId, false);
+    // Do not reset expanded state here — preserve which chip was sticky across re-renders
     paperPreview.style.display = "contents";
     paperPreviewList.style.display = "contents";
     paperPreviewList.innerHTML = "";
@@ -5600,18 +5950,18 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       paperPickerList.innerHTML = "";
     }
   };
-  const buildPaperMetaText = (paper: {
+  function buildPaperMetaText(paper: {
     citationKey?: string;
     firstCreator?: string;
     year?: string;
-  }): string => {
+  }): string {
     const parts = [
       paper.firstCreator || "",
       paper.year || "",
       paper.citationKey || "",
     ].filter(Boolean);
     return parts.join(" · ");
-  };
+  }
   const getPaperPickerAttachmentDisplayTitle = (
     group: PaperSearchGroupCandidate,
     attachment: PaperSearchAttachmentCandidate,
@@ -7203,6 +7553,33 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
   bodyWithPaperPickerDismiss.__llmPaperPickerDismissHandler =
     dismissPaperPickerOnOutsidePointerDown;
 
+  const bodyWithPaperChipDismiss = body as Element & {
+    __llmPaperChipDismissHandler?: (event: PointerEvent) => void;
+  };
+  if (bodyWithPaperChipDismiss.__llmPaperChipDismissHandler) {
+    panelDoc.removeEventListener(
+      "pointerdown",
+      bodyWithPaperChipDismiss.__llmPaperChipDismissHandler,
+      true,
+    );
+  }
+  const dismissPaperChipOnOutsidePointerDown = (e: PointerEvent) => {
+    if (typeof e.button === "number" && e.button !== 0) return;
+    if (!paperChipMenuSticky || !paperChipMenu || paperChipMenu.style.display === "none")
+      return;
+    const target = e.target as Node | null;
+    if (target && paperChipMenu.contains(target)) return;
+    if (target && paperChipMenuAnchor?.contains(target)) return;
+    closePaperChipMenu();
+  };
+  panelDoc.addEventListener(
+    "pointerdown",
+    dismissPaperChipOnOutsidePointerDown,
+    true,
+  );
+  bodyWithPaperChipDismiss.__llmPaperChipDismissHandler =
+    dismissPaperChipOnOutsidePointerDown;
+
   if (chatBox) {
     chatBox.addEventListener("click", (e: Event) => {
       // Dismiss inline edit when clicking outside the edit widget
@@ -7640,50 +8017,85 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
           "ready",
         );
       }
+      closePaperChipMenu();
+      return;
     });
-    paperPreview.addEventListener("contextmenu", (e: Event) => {
-      if (!item) return;
+    paperPreview.addEventListener("click", (e: Event) => {
       const target = e.target as Element | null;
       if (!target) return;
+      if (target.closest(".llm-paper-context-clear")) return;
+
+      // Clicking the paper card (inside the expanded area) navigates to the paper
+      const cardRow = target.closest(
+        ".llm-paper-chip-menu-row",
+      ) as HTMLButtonElement | null;
+      if (cardRow) {
+        const paperChipForCard = cardRow.closest(
+          ".llm-paper-context-chip",
+        ) as HTMLDivElement | null;
+        if (!paperChipForCard || !paperPreview.contains(paperChipForCard)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const paperContextForCard =
+          resolvePaperContextFromChipElement(paperChipForCard);
+        if (!paperContextForCard) return;
+        void focusPaperContextInActiveTab(paperContextForCard)
+          .then((focused) => {
+            if (!focused && status) {
+              setStatus(status, "Could not focus this paper", "error");
+            }
+          })
+          .catch((err) => {
+            ztoolkit.log(
+              "LLM: Failed to focus paper context from card",
+              err,
+            );
+            if (status) {
+              setStatus(status, "Could not focus this paper", "error");
+            }
+          });
+        return;
+      }
+
+      // Clicking the chip header area toggles the sticky-expanded state
       const paperChip = target.closest(
         ".llm-paper-context-chip",
       ) as HTMLDivElement | null;
       if (!paperChip || !paperPreview.contains(paperChip)) return;
       e.preventDefault();
       e.stopPropagation();
-      if (paperChip.dataset.autoLoaded === "true") {
-        if (status) {
-          setStatus(status, "Default paper context is always pinned", "ready");
+      if (!item) return;
+      const paperContext = resolvePaperContextFromChipElement(paperChip);
+      if (!paperContext) return;
+      const currentExpandedId = selectedPaperPreviewExpandedCache.get(item.id);
+      const isAlreadyExpanded =
+        typeof currentExpandedId === "number" &&
+        currentExpandedId === paperContext.contextItemId;
+      const nextExpandedId = isAlreadyExpanded ? false : paperContext.contextItemId;
+      selectedPaperPreviewExpandedCache.set(item.id, nextExpandedId);
+
+      // Toggle expanded class directly on the chip — no full re-render, no blink.
+      const allChips = paperPreviewList?.querySelectorAll<HTMLDivElement>(
+        ".llm-paper-context-chip",
+      );
+      if (allChips) {
+        allChips.forEach((c: HTMLDivElement) => {
+          const isThis = c === paperChip;
+          const shouldExpand = isThis && nextExpandedId !== false;
+          c.classList.toggle("expanded", shouldExpand);
+          c.classList.toggle("collapsed", !shouldExpand);
+        });
+      }
+
+      if (nextExpandedId !== false) {
+        const textContextKey = getTextContextConversationKey();
+        if (textContextKey) {
+          setSelectedTextExpandedIndex(textContextKey, null);
         }
-        return;
+        selectedImagePreviewExpandedCache.set(item.id, false);
+        selectedFilePreviewExpandedCache.set(item.id, false);
       }
-      const index = Number.parseInt(
-        paperChip.dataset.paperContextIndex || "",
-        10,
-      );
-      const selectedPapers = normalizePaperContextEntries(
-        selectedPaperContextCache.get(item.id) || [],
-      );
-      if (
-        !Number.isFinite(index) ||
-        index < 0 ||
-        index >= selectedPapers.length
-      ) {
-        return;
-      }
-      const nextPinned = togglePinnedPaper(
-        pinnedPaperKeys,
-        item.id,
-        selectedPapers[index],
-      );
-      updatePaperPreviewPreservingScroll();
-      if (status) {
-        setStatus(
-          status,
-          nextPinned ? "Paper pinned for next sends" : "Paper unpinned",
-          "ready",
-        );
-      }
+      // No full re-render here — DOM classes already toggled above, cache is updated.
     });
   }
 
@@ -8009,7 +8421,8 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       ) >= 0;
     const figurePinned =
       selectedImagePreviewExpandedCache.get(item.id) === true;
-    const paperPinned = selectedPaperPreviewExpandedCache.get(item.id) === true;
+    const paperPinned =
+      typeof selectedPaperPreviewExpandedCache.get(item.id) === "number";
     const filePinned = selectedFilePreviewExpandedCache.get(item.id) === true;
     if (!textPinned && !figurePinned && !paperPinned && !filePinned) return;
 
