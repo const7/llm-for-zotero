@@ -505,6 +505,86 @@ describe("assistantCitationLinks", function () {
     assert.include(bubble.textContent || "", "(e.g., ");
     assert.include(bubble.textContent || "", "; ");
   });
+
+  it("removes a duplicated trailing citation from a blockquote when a citation row follows", function () {
+    const doc = Zotero.getMainWindow?.()?.document;
+    if (!doc || typeof doc.createElement !== "function") {
+      this.skip();
+      return;
+    }
+
+    const body = doc.createElement("div");
+    const bubble = doc.createElement("div") as HTMLDivElement;
+    const assistantText = [
+      '> "Therefore, representational drift is stable across days."',
+      "> (Climer et al., 2025)",
+      "",
+      "(Climer et al., 2025)",
+    ].join("\n");
+    bubble.innerHTML = renderMarkdown(assistantText);
+
+    const panelItem = {
+      id: 999003,
+      libraryID: 0,
+      parentID: undefined,
+      attachmentContentType: "",
+      isAttachment: () => false,
+      isRegularItem: () => false,
+      getAttachments: () => [],
+      getField: (_field: string) => "",
+    } as unknown as Zotero.Item;
+
+    const globalAny = globalThis as unknown as {
+      ztoolkit?: { log?: (...args: unknown[]) => void };
+    };
+    const previousZtoolkit = globalAny.ztoolkit;
+    globalAny.ztoolkit = {
+      ...(previousZtoolkit || {}),
+      log: (..._args: unknown[]) => {
+        void _args;
+      },
+    };
+
+    try {
+      decorateAssistantCitationLinks({
+        body,
+        panelItem,
+        bubble,
+        assistantMessage: {
+          role: "assistant",
+          text: assistantText,
+          timestamp: Date.now(),
+        },
+        pairedUserMessage: {
+          role: "user",
+          text: "summarize this paper",
+          timestamp: Date.now() - 1,
+          paperContexts: [
+            {
+              itemId: 1,
+              contextItemId: 11,
+              title: "Paper Climer",
+              firstCreator: "Climer",
+              year: "2025",
+            },
+          ],
+        },
+      });
+    } catch (err) {
+      assert.fail(`decorateAssistantCitationLinks threw: ${String(err)}`);
+    } finally {
+      globalAny.ztoolkit = previousZtoolkit;
+    }
+
+    const text = bubble.textContent || "";
+    assert.equal(
+      (text.match(/Climer et al\., 2025/g) || []).length,
+      1,
+    );
+    const blockquote = bubble.querySelector("blockquote");
+    assert.isOk(blockquote);
+    assert.notInclude(blockquote?.textContent || "", "Climer et al., 2025");
+  });
 });
 
 describe("formatSourceLabelWithPage", function () {

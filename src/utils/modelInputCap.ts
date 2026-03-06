@@ -313,6 +313,14 @@ export type InputCapResult = {
   softLimitTokens: number;
   estimatedBeforeTokens: number;
   estimatedAfterTokens: number;
+  effects: InputCapEffects;
+};
+
+export type InputCapEffects = {
+  documentContextTrimmed: boolean;
+  documentContextDropped: boolean;
+  promptTrimmed: boolean;
+  historyDropped: boolean;
 };
 
 export function applyModelInputTokenCap(
@@ -329,6 +337,12 @@ export function applyModelInputTokenCap(
   let working = cloneMessages(messages);
   const estimatedBeforeTokens = estimateConversationTokens(working);
   let estimatedAfterTokens = estimatedBeforeTokens;
+  const effects: InputCapEffects = {
+    documentContextTrimmed: false,
+    documentContextDropped: false,
+    promptTrimmed: false,
+    historyDropped: false,
+  };
 
   if (estimatedAfterTokens <= softLimitTokens) {
     return {
@@ -338,6 +352,7 @@ export function applyModelInputTokenCap(
       softLimitTokens,
       estimatedBeforeTokens,
       estimatedAfterTokens,
+      effects,
     };
   }
 
@@ -352,6 +367,7 @@ export function applyModelInputTokenCap(
       continue;
     }
     working.splice(i, 1);
+    effects.historyDropped = true;
     if (lastUserIndex >= 0 && i < lastUserIndex) {
       lastUserIndex -= 1;
     }
@@ -367,9 +383,12 @@ export function applyModelInputTokenCap(
     const changed = trimContextMessage(working[contextIndex], overflow);
     if (!changed) {
       working.splice(contextIndex, 1);
+      effects.documentContextDropped = true;
       if (lastUserIndex >= 0 && contextIndex < lastUserIndex) {
         lastUserIndex -= 1;
       }
+    } else {
+      effects.documentContextTrimmed = true;
     }
     estimatedAfterTokens = estimateConversationTokens(working);
   }
@@ -384,10 +403,15 @@ export function applyModelInputTokenCap(
     const overflow = estimatedAfterTokens - softLimitTokens;
     const changed = trimUserMessage(working[lastUserIndex], overflow);
     if (!changed) break;
+    effects.promptTrimmed = true;
     estimatedAfterTokens = estimateConversationTokens(working);
   }
 
   if (estimatedAfterTokens > softLimitTokens) {
+    const fallbackLength = buildFallbackMessages(working, lastUserIndex).length;
+    if (fallbackLength < working.length) {
+      effects.historyDropped = true;
+    }
     working = buildFallbackMessages(working, lastUserIndex);
     estimatedAfterTokens = estimateConversationTokens(working);
     const fallbackUserIndex = findLastUserIndex(working);
@@ -401,6 +425,7 @@ export function applyModelInputTokenCap(
       const overflow = estimatedAfterTokens - softLimitTokens;
       const changed = trimUserMessage(working[fallbackUserIndex], overflow);
       if (!changed) break;
+      effects.promptTrimmed = true;
       estimatedAfterTokens = estimateConversationTokens(working);
     }
   }
@@ -412,5 +437,6 @@ export function applyModelInputTokenCap(
     softLimitTokens,
     estimatedBeforeTokens,
     estimatedAfterTokens,
+    effects,
   };
 }

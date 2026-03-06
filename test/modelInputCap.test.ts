@@ -32,6 +32,12 @@ describe("modelInputCap", function () {
       const result = applyModelInputTokenCap(messages, "gpt-4o-mini");
       assert.isFalse(result.capped);
       assert.deepEqual(result.messages, messages);
+      assert.deepEqual(result.effects, {
+        documentContextTrimmed: false,
+        documentContextDropped: false,
+        promptTrimmed: false,
+        historyDropped: false,
+      });
     });
 
     it("should trim document context when it exceeds model budget", function () {
@@ -47,6 +53,8 @@ describe("modelInputCap", function () {
       const result = applyModelInputTokenCap(messages, "deepseek-chat");
       assert.isTrue(result.capped);
       assert.isAtMost(result.estimatedAfterTokens, result.softLimitTokens);
+      assert.isTrue(result.effects.documentContextTrimmed);
+      assert.isFalse(result.effects.documentContextDropped);
       const contextMessage = result.messages.find(
         (message) =>
           message.role === "system" &&
@@ -73,6 +81,7 @@ describe("modelInputCap", function () {
       const result = applyModelInputTokenCap(messages, "gpt-4o-mini");
       assert.isAbove(estimatedBefore, result.softLimitTokens);
       assert.isTrue(result.capped);
+      assert.isTrue(result.effects.historyDropped);
       const finalMessage = result.messages[result.messages.length - 1];
       assert.equal(finalMessage.role, "user");
       assert.equal(finalMessage.content, latestPrompt);

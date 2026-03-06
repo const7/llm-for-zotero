@@ -49,7 +49,7 @@ In the plugin, you can enable the pop-up option to conveniently add text to the 
 
 **If you don't like it, that's totally fine. You can always disable it in the settings! I really think it is important to give you the choice.**
 
-When you start your chat with the model, the full context of this paper is already loaded into the model, so the selected text is an additional layer of context that helps the model to provide a more accurate and detailed explanation. This feature is especially useful when you are reading a paper outside of your expertise, or when you want to quickly grasp the key points without getting lost in the details.
+When you start your chat with the model, the full context of this paper is loaded into the model on the first turn. Follow-up questions switch to focused retrieval from the same paper, so the selected text becomes an additional layer of context that helps the model give a more accurate and detailed explanation without resending the whole paper each time.
 
 ### 3. "What does this figure mean?"
 

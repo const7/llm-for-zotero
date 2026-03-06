@@ -146,6 +146,11 @@ export type PdfChunkMeta = {
 };
 
 export type ContextAssemblyMode = "full" | "retrieval";
+export type ContextAssemblyStrategy =
+  | "paper-first-full"
+  | "paper-followup-retrieval"
+  | "general-full"
+  | "general-retrieval";
 
 export type ContextBudgetPlan = {
   modelLimitTokens: number;
@@ -179,11 +184,13 @@ export type PaperContextCandidate = {
 
 export type MultiContextPlan = {
   mode: ContextAssemblyMode;
+  strategy: ContextAssemblyStrategy;
   contextText: string;
   contextBudget: ContextBudgetPlan;
   usedContextTokens: number;
   selectedPaperCount: number;
   selectedChunkCount: number;
+  assistantInstruction?: string;
 };
 
 export type GlobalConversationSummary = {

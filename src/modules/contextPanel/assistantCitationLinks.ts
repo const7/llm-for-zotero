@@ -224,6 +224,14 @@ function setCitationButtonLabel(
   button.setAttribute("aria-label", `Jump to cited source: ${labelText}`);
 }
 
+function replaceBlockquoteText(blockquote: Element, quoteText: string): void {
+  const ownerDoc = blockquote.ownerDocument;
+  if (!ownerDoc) return;
+  const normalizedQuote = sanitizeText(quoteText || "").trim();
+  if (!normalizedQuote) return;
+  blockquote.textContent = normalizedQuote;
+}
+
 /**
  * Extract the author surname from a citation label for fuzzy matching.
  * E.g. "zheng et al., 2026" → "zheng", "(zheng et al., 2026)" → "zheng"
@@ -1951,6 +1959,7 @@ export function decorateAssistantCitationLinks(params: {
     let quoteText = sanitizeText(blockquote.textContent || "").trim();
     if (!quoteText) continue;
     let citationEl = getNextElementSibling(blockquote);
+    const tailMatch = extractBlockquoteTailCitation(blockquote.textContent || "");
 
     // Primary attempt: entire element is a standalone citation label.
     let extractedCitation = citationEl
@@ -1976,25 +1985,31 @@ export function decorateAssistantCitationLinks(params: {
       }
     }
 
+    if (
+      extractedCitation &&
+      tailMatch &&
+      tailMatch.extractedCitation.normalizedSourceLabel ===
+        extractedCitation.normalizedSourceLabel
+    ) {
+      quoteText = tailMatch.quoteText;
+      replaceBlockquoteText(blockquote, quoteText);
+    }
+
     // Some model outputs put the citation on the final line *inside* the same
     // blockquote. Recover by splitting a trailing citation line from quote text.
-    if (!extractedCitation) {
-      const tailMatch = extractBlockquoteTailCitation(
-        blockquote.textContent || "",
-      );
-      if (tailMatch) {
-        extractedCitation = tailMatch.extractedCitation;
-        quoteText = tailMatch.quoteText;
-        const syntheticCitationEl = ownerDoc.createElement("p");
-        syntheticCitationEl.textContent = extractedCitation.sourceLabel;
-        const insertParent = blockquote.parentElement;
-        if (insertParent) {
-          insertParent.insertBefore(
-            syntheticCitationEl,
-            citationEl || blockquote.nextSibling,
-          );
-          citationEl = syntheticCitationEl;
-        }
+    if (!extractedCitation && tailMatch) {
+      extractedCitation = tailMatch.extractedCitation;
+      quoteText = tailMatch.quoteText;
+      replaceBlockquoteText(blockquote, quoteText);
+      const syntheticCitationEl = ownerDoc.createElement("p");
+      syntheticCitationEl.textContent = extractedCitation.sourceLabel;
+      const insertParent = blockquote.parentElement;
+      if (insertParent) {
+        insertParent.insertBefore(
+          syntheticCitationEl,
+          citationEl || blockquote.nextSibling,
+        );
+        citationEl = syntheticCitationEl;
       }
     }
 

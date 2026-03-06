@@ -309,11 +309,219 @@ describe("multiContextPlanner", function () {
     });
 
     assert.equal(plan.mode, "full");
+    assert.equal(plan.strategy, "paper-first-full");
     assert.equal(plan.selectedChunkCount, 0);
     assert.equal(plan.selectedPaperCount, 1);
     assert.include(plan.contextText, "Full Paper Contexts:");
     assert.include(plan.contextText, "Paper Text:");
     assert.notInclude(plan.contextText, "Retrieved Evidence:");
+  });
+
+  it("forces full paper context on the first paper-mode turn even when the paper is large", async function () {
+    const paper = registerMockPaper({
+      itemId: 12,
+      contextItemId: 13,
+      title: "Large First Turn",
+      firstCreator: "Nguyen",
+      year: "2025",
+      pdfContext: buildPdfContext("Large First Turn", [
+        "Abstract\n" + "signal ".repeat(1500).trim(),
+        "Methods\n" + "detail ".repeat(2500).trim(),
+        "Results\n" + "result ".repeat(2500).trim(),
+      ]),
+    });
+    const plan = await resolveMultiContextPlan({
+      conversationMode: "paper",
+      activeContextItem: buildActiveAttachment(paper.itemId, paper.contextItemId) as any,
+      question: "Summarize the paper.",
+      paperContexts: [],
+      pinnedPaperContexts: [],
+      historyPaperContexts: [],
+      history: [],
+      model: "gpt-4o-mini",
+      advanced: {
+        temperature: 0.2,
+        maxTokens: 512,
+        inputTokenCap: 2048,
+      },
+    });
+
+    assert.equal(plan.mode, "full");
+    assert.equal(plan.strategy, "paper-first-full");
+    assert.equal(plan.selectedChunkCount, 0);
+    assert.include(plan.contextText, "Full Paper Contexts:");
+    assert.notInclude(plan.contextText, "Retrieved Evidence:");
+  });
+
+  it("uses focused retrieval on paper-mode follow-up turns even when full text would fit", async function () {
+    const paper = registerMockPaper({
+      itemId: 14,
+      contextItemId: 15,
+      title: "Follow-up Paper",
+      firstCreator: "Lee",
+      year: "2024",
+      pdfContext: buildPdfContext("Follow-up Paper", [
+        "Abstract\nThis paper studies calibration drift in retrieval systems.",
+        "Methods\nWe evaluate hybrid BM25 and embedding retrieval.",
+        "Results\nHybrid retrieval improves recall on follow-up questions.",
+        "Discussion\nThe abstract remains useful as a stable anchor.",
+      ]),
+    });
+    const plan = await resolveMultiContextPlan({
+      conversationMode: "paper",
+      activeContextItem: buildActiveAttachment(paper.itemId, paper.contextItemId) as any,
+      question: "What do the results say about recall?",
+      paperContexts: [],
+      pinnedPaperContexts: [],
+      historyPaperContexts: [],
+      history: [{ role: "user", content: "Summarize this paper." }],
+      model: "gpt-4o-mini",
+    });
+
+    assert.equal(plan.mode, "retrieval");
+    assert.equal(plan.strategy, "paper-followup-retrieval");
+    assert.isAtLeast(plan.selectedChunkCount, 2);
+    assert.isAtMost(plan.selectedChunkCount, 5);
+    assert.include(plan.contextText, "Retrieved Evidence:");
+    assert.notInclude(plan.contextText, "Full Paper Contexts:");
+    assert.include(
+      plan.contextText,
+      "This paper studies calibration drift in retrieval systems.",
+    );
+  });
+
+  it("keeps exactly one abstract anchor in paper-mode follow-up retrieval when available", async function () {
+    const paper: PaperContextRef = {
+      itemId: 30,
+      contextItemId: 31,
+      title: "Abstract Anchor Paper",
+      firstCreator: "Garcia",
+      year: "2026",
+    };
+    const pdfContext = buildPdfContext("Abstract Anchor Paper", [
+      "Abstract\nThe abstract anchor should always be present in follow-up retrieval.",
+      "A second paragraph that still belongs to the abstract section.",
+      "Methods\nThe method chunk should also be eligible.",
+      "Results\nThe results chunk should be eligible too.",
+      "Discussion\nThe discussion chunk provides interpretation.",
+    ]);
+    const result = await assembleRetrievedMultiPaperContext({
+      papers: [
+        {
+          paperContext: paper,
+          contextItem: null,
+          pdfContext,
+          paperKey: buildPaperKey(paper),
+          isActive: true,
+          pinKind: "implicit-active",
+          order: 1,
+        },
+      ] as any,
+      question: "What does the paper say overall?",
+      contextBudgetTokens: 10_000,
+      minChunksByPaper: new Map(),
+      options: {
+        guaranteedAbstractPaperKey: buildPaperKey(paper),
+        minTotalChunks: 2,
+        maxChunks: 5,
+      },
+    });
+
+    assert.isAtLeast(result.selectedChunkCount, 2);
+    assert.isAtMost(result.selectedChunkCount, 5);
+    assert.include(
+      result.contextText,
+      "The abstract anchor should always be present in follow-up retrieval.",
+    );
+    assert.equal(
+      (
+        result.contextText.match(
+          /The abstract anchor should always be present in follow-up retrieval\./g,
+        ) || []
+      ).length,
+      1,
+    );
+    assert.notInclude(
+      result.contextText,
+      "A second paragraph that still belongs to the abstract section.",
+    );
+  });
+
+  it("falls back to hybrid chunks when no abstract chunk exists in paper-mode follow-up retrieval", async function () {
+    const paper: PaperContextRef = {
+      itemId: 32,
+      contextItemId: 33,
+      title: "No Abstract Paper",
+      firstCreator: "Patel",
+      year: "2026",
+    };
+    const result = await assembleRetrievedMultiPaperContext({
+      papers: [
+        {
+          paperContext: paper,
+          contextItem: null,
+          pdfContext: buildPdfContext("No Abstract Paper", [
+            "Introduction\nThis introduction frames the retrieval problem.",
+            "Methods\nThe method chunk explains the setup.",
+            "Results\nResults describe the most important outcome.",
+          ]),
+          paperKey: buildPaperKey(paper),
+          isActive: true,
+          pinKind: "implicit-active",
+          order: 1,
+        },
+      ] as any,
+      question: "What is the main outcome?",
+      contextBudgetTokens: 10_000,
+      minChunksByPaper: new Map(),
+      options: {
+        guaranteedAbstractPaperKey: buildPaperKey(paper),
+        minTotalChunks: 2,
+        maxChunks: 5,
+      },
+    });
+
+    assert.isAtLeast(result.selectedChunkCount, 2);
+    assert.isAtMost(result.selectedChunkCount, 5);
+    assert.include(result.contextText, "Results describe the most important outcome.");
+  });
+
+  it("adds a capability reminder only for follow-up questions about access or coverage", async function () {
+    const paper = registerMockPaper({
+      itemId: 34,
+      contextItemId: 35,
+      title: "Capability Paper",
+      firstCreator: "Chen",
+      year: "2024",
+      pdfContext: buildPdfContext("Capability Paper", [
+        "Abstract\nThe paper studies retrieval interfaces.",
+        "Results\nFocused retrieval remains accurate.",
+      ]),
+    });
+    const plan = await resolveMultiContextPlan({
+      conversationMode: "paper",
+      activeContextItem: buildActiveAttachment(paper.itemId, paper.contextItemId) as any,
+      question: "Do you have access to the full text or only a few sections?",
+      paperContexts: [],
+      pinnedPaperContexts: [],
+      historyPaperContexts: [],
+      history: [{ role: "user", content: "Summarize this paper." }],
+      model: "gpt-4o-mini",
+    });
+    const unrelated = await resolveMultiContextPlan({
+      conversationMode: "paper",
+      activeContextItem: buildActiveAttachment(paper.itemId, paper.contextItemId) as any,
+      question: "What is the main finding?",
+      paperContexts: [],
+      pinnedPaperContexts: [],
+      historyPaperContexts: [],
+      history: [{ role: "user", content: "Summarize this paper." }],
+      model: "gpt-4o-mini",
+    });
+
+    assert.equal(plan.strategy, "paper-followup-retrieval");
+    assert.include(plan.assistantInstruction || "", "full text");
+    assert.isUndefined(unrelated.assistantInstruction);
   });
 
   it("keeps explicit pinned papers in full context before falling back to retrieval for overflow", async function () {
