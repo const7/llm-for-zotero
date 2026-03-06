@@ -2,6 +2,8 @@ import type { ChatMessage, ReasoningConfig } from "../../utils/llmClient";
 import { estimateAvailableContextBudget } from "../../utils/llmClient";
 import { estimateTextTokens } from "../../utils/modelInputCap";
 import {
+  PAPER_FOLLOWUP_RETRIEVAL_MAX_CHUNKS,
+  PAPER_FOLLOWUP_RETRIEVAL_MIN_CHUNKS,
   RETRIEVAL_MMR_LAMBDA,
   RETRIEVAL_MIN_ACTIVE_PAPER_CHUNKS,
   RETRIEVAL_MIN_OTHER_PAPER_CHUNKS,
@@ -286,6 +288,12 @@ type RetrievedAssembly = {
   selectedPaperCount: number;
 };
 
+type RetrievedAssemblyOptions = {
+  guaranteedAbstractPaperKey?: string;
+  maxChunks?: number;
+  minTotalChunks?: number;
+};
+
 export function assembleFullMultiPaperContext(params: {
   papers: PlannerPaperEntry[];
 }): {
@@ -416,6 +424,7 @@ export async function assembleRetrievedMultiPaperContext(params: {
   contextBudgetTokens: number;
   minChunksByPaper?: Map<string, number>;
   apiOverrides?: { apiBase?: string; apiKey?: string };
+  options?: RetrievedAssemblyOptions;
 }): Promise<RetrievedAssembly> {
   const {
     papers,
@@ -423,6 +432,7 @@ export async function assembleRetrievedMultiPaperContext(params: {
     contextBudgetTokens,
     minChunksByPaper,
     apiOverrides,
+    options,
   } = params;
   if (!papers.length || contextBudgetTokens <= 0) {
     return { contextText: "", selectedChunkCount: 0, selectedPaperCount: 0 };
@@ -474,16 +484,51 @@ export async function assembleRetrievedMultiPaperContext(params: {
     });
   }
 
+  const maxChunks = Number.isFinite(options?.maxChunks)
+    ? Math.max(1, Math.floor(options?.maxChunks as number))
+    : Number.POSITIVE_INFINITY;
+  const minTotalChunks = Number.isFinite(options?.minTotalChunks)
+    ? Math.max(0, Math.floor(options?.minTotalChunks as number))
+    : 0;
   const selected = new Map<string, PaperContextCandidate>();
   let remainingTokens = contextBudgetTokens;
+  let lockedAbstractPaperKey = "";
+  let lockedAbstractCandidateKey = "";
+  const shouldSkipCandidate = (candidate: PaperContextCandidate): boolean => {
+    if (!lockedAbstractPaperKey) return false;
+    if (candidate.paperKey !== lockedAbstractPaperKey) return false;
+    if (candidate.chunkKind !== "abstract") return false;
+    return candidateKey(candidate) !== lockedAbstractCandidateKey;
+  };
   const selectCandidate = (candidate: PaperContextCandidate): boolean => {
     const key = candidateKey(candidate);
     if (selected.has(key)) return false;
+    if (shouldSkipCandidate(candidate)) return false;
+    if (selected.size >= maxChunks) return false;
     if (candidate.estimatedTokens > remainingTokens) return false;
     selected.set(key, candidate);
     remainingTokens -= candidate.estimatedTokens;
     return true;
   };
+
+  const guaranteedPaperKey = sanitizeText(
+    options?.guaranteedAbstractPaperKey || "",
+  ).trim();
+  if (guaranteedPaperKey) {
+    const preferred = candidatesByPaper.get(guaranteedPaperKey) || [];
+    const guaranteedCandidate =
+      preferred.find((candidate) => candidate.chunkKind === "abstract") ||
+      preferred[0] ||
+      null;
+    if (guaranteedCandidate) {
+      if (selectCandidate(guaranteedCandidate)) {
+        if (guaranteedCandidate.chunkKind === "abstract") {
+          lockedAbstractPaperKey = guaranteedCandidate.paperKey;
+          lockedAbstractCandidateKey = candidateKey(guaranteedCandidate);
+        }
+      }
+    }
+  }
 
   // First pass: guarantee per-paper coverage before global reranking.
   for (const paper of papers) {
@@ -493,6 +538,7 @@ export async function assembleRetrievedMultiPaperContext(params: {
     const list = candidatesByPaper.get(key) || [];
     let added = 0;
     for (const candidate of list) {
+      if (shouldSkipCandidate(candidate)) continue;
       if (added >= minChunks) break;
       if (selectCandidate(candidate)) {
         added += 1;
@@ -508,12 +554,13 @@ export async function assembleRetrievedMultiPaperContext(params: {
     );
   }
 
-  while (remainingTokens > 0) {
+  while (remainingTokens > 0 && selected.size < maxChunks) {
     let best: PaperContextCandidate | null = null;
     let bestUtility = -Infinity;
     for (const candidate of allCandidates) {
       const key = candidateKey(candidate);
       if (selected.has(key)) continue;
+      if (shouldSkipCandidate(candidate)) continue;
       if (candidate.estimatedTokens > remainingTokens) continue;
 
       const relevance = relevanceByCandidate.get(key) || 0;
@@ -539,6 +586,9 @@ export async function assembleRetrievedMultiPaperContext(params: {
     }
     if (!best) break;
     if (!selectCandidate(best)) break;
+    if (selected.size >= maxChunks && selected.size >= minTotalChunks) {
+      break;
+    }
   }
 
   const selectedCandidates = Array.from(selected.values());
@@ -587,6 +637,40 @@ function appendContextBlocks(blocks: string[]): string {
     .filter(Boolean);
   if (!nonEmpty.length) return "";
   return nonEmpty.join("\n\n---\n\n");
+}
+
+function isFirstPaperTurn(history: ChatMessage[] | undefined): boolean {
+  return !history?.length;
+}
+
+function questionNeedsPaperCapabilityReminder(question: string): boolean {
+  const normalized = question.trim().toLowerCase();
+  if (!normalized) return false;
+  return (
+    /\b(?:full text|full paper|whole paper|entire paper|entire article|whole article)\b/.test(
+      normalized,
+    ) ||
+    /\b(?:all sections|all parts|entire document|complete paper)\b/.test(
+      normalized,
+    ) ||
+    /\b(?:do you have access|can you access|can you read|did you read)\b/.test(
+      normalized,
+    ) ||
+    /\b(?:coverage|scope|everything in the paper)\b/.test(normalized)
+  );
+}
+
+function buildPaperFollowupAssistantInstruction(
+  question: string,
+): string | undefined {
+  if (!questionNeedsPaperCapabilityReminder(question)) return undefined;
+  return [
+    "If the user asks about access or coverage, answer directly that you can",
+    "access the paper's full text.",
+    "Do not say that you lack access or only have snippets.",
+    "Then say that, for this reply, you are using the abstract plus the most",
+    "relevant retrieved chunks instead of quoting the entire paper text.",
+  ].join(" ");
 }
 
 async function resolvePlannerPaperEntries(params: {
@@ -718,6 +802,7 @@ export async function resolveMultiContextPlan(params: {
   if (!papers.length) {
     return {
       mode: "retrieval",
+      strategy: "general-retrieval",
       contextText: "",
       contextBudget: adjustedContextBudget,
       usedContextTokens: 0,
@@ -733,6 +818,54 @@ export async function resolveMultiContextPlan(params: {
     papers: unpinned,
     question: params.question,
   });
+  const activePaper = papers.find((paper) => paper.isActive) || papers[0] || null;
+  const firstPaperTurn =
+    params.conversationMode === "paper" && isFirstPaperTurn(params.history);
+
+  if (params.conversationMode === "paper" && activePaper) {
+    if (firstPaperTurn) {
+      const full = assembleFullMultiPaperContext({ papers: [activePaper] });
+      return {
+        mode: "full",
+        strategy: "paper-first-full",
+        contextText: full.contextText,
+        contextBudget: adjustedContextBudget,
+        usedContextTokens: full.estimatedTokens,
+        selectedPaperCount: full.contextText ? 1 : 0,
+        selectedChunkCount: 0,
+      };
+    }
+
+    const retrieved = await assembleRetrievedMultiPaperContext({
+      papers: [activePaper],
+      question: params.question,
+      contextBudgetTokens: adjustedContextBudget.contextBudgetTokens,
+      minChunksByPaper: new Map<string, number>(),
+      apiOverrides: {
+        apiBase: params.apiBase,
+        apiKey: params.apiKey,
+      },
+      options: {
+        guaranteedAbstractPaperKey: activePaper.paperKey,
+        maxChunks: PAPER_FOLLOWUP_RETRIEVAL_MAX_CHUNKS,
+        minTotalChunks: PAPER_FOLLOWUP_RETRIEVAL_MIN_CHUNKS,
+      },
+    });
+    const usedContextTokens = estimateTextTokens(retrieved.contextText);
+    return {
+      mode: "retrieval",
+      strategy: "paper-followup-retrieval",
+      contextText: retrieved.contextText,
+      contextBudget: adjustedContextBudget,
+      usedContextTokens,
+      selectedPaperCount: retrieved.selectedPaperCount,
+      selectedChunkCount: retrieved.selectedChunkCount,
+      assistantInstruction: buildPaperFollowupAssistantInstruction(
+        params.question,
+      ),
+    };
+  }
+
   const fullPreferredPapers =
     params.conversationMode === "paper" ? pinned : explicitPinned;
 
@@ -778,6 +911,7 @@ export async function resolveMultiContextPlan(params: {
           : 0);
       return {
         mode: "full",
+        strategy: "general-full",
         contextText: combinedContext,
         contextBudget: adjustedContextBudget,
         usedContextTokens,
@@ -838,6 +972,7 @@ export async function resolveMultiContextPlan(params: {
           : 0);
       return {
         mode: "full",
+        strategy: "general-full",
         contextText: combinedContext,
         contextBudget: adjustedContextBudget,
         usedContextTokens,
@@ -851,6 +986,7 @@ export async function resolveMultiContextPlan(params: {
   if (!retrievalPapers.length) {
     return {
       mode: "retrieval",
+      strategy: "general-retrieval",
       contextText: "",
       contextBudget: adjustedContextBudget,
       usedContextTokens: 0,
@@ -872,6 +1008,7 @@ export async function resolveMultiContextPlan(params: {
   const usedContextTokens = estimateTextTokens(retrieved.contextText);
   return {
     mode: "retrieval",
+    strategy: "general-retrieval",
     contextText: retrieved.contextText,
     contextBudget: adjustedContextBudget,
     usedContextTokens,

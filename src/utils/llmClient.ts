@@ -54,6 +54,7 @@ import {
   applyModelInputTokenCap,
   estimateConversationTokens,
   getModelInputTokenLimit,
+  type InputCapResult,
 } from "./modelInputCap";
 
 // =============================================================================
@@ -119,6 +120,8 @@ export type ChatParams = {
   inputTokenCap?: number;
   /** Local files to upload and attach when using Responses API */
   attachments?: ChatFileAttachment[];
+  /** Extra system-only guidance added to the same request */
+  systemMessages?: string[];
 };
 
 export type ReasoningEvent = {
@@ -140,6 +143,15 @@ export type UsageStats = {
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
+};
+
+export type PreparedChatRequest = {
+  apiBase: string;
+  apiKey: string;
+  model: string;
+  systemPrompt: string;
+  messages: ChatMessage[];
+  inputCap: InputCapResult;
 };
 
 interface StreamChoice {
@@ -667,6 +679,16 @@ function buildMessages(
     });
   }
 
+  if (Array.isArray(params.systemMessages)) {
+    for (const systemMessage of params.systemMessages) {
+      if (typeof systemMessage !== "string" || !systemMessage.trim()) continue;
+      messages.push({
+        role: "system",
+        content: systemMessage.trim(),
+      });
+    }
+  }
+
   if (params.history?.length) {
     messages.push(...params.history);
   }
@@ -709,6 +731,28 @@ function buildMessages(
   }
 
   return messages;
+}
+
+export function prepareChatRequest(params: ChatParams): PreparedChatRequest {
+  const { apiBase, apiKey, model, systemPrompt } = getApiConfig({
+    apiBase: params.apiBase,
+    apiKey: params.apiKey,
+    model: params.model,
+  });
+  const rawMessages = buildMessages(params, systemPrompt);
+  const inputCap = applyModelInputTokenCap(
+    rawMessages,
+    model,
+    params.inputTokenCap,
+  );
+  return {
+    apiBase,
+    apiKey,
+    model,
+    systemPrompt,
+    messages: inputCap.messages as ChatMessage[],
+    inputCap,
+  };
 }
 
 function getReasoningReserveTokens(reasoning?: ReasoningConfig): number {
@@ -1637,25 +1681,16 @@ function extractResponsesOutputText(data: {
  * Call LLM API (non-streaming)
  */
 export async function callLLM(params: ChatParams): Promise<string> {
-  const { apiBase, apiKey, model, systemPrompt } = getApiConfig({
-    apiBase: params.apiBase,
-    apiKey: params.apiKey,
-    model: params.model,
-  });
-  const rawMessages = buildMessages(params, systemPrompt);
-  const cappedInput = applyModelInputTokenCap(
-    rawMessages,
-    model,
-    params.inputTokenCap,
-  );
-  const messages = cappedInput.messages as ChatMessage[];
-  if (cappedInput.capped) {
+  const prepared = prepareChatRequest(params);
+  const { apiBase, apiKey, model, messages, inputCap } = prepared;
+  if (inputCap.capped) {
     ztoolkit.log("LLM: Applied model-aware input cap", {
       model,
-      beforeTokens: cappedInput.estimatedBeforeTokens,
-      afterTokens: cappedInput.estimatedAfterTokens,
-      capTokens: cappedInput.limitTokens,
-      softCapTokens: cappedInput.softLimitTokens,
+      beforeTokens: inputCap.estimatedBeforeTokens,
+      afterTokens: inputCap.estimatedAfterTokens,
+      capTokens: inputCap.limitTokens,
+      softCapTokens: inputCap.softLimitTokens,
+      effects: inputCap.effects,
     });
   }
   const useResponses = isResponsesBase(apiBase);
@@ -1716,25 +1751,16 @@ export async function callLLMStream(
   onReasoning?: (event: ReasoningEvent) => void,
   onUsage?: (usage: UsageStats) => void,
 ): Promise<string> {
-  const { apiBase, apiKey, model, systemPrompt } = getApiConfig({
-    apiBase: params.apiBase,
-    apiKey: params.apiKey,
-    model: params.model,
-  });
-  const rawMessages = buildMessages(params, systemPrompt);
-  const cappedInput = applyModelInputTokenCap(
-    rawMessages,
-    model,
-    params.inputTokenCap,
-  );
-  const messages = cappedInput.messages as ChatMessage[];
-  if (cappedInput.capped) {
+  const prepared = prepareChatRequest(params);
+  const { apiBase, apiKey, model, messages, inputCap } = prepared;
+  if (inputCap.capped) {
     ztoolkit.log("LLM: Applied model-aware input cap", {
       model,
-      beforeTokens: cappedInput.estimatedBeforeTokens,
-      afterTokens: cappedInput.estimatedAfterTokens,
-      capTokens: cappedInput.limitTokens,
-      softCapTokens: cappedInput.softLimitTokens,
+      beforeTokens: inputCap.estimatedBeforeTokens,
+      afterTokens: inputCap.estimatedAfterTokens,
+      capTokens: inputCap.limitTokens,
+      softCapTokens: inputCap.softLimitTokens,
+      effects: inputCap.effects,
     });
   }
   const useResponses = isResponsesBase(apiBase);

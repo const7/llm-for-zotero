@@ -14,6 +14,7 @@ import {
   ChatFileAttachment,
   ChatMessage,
   getRuntimeReasoningOptions,
+  prepareChatRequest,
   ReasoningConfig as LLMReasoningConfig,
   ReasoningEvent,
   ReasoningLevel as LLMReasoningLevel,
@@ -37,6 +38,7 @@ import type {
   SelectedTextContext,
   SelectedTextSource,
   PaperContextRef,
+  ContextAssemblyStrategy,
 } from "./types";
 import {
   chatHistory,
@@ -109,6 +111,7 @@ import {
 import { isGlobalPortalItem } from "./portalScope";
 import { buildChatHistoryNotePayload } from "./notes";
 import { extractManagedBlobHash } from "./attachmentStorage";
+import { buildContextPlanSystemMessages } from "./requestSystemMessages";
 import { toFileUrl } from "../../utils/pathFileUrl";
 import { replaceOwnerAttachmentRefs } from "../../utils/attachmentRefStore";
 import { decorateAssistantCitationLinks } from "./assistantCitationLinks";
@@ -1038,6 +1041,8 @@ async function buildContextPlanForRequest(params: {
   ) => void;
 }): Promise<{
   combinedContext: string;
+  strategy: ContextAssemblyStrategy;
+  assistantInstruction?: string;
   paperContexts: PaperContextRef[];
   pinnedPaperContexts: PaperContextRef[];
   recentPaperContexts: PaperContextRef[];
@@ -1070,13 +1075,18 @@ async function buildContextPlanForRequest(params: {
 
   if (plan.selectedPaperCount > 0) {
     const modeStatus =
-      plan.mode === "full"
-        ? `Using full context (${plan.selectedPaperCount} papers)`
-        : `Using retrieved evidence (${plan.selectedPaperCount} papers, ${plan.selectedChunkCount} chunks)`;
+      plan.strategy === "paper-first-full"
+        ? "Using full paper text (first turn)"
+        : plan.strategy === "paper-followup-retrieval"
+          ? `Using focused retrieval (${plan.selectedChunkCount} chunks)`
+          : plan.mode === "full"
+            ? `Using full context (${plan.selectedPaperCount} papers)`
+            : `Using retrieved evidence (${plan.selectedPaperCount} papers, ${plan.selectedChunkCount} chunks)`;
     params.setStatusSafely(modeStatus, "sending");
   }
   ztoolkit.log("LLM: Multi-context plan", {
     mode: plan.mode,
+    strategy: plan.strategy,
     selectedPaperCount: plan.selectedPaperCount,
     selectedChunkCount: plan.selectedChunkCount,
     contextBudgetTokens: plan.contextBudget.contextBudgetTokens,
@@ -1085,6 +1095,8 @@ async function buildContextPlanForRequest(params: {
   const planContext = sanitizeText(plan.contextText || "").trim();
   return {
     combinedContext: planContext,
+    strategy: plan.strategy,
+    assistantInstruction: plan.assistantInstruction,
     paperContexts: params.paperContexts,
     pinnedPaperContexts: params.pinnedPaperContexts,
     recentPaperContexts: params.recentPaperContexts,
@@ -1777,21 +1789,39 @@ export async function retryLatestAssistantResponse(
       return;
     }
 
+    const requestParams = {
+      prompt: question,
+      context: combinedContext,
+      history: llmHistory,
+      signal: currentAbortController?.signal,
+      images: screenshotImages,
+      attachments: fileAttachments,
+      model: effectiveRequestConfig.model,
+      apiBase: effectiveRequestConfig.apiBase,
+      apiKey: effectiveRequestConfig.apiKey,
+      reasoning: effectiveRequestConfig.reasoning,
+      temperature: effectiveRequestConfig.advanced?.temperature,
+      maxTokens: effectiveRequestConfig.advanced?.maxTokens,
+      inputTokenCap: effectiveRequestConfig.advanced?.inputTokenCap,
+    };
+    const previewSystemMessages = buildContextPlanSystemMessages({
+      strategy: contextPlan.strategy,
+      assistantInstruction: contextPlan.assistantInstruction,
+    });
+    const preview = prepareChatRequest({
+      ...requestParams,
+      systemMessages: previewSystemMessages,
+    });
+    const systemMessages = buildContextPlanSystemMessages({
+      strategy: contextPlan.strategy,
+      assistantInstruction: contextPlan.assistantInstruction,
+      inputCapEffects: preview.inputCap.effects,
+    });
+
     const answer = await callLLMStream(
       {
-        prompt: question,
-        context: combinedContext,
-        history: llmHistory,
-        signal: currentAbortController?.signal,
-        images: screenshotImages,
-        attachments: fileAttachments,
-        model: effectiveRequestConfig.model,
-        apiBase: effectiveRequestConfig.apiBase,
-        apiKey: effectiveRequestConfig.apiKey,
-        reasoning: effectiveRequestConfig.reasoning,
-        temperature: effectiveRequestConfig.advanced?.temperature,
-        maxTokens: effectiveRequestConfig.advanced?.maxTokens,
-        inputTokenCap: effectiveRequestConfig.advanced?.inputTokenCap,
+        ...requestParams,
+        systemMessages,
       },
       (delta) => {
         const chunk = sanitizeText(delta);
@@ -2283,21 +2313,39 @@ export async function sendQuestion(
       return;
     }
 
+    const requestParams = {
+      prompt: question,
+      context: combinedContext,
+      history: llmHistory,
+      signal: currentAbortController?.signal,
+      images,
+      attachments: requestFileAttachments,
+      model: effectiveRequestConfig.model,
+      apiBase: effectiveRequestConfig.apiBase,
+      apiKey: effectiveRequestConfig.apiKey,
+      reasoning: effectiveRequestConfig.reasoning,
+      temperature: effectiveRequestConfig.advanced?.temperature,
+      maxTokens: effectiveRequestConfig.advanced?.maxTokens,
+      inputTokenCap: effectiveRequestConfig.advanced?.inputTokenCap,
+    };
+    const previewSystemMessages = buildContextPlanSystemMessages({
+      strategy: contextPlan.strategy,
+      assistantInstruction: contextPlan.assistantInstruction,
+    });
+    const preview = prepareChatRequest({
+      ...requestParams,
+      systemMessages: previewSystemMessages,
+    });
+    const systemMessages = buildContextPlanSystemMessages({
+      strategy: contextPlan.strategy,
+      assistantInstruction: contextPlan.assistantInstruction,
+      inputCapEffects: preview.inputCap.effects,
+    });
+
     const answer = await callLLMStream(
       {
-        prompt: question,
-        context: combinedContext,
-        history: llmHistory,
-        signal: currentAbortController?.signal,
-        images: images,
-        attachments: requestFileAttachments,
-        model: effectiveRequestConfig.model,
-        apiBase: effectiveRequestConfig.apiBase,
-        apiKey: effectiveRequestConfig.apiKey,
-        reasoning: effectiveRequestConfig.reasoning,
-        temperature: effectiveRequestConfig.advanced?.temperature,
-        maxTokens: effectiveRequestConfig.advanced?.maxTokens,
-        inputTokenCap: effectiveRequestConfig.advanced?.inputTokenCap,
+        ...requestParams,
+        systemMessages,
       },
       (delta) => {
         assistantMessage.text += sanitizeText(delta);
@@ -2552,7 +2600,7 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
         <div class="llm-welcome-text">
           <div class="llm-welcome-title">LLM-for-Zotero helps answer questions about the current paper.</div>
           <ul class="llm-welcome-list">
-            <li><strong>Paper chat</strong> loads the paper's full text as context. <strong>Open chat</strong> gives you a clean slate to add context yourself for questions across papers.</li>
+            <li><strong>Paper chat</strong> sends the current paper's full text on the first turn, then switches to focused retrieval for follow-up questions. <strong>Open chat</strong> gives you a clean slate to add context yourself for questions across papers.</li>
             <li>Switch between <strong>Paper chat</strong> and <strong>Open chat</strong> by clicking the mode chip. To keep one Open chat across different paper tabs, click the lock icon.</li>
             <li>Use <strong>Add Text</strong> to include selected PDF passages, and <strong>Screenshots</strong> to attach figures. For multimodal models, screenshots also work well for math equations.</li>
             <li>Right-click a context item to pin it. Left-click a text context item to jump back to the page where it was selected.</li>
