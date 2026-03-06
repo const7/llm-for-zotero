@@ -1164,6 +1164,25 @@ function restoreAssistantSnapshot(
   message.streaming = false;
 }
 
+function finalizeCancelledAssistantMessage(
+  message: Message,
+  fallbackText = "[Cancelled]",
+): void {
+  const text = sanitizeText(message.text || "");
+  const reasoningSummary = sanitizeText(message.reasoningSummary || "");
+  const reasoningDetails = sanitizeText(message.reasoningDetails || "");
+  const hasReasoning = Boolean(reasoningSummary || reasoningDetails);
+
+  message.text = text || fallbackText;
+  message.timestamp = Date.now();
+  message.reasoningSummary = reasoningSummary || undefined;
+  message.reasoningDetails = reasoningDetails || undefined;
+  message.reasoningOpen = hasReasoning
+    ? message.reasoningOpen !== false
+    : false;
+  message.streaming = false;
+}
+
 function reconstructRetryPayload(userMessage: Message): {
   question: string;
   screenshotImages: string[];
@@ -1377,9 +1396,8 @@ function includeAutoLoadedPaperContext(
   pinnedPaperContexts: PaperContextRef[];
 } {
   const normalizedPaperContexts = normalizePaperContexts(paperContexts);
-  const normalizedPinnedPaperContexts = normalizePaperContexts(
-    pinnedPaperContexts,
-  );
+  const normalizedPinnedPaperContexts =
+    normalizePaperContexts(pinnedPaperContexts);
   if (isGlobalPortalItem(item)) {
     return {
       paperContexts: normalizedPaperContexts,
@@ -1455,7 +1473,9 @@ function syncComposeContextForInlineEdit(
   const paperContexts = normalizePaperContexts(userMessage.paperContexts);
   const autoLoadedPaperContext = isGlobalPortalItem(item)
     ? null
-    : resolvePaperContextRefFromAttachment(resolveContextSourceItem(item).contextItem);
+    : resolvePaperContextRefFromAttachment(
+        resolveContextSourceItem(item).contextItem,
+      );
   const selectedPaperContexts = autoLoadedPaperContext
     ? paperContexts.filter(
         (paperContext) =>
@@ -1681,7 +1701,8 @@ export async function retryLatestAssistantResponse(
   // Update model name before first refresh so streaming UI shows the correct model immediately
   assistantMessage.modelName = effectiveRequestConfig.model;
   assistantMessage.modelEntryId = effectiveRequestConfig.modelEntryId;
-  assistantMessage.modelProviderLabel = effectiveRequestConfig.modelProviderLabel;
+  assistantMessage.modelProviderLabel =
+    effectiveRequestConfig.modelProviderLabel;
   refreshChatSafely();
   let streamedAnswer = "";
   let streamedReasoningSummary: string | undefined;
@@ -1690,6 +1711,20 @@ export async function retryLatestAssistantResponse(
   const restoreOriginalAssistant = () => {
     restoreAssistantSnapshot(assistantMessage, assistantSnapshot);
     refreshChatSafely();
+  };
+  const finalizeCancelledAssistant = async () => {
+    finalizeCancelledAssistantMessage(assistantMessage);
+    refreshChatSafely();
+    await updateStoredLatestAssistantMessage(conversationKey, {
+      text: assistantMessage.text,
+      timestamp: assistantMessage.timestamp,
+      modelName: assistantMessage.modelName,
+      modelEntryId: assistantMessage.modelEntryId,
+      modelProviderLabel: assistantMessage.modelProviderLabel,
+      reasoningSummary: assistantMessage.reasoningSummary,
+      reasoningDetails: assistantMessage.reasoningDetails,
+    });
+    setStatusSafely("Cancelled", "ready");
   };
 
   try {
@@ -1727,8 +1762,7 @@ export async function retryLatestAssistantResponse(
       attachments: retryPair.userMessage.attachments,
     });
     if (cancelledRequestId >= thisRequestId) {
-      restoreOriginalAssistant();
-      setStatusSafely("Cancelled", "ready");
+      await finalizeCancelledAssistant();
       return;
     }
 
@@ -1739,8 +1773,7 @@ export async function retryLatestAssistantResponse(
     const queueRefresh = createQueuedRefresh(refreshChatSafely);
     if (cancelledRequestId >= thisRequestId) {
       currentAbortController?.abort();
-      restoreOriginalAssistant();
-      setStatusSafely("Cancelled", "ready");
+      await finalizeCancelledAssistant();
       return;
     }
 
@@ -1797,8 +1830,7 @@ export async function retryLatestAssistantResponse(
       cancelledRequestId >= thisRequestId ||
       Boolean(currentAbortController?.signal.aborted)
     ) {
-      restoreOriginalAssistant();
-      setStatusSafely("Cancelled", "ready");
+      await finalizeCancelledAssistant();
       return;
     }
 
@@ -1832,8 +1864,7 @@ export async function retryLatestAssistantResponse(
       Boolean(currentAbortController?.signal.aborted) ||
       (err as { name?: string }).name === "AbortError";
     if (isCancelled) {
-      restoreOriginalAssistant();
-      setStatusSafely("Cancelled", "ready");
+      await finalizeCancelledAssistant();
       return;
     }
 
@@ -1970,10 +2001,11 @@ export async function editUserTurnAndRetry(
   userMsg.selectedTextSources = selectedTextSourcesForMessage.length
     ? selectedTextSourcesForMessage
     : undefined;
-  userMsg.selectedTextPaperContexts =
-    selectedTextPaperContextsForMessage.some((entry) => Boolean(entry))
-      ? selectedTextPaperContextsForMessage
-      : undefined;
+  userMsg.selectedTextPaperContexts = selectedTextPaperContextsForMessage.some(
+    (entry) => Boolean(entry),
+  )
+    ? selectedTextPaperContextsForMessage
+    : undefined;
   userMsg.selectedTextExpandedIndex = -1;
   userMsg.screenshotImages = screenshotImagesForMessage.length
     ? screenshotImagesForMessage
@@ -2019,11 +2051,7 @@ export async function editUserTurnAndRetry(
   const resolvedApiKey = apiKey ?? profile?.apiKey;
   const resolvedReasoning =
     reasoning ||
-    getSelectedReasoningForItem(
-      item.id,
-      resolvedModel || "",
-      resolvedApiBase,
-    );
+    getSelectedReasoningForItem(item.id, resolvedModel || "", resolvedApiBase);
   const resolvedAdvanced =
     advanced || getAdvancedModelParamsForEntry(profile?.entryId);
   await retryLatestAssistantResponse(
@@ -2199,11 +2227,7 @@ export async function sendQuestion(
     });
   };
   const markCancelled = async () => {
-    assistantMessage.text = "[Cancelled]";
-    assistantMessage.streaming = false;
-    assistantMessage.reasoningSummary = undefined;
-    assistantMessage.reasoningDetails = undefined;
-    assistantMessage.reasoningOpen = false;
+    finalizeCancelledAssistantMessage(assistantMessage);
     refreshChatSafely();
     await persistAssistantOnce();
     setStatusSafely("Cancelled", "ready");
@@ -2242,11 +2266,22 @@ export async function sendQuestion(
       attachments: userMessage.attachments,
     });
 
+    if (cancelledRequestId >= thisRequestId) {
+      await markCancelled();
+      return;
+    }
+
     const AbortControllerCtor = getAbortController();
     setCurrentAbortController(
       AbortControllerCtor ? new AbortControllerCtor() : null,
     );
     const queueRefresh = createQueuedRefresh(refreshChatSafely);
+
+    if (cancelledRequestId >= thisRequestId) {
+      currentAbortController?.abort();
+      await markCancelled();
+      return;
+    }
 
     const answer = await callLLMStream(
       {
