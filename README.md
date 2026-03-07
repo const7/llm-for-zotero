@@ -168,7 +168,8 @@ codex auth v1 notes:
 - The plugin reads local credentials from `~/.codex/auth.json` (or `$CODEX_HOME/auth.json`).
 - If request returns 401, the plugin attempts token refresh automatically.
 - Embeddings are not supported in codex auth mode yet.
-- Responses file attachments are not supported in codex auth mode yet.
+- Local PDF/reference text grounding and screenshot/image inputs are supported in codex auth mode.
+- Only Responses `/files` upload + `file_id` attachment flow is not supported in codex auth mode yet.
 
 I will give some popular model as example:
 
