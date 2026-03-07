@@ -1309,6 +1309,10 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
   };
   const restoreDraftInputForCurrentConversation = () => {
     if (!item || !inputBox) return;
+    // Don't overwrite the user's in-progress edit text; the real draft was saved
+    // in inlineEditSavedDraft when edit mode was entered and will be restored by
+    // inlineEditCleanup when the edit session ends.
+    if (inlineEditTarget) return;
     inputBox.value = draftInputCache.get(getConversationKey(item)) || "";
   };
   const clearDraftInputState = (itemId: number) => {
@@ -6918,6 +6922,10 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
           selectedReasoning,
           advancedParams,
         );
+      } else {
+        // Nothing to submit — refresh the chat to remove the stale inline
+        // edit widget (the "Editing" header div) that cleanup left in chatBox.
+        refreshConversationPanels(body, currentItem);
       }
       return;
     }
