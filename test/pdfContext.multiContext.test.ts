@@ -129,6 +129,7 @@ describe("pdfContext multi-context helpers", function () {
           bm25Score: 0.7,
           embeddingScore: 0.1,
           hybridScore: 0.4,
+          evidenceScore: 1.3,
         },
         {
           paperKey: buildPaperKey(paperB),
@@ -142,6 +143,7 @@ describe("pdfContext multi-context helpers", function () {
           bm25Score: 0.6,
           embeddingScore: 0.2,
           hybridScore: 0.4,
+          evidenceScore: 0.9,
         },
       ],
     });
@@ -171,5 +173,13 @@ describe("pdfContext multi-context helpers", function () {
       "Representational drift increases over days.",
     );
     assert.isTrue(Boolean(metadata[0].leadingNoiseRemoved));
+  });
+
+  it("recognizes supplementary figure captions as figure-caption chunks", function () {
+    const metadata = buildChunkMetadata([
+      "Figure S7. Preserved relationship between place and grid cells across environments.",
+    ]);
+    assert.lengthOf(metadata, 1);
+    assert.equal(metadata[0].chunkKind, "figure-caption");
   });
 });

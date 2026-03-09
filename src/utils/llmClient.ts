@@ -1875,7 +1875,7 @@ function getTemperatureRecoveryPolicy(
   return null;
 }
 
-type RequestAuthState = {
+export type RequestAuthState = {
   mode: ModelProviderAuthMode;
   token: string;
   codex?: {
@@ -2029,7 +2029,7 @@ function getReasoningRecoverySelection(params: {
   return undefined;
 }
 
-async function postWithReasoningFallback(params: {
+export async function postWithReasoningFallback(params: {
   url: string;
   auth: RequestAuthState;
   modelName?: string;
@@ -2101,7 +2101,7 @@ function extractResponsesOutputText(data: {
   return firstText || JSON.stringify(data);
 }
 
-async function resolveRequestAuthState(params: {
+export async function resolveRequestAuthState(params: {
   authMode: ModelProviderAuthMode;
   apiKey: string;
   signal?: AbortSignal;

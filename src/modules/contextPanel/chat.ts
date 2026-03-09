@@ -30,6 +30,7 @@ import {
 } from "./constants";
 import type {
   Message,
+  ChatRuntimeMode,
   ReasoningProviderKind,
   ReasoningOption,
   ReasoningLevelSelection,
@@ -69,6 +70,9 @@ import {
   inlineEditSavedDraft,
   setInlineEditInputSection,
   setInlineEditSavedDraft,
+  selectedRuntimeModeCache,
+  agentRunTraceCache,
+  agentRunTraceLoadingTasks,
 } from "./state";
 import {
   sanitizeText,
@@ -115,6 +119,14 @@ import { buildContextPlanSystemMessages } from "./requestSystemMessages";
 import { toFileUrl } from "../../utils/pathFileUrl";
 import { replaceOwnerAttachmentRefs } from "../../utils/attachmentRefStore";
 import { decorateAssistantCitationLinks } from "./assistantCitationLinks";
+import { getAgentRuntime } from "../../agent";
+import { getAgentRunTrace } from "../../agent/store/traceStore";
+import type {
+  AgentEvent,
+  AgentRunEventRecord,
+  AgentRuntimeRequest,
+  PendingWriteAction,
+} from "../../agent/types";
 
 /** Get AbortController constructor from global scope */
 function getAbortController(): new () => AbortController {
@@ -656,6 +668,8 @@ function toPanelMessage(message: StoredChatMessage): Message {
     role: message.role,
     text: message.text,
     timestamp: message.timestamp,
+    runMode: message.runMode,
+    agentRunId: message.agentRunId,
     selectedText: selectedTexts[0] || message.selectedText,
     selectedTextExpanded: false,
     selectedTexts: selectedTexts.length ? selectedTexts : undefined,
@@ -724,6 +738,423 @@ export async function ensureConversationLoaded(
 
   loadingConversationTasks.set(conversationKey, task);
   await task;
+}
+
+async function ensureAgentRunTraceLoaded(
+  runId: string | undefined,
+  body?: Element,
+  item?: Zotero.Item | null,
+): Promise<void> {
+  const normalizedRunId = (runId || "").trim();
+  if (!normalizedRunId || agentRunTraceCache.has(normalizedRunId)) return;
+  const existing = agentRunTraceLoadingTasks.get(normalizedRunId);
+  if (existing) {
+    await existing;
+    return;
+  }
+  const task = (async () => {
+    try {
+      const trace = await getAgentRunTrace(normalizedRunId);
+      agentRunTraceCache.set(normalizedRunId, trace.events);
+    } catch (err) {
+      ztoolkit.log("LLM: Failed to load agent run trace", err);
+    } finally {
+      agentRunTraceLoadingTasks.delete(normalizedRunId);
+      if (body && item) {
+        refreshChat(body, item);
+      }
+    }
+  })();
+  agentRunTraceLoadingTasks.set(normalizedRunId, task);
+  await task;
+}
+
+function getCachedAgentRunEvents(runId: string | undefined): AgentRunEventRecord[] {
+  const normalizedRunId = (runId || "").trim();
+  if (!normalizedRunId) return [];
+  return agentRunTraceCache.get(normalizedRunId) || [];
+}
+
+function getPendingWriteConfirmation(
+  events: AgentRunEventRecord[],
+): { requestId: string; action: PendingWriteAction } | null {
+  const pending = new Map<string, PendingWriteAction>();
+  for (const entry of events) {
+    if (entry.payload.type === "confirmation_required") {
+      pending.set(entry.payload.requestId, entry.payload.action);
+      continue;
+    }
+    if (entry.payload.type === "confirmation_resolved") {
+      pending.delete(entry.payload.requestId);
+    }
+  }
+  const last = Array.from(pending.entries()).pop();
+  if (!last) return null;
+  return {
+    requestId: last[0],
+    action: last[1],
+  };
+}
+
+const AGENT_TRACE_TOOL_LABELS: Record<string, string> = {
+  get_active_context: "Inspect Context",
+  list_paper_contexts: "List Papers",
+  retrieve_paper_evidence: "Retrieve Evidence",
+  read_paper_excerpt: "Read Excerpt",
+  search_library_items: "Search Library",
+  read_attachment_text: "Read Attachment",
+  save_answer_to_note: "Save to Note",
+};
+
+function isAgentTraceRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function readAgentTraceText(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function truncateAgentTraceText(value: unknown, max = 88): string {
+  const raw = readAgentTraceText(value) || `${value ?? ""}`;
+  const normalized = sanitizeText(raw).replace(/\s+/g, " ").trim();
+  if (normalized.length <= max) return normalized;
+  return `${normalized.slice(0, Math.max(0, max - 3)).trimEnd()}...`;
+}
+
+function formatAgentTraceToolName(name: string): string {
+  const mapped = AGENT_TRACE_TOOL_LABELS[name];
+  if (mapped) return mapped;
+  return name
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part.slice(0, 1).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+type AgentTraceSummaryKind = "plan" | "tool" | "ok" | "skip" | "done";
+
+type AgentTraceSummaryRow = {
+  kind: AgentTraceSummaryKind;
+  icon: string;
+  text: string;
+};
+
+function summarizeAgentTraceToolResult(
+  name: string,
+  ok: boolean,
+  content: unknown,
+): AgentTraceSummaryRow | null {
+  const normalized = isAgentTraceRecord(content) ? content : null;
+  if (!ok) {
+    const errorText =
+      readAgentTraceText(normalized?.error) ||
+      `Tool failed: ${formatAgentTraceToolName(name)}`;
+    return {
+      kind: "skip",
+      icon: "!",
+      text: truncateAgentTraceText(errorText, 84),
+    };
+  }
+
+  switch (name) {
+    case "retrieve_paper_evidence": {
+      const evidence = Array.isArray(normalized?.evidence) ? normalized.evidence : [];
+      return {
+        kind: evidence.length > 0 ? "ok" : "skip",
+        icon: evidence.length > 0 ? "*" : "!",
+        text: `${evidence.length} snippet${evidence.length === 1 ? "" : "s"} found`,
+      };
+    }
+    case "search_library_items": {
+      const count = Array.isArray(normalized?.results)
+        ? normalized.results.length
+        : 0;
+      return {
+        kind: count > 0 ? "ok" : "skip",
+        icon: count > 0 ? "*" : "!",
+        text: `${count} library match${count === 1 ? "" : "es"} found`,
+      };
+    }
+    case "save_answer_to_note": {
+      const status = readAgentTraceText(normalized?.status);
+      return {
+        kind: "ok",
+        icon: "*",
+        text:
+          status === "appended"
+            ? "Appended answer to note"
+            : "Saved answer to note",
+      };
+    }
+    default:
+      return null;
+  }
+}
+
+function compactAgentTraceEvents(
+  events: AgentRunEventRecord[],
+): AgentRunEventRecord[] {
+  const compact: AgentRunEventRecord[] = [];
+  for (const entry of events) {
+    const previous = compact[compact.length - 1];
+    if (
+      entry.payload.type === "message_delta" &&
+      previous?.payload.type === "message_delta"
+    ) {
+      compact[compact.length - 1] = entry;
+      continue;
+    }
+    compact.push(entry);
+  }
+  return compact;
+}
+
+function pushAgentTraceSummaryRow(
+  rows: AgentTraceSummaryRow[],
+  next: AgentTraceSummaryRow | null,
+): void {
+  if (!next) return;
+  const previous = rows[rows.length - 1];
+  if (
+    previous &&
+    previous.kind === next.kind &&
+    previous.text === next.text &&
+    previous.icon === next.icon
+  ) {
+    return;
+  }
+  rows.push(next);
+}
+
+function buildAgentTraceSummaryRows(
+  events: AgentRunEventRecord[],
+): AgentTraceSummaryRow[] {
+  const rows: AgentTraceSummaryRow[] = [];
+  let sawRunning = false;
+  let sawTool = false;
+  let sawPreparationComplete = false;
+  let sawDrafting = false;
+
+  for (const entry of compactAgentTraceEvents(events)) {
+    switch (entry.payload.type) {
+      case "status":
+        if (!sawRunning) {
+          sawRunning = true;
+          pushAgentTraceSummaryRow(rows, {
+            kind: "plan",
+            icon: ">",
+            text: entry.payload.text || "Running agent",
+          });
+        }
+        break;
+      case "tool_call":
+        sawTool = true;
+        pushAgentTraceSummaryRow(rows, {
+          kind: "tool",
+          icon: "+",
+          text: `Using ${formatAgentTraceToolName(entry.payload.name)}`,
+        });
+        break;
+      case "tool_result":
+        pushAgentTraceSummaryRow(
+          rows,
+          summarizeAgentTraceToolResult(
+            entry.payload.name,
+            entry.payload.ok,
+            entry.payload.content,
+          ),
+        );
+        break;
+      case "confirmation_required":
+        pushAgentTraceSummaryRow(rows, {
+          kind: "plan",
+          icon: "?",
+          text: `Awaiting approval for ${formatAgentTraceToolName(
+            entry.payload.action.toolName,
+          )}`,
+        });
+        break;
+      case "confirmation_resolved":
+        pushAgentTraceSummaryRow(rows, {
+          kind: entry.payload.approved ? "ok" : "skip",
+          icon: entry.payload.approved ? "*" : "!",
+          text: entry.payload.approved
+            ? "Action approved"
+            : "Action cancelled",
+        });
+        break;
+      case "message_delta":
+        if (sawTool && !sawPreparationComplete) {
+          sawPreparationComplete = true;
+          pushAgentTraceSummaryRow(rows, {
+            kind: "ok",
+            icon: "*",
+            text: "Preparation complete",
+          });
+        }
+        if (!sawDrafting) {
+          sawDrafting = true;
+          pushAgentTraceSummaryRow(rows, {
+            kind: "plan",
+            icon: "...",
+            text: "Drafting answer",
+          });
+        }
+        break;
+      case "final":
+        pushAgentTraceSummaryRow(rows, {
+          kind: "done",
+          icon: "*",
+          text: "Final answer ready",
+        });
+        break;
+      case "fallback":
+        pushAgentTraceSummaryRow(rows, {
+          kind: "skip",
+          icon: "!",
+          text: entry.payload.reason,
+        });
+        break;
+    }
+  }
+
+  if (!rows.length) {
+    rows.push({
+      kind: "plan",
+      icon: ">",
+      text: "Running agent",
+    });
+  }
+
+  return rows;
+}
+
+function renderAgentTrace(
+  doc: Document,
+  body: Element,
+  item: Zotero.Item,
+  message: Message,
+): HTMLElement | null {
+  const runId = message.agentRunId?.trim();
+  if (!runId) return null;
+  const events = getCachedAgentRunEvents(runId);
+  if (!events.length) {
+    void ensureAgentRunTraceLoaded(runId, body, item);
+    const loading = doc.createElement("div");
+    loading.className = "llm-agent-trace";
+    const processDetails = doc.createElement("details");
+    processDetails.className = "llm-agent-trace-details";
+    processDetails.open = true;
+    const processSummary = doc.createElement("summary");
+    processSummary.textContent = "Process";
+    processDetails.appendChild(processSummary);
+    const loadingCard = doc.createElement("div");
+    loadingCard.className = "llm-agent-trace-card";
+    const loadingRow = doc.createElement("div");
+    loadingRow.className = "llm-at-row llm-at-row-plan";
+    const loadingIcon = doc.createElement("span");
+    loadingIcon.className = "llm-at-icon";
+    loadingIcon.textContent = "...";
+    const loadingText = doc.createElement("span");
+    loadingText.className = "llm-at-text llm-at-plan-text";
+    loadingText.textContent = "Loading agent trace...";
+    loadingRow.append(loadingIcon, loadingText);
+    loadingCard.appendChild(loadingRow);
+    processDetails.appendChild(loadingCard);
+    loading.appendChild(processDetails);
+    return loading;
+  }
+
+  const wrap = doc.createElement("div");
+  wrap.className = "llm-agent-trace";
+  const header = doc.createElement("div");
+  header.className = "llm-agent-trace-header";
+  header.textContent = "Agent trace";
+  wrap.appendChild(header);
+
+  const processDetails = doc.createElement("details");
+  processDetails.className = "llm-agent-trace-details";
+  processDetails.open = true;
+  const processSummary = doc.createElement("summary");
+  const summaryRows = buildAgentTraceSummaryRows(events);
+  processSummary.textContent = `Process (${summaryRows.length} step${
+    summaryRows.length === 1 ? "" : "s"
+  })`;
+  processDetails.appendChild(processSummary);
+  const card = doc.createElement("div");
+  card.className = "llm-agent-trace-card";
+  const list = doc.createElement("div");
+  list.className = "llm-agent-trace-list";
+  for (const summaryRow of summaryRows) {
+    const row = doc.createElement("div");
+    row.className = `llm-at-row llm-at-row-${summaryRow.kind}`;
+    const icon = doc.createElement("span");
+    icon.className = "llm-at-icon";
+    icon.textContent = summaryRow.icon;
+    const text = doc.createElement("span");
+    text.className = `llm-at-text llm-at-${summaryRow.kind}-text`;
+    text.textContent = summaryRow.text;
+    row.append(icon, text);
+    list.appendChild(row);
+  }
+  card.appendChild(list);
+  processDetails.appendChild(card);
+  wrap.appendChild(processDetails);
+
+  const details = doc.createElement("details");
+  details.className = "llm-agent-trace-details";
+  const summary = doc.createElement("summary");
+  summary.textContent = `Details (${events.length} event${events.length === 1 ? "" : "s"})`;
+  details.appendChild(summary);
+  const pre = doc.createElement("pre");
+  pre.className = "llm-agent-trace-code";
+  pre.textContent = events
+    .map((entry) =>
+      JSON.stringify(
+        {
+          seq: entry.seq,
+          type: entry.payload.type,
+          payload: entry.payload,
+        },
+        null,
+        2,
+      ),
+    )
+    .join("\n\n");
+  details.appendChild(pre);
+  wrap.appendChild(details);
+
+  const pending = getPendingWriteConfirmation(events);
+  if (pending) {
+    const controls = doc.createElement("div");
+    controls.className = "llm-agent-confirm";
+    const title = doc.createElement("div");
+    title.className = "llm-agent-confirm-title";
+    title.textContent = pending.action.title;
+    const approveBtn = doc.createElement("button");
+    approveBtn.type = "button";
+    approveBtn.className = "llm-agent-confirm-btn";
+    approveBtn.textContent = pending.action.confirmLabel || "Approve";
+    approveBtn.addEventListener("click", () => {
+      getAgentRuntime().resolveConfirmation(pending.requestId, true);
+      approveBtn.disabled = true;
+      cancelBtn.disabled = true;
+    });
+    const cancelBtn = doc.createElement("button");
+    cancelBtn.type = "button";
+    cancelBtn.className =
+      "llm-agent-confirm-btn llm-agent-confirm-btn-secondary";
+    cancelBtn.textContent = pending.action.cancelLabel || "Cancel";
+    cancelBtn.addEventListener("click", () => {
+      getAgentRuntime().resolveConfirmation(pending.requestId, false);
+      approveBtn.disabled = true;
+      cancelBtn.disabled = true;
+    });
+    controls.append(title, approveBtn, cancelBtn);
+    card.appendChild(controls);
+  }
+
+  return wrap;
 }
 
 export function detectReasoningProvider(
@@ -994,6 +1425,7 @@ function resolveEffectiveRequestConfig(params: {
   model?: string;
   apiBase?: string;
   apiKey?: string;
+  authMode?: "api_key" | "codex_auth";
   modelEntryId?: string;
   modelProviderLabel?: string;
   reasoning?: LLMReasoningConfig;
@@ -1018,7 +1450,9 @@ function resolveEffectiveRequestConfig(params: {
   ).trim();
   const apiBase = (params.apiBase || fallbackEntry?.apiBase || "").trim();
   const apiKey = (params.apiKey || fallbackEntry?.apiKey || "").trim();
-  const authMode = fallbackEntry?.authMode === "codex_auth" ? "codex_auth" : "api_key";
+  const authMode =
+    params.authMode ||
+    (fallbackEntry?.authMode === "codex_auth" ? "codex_auth" : "api_key");
   const reasoning =
     params.reasoning ||
     getSelectedReasoningForItem(params.item.id, model, apiBase);
@@ -2116,6 +2550,324 @@ export async function editUserTurnAndRetry(
   );
 }
 
+async function sendAgentQuestion(
+  body: Element,
+  item: Zotero.Item,
+  question: string,
+  images?: string[],
+  model?: string,
+  apiBase?: string,
+  apiKey?: string,
+  reasoning?: LLMReasoningConfig,
+  advanced?: AdvancedModelParams,
+  displayQuestion?: string,
+  selectedTexts?: string[],
+  selectedTextSources?: SelectedTextSource[],
+  selectedTextPaperContexts?: (PaperContextRef | undefined)[],
+  paperContexts?: PaperContextRef[],
+  pinnedPaperContexts?: PaperContextRef[],
+  attachments?: ChatAttachment[],
+): Promise<void> {
+  await ensureConversationLoaded(item);
+  const conversationKey = getConversationKey(item);
+  const history = chatHistory.get(conversationKey) || [];
+  const llmHistory = buildLLMHistoryMessages(history.slice());
+  const effectiveRequestConfig = resolveEffectiveRequestConfig({
+    item,
+    model,
+    apiBase,
+    apiKey,
+    reasoning,
+    advanced,
+  });
+  const selectedTextsForMessage = normalizeSelectedTexts(selectedTexts);
+  const normalizedPaperContexts = normalizePaperContexts(paperContexts);
+  const normalizedPinnedPaperContexts =
+    normalizePaperContexts(pinnedPaperContexts);
+  const {
+    paperContexts: paperContextsForMessage,
+    pinnedPaperContexts: pinnedPaperContextsForMessage,
+  } = includeAutoLoadedPaperContext(
+    item,
+    normalizedPaperContexts,
+    normalizedPinnedPaperContexts,
+  );
+  const runtimeRequest: AgentRuntimeRequest = {
+    conversationKey,
+    mode: "agent",
+    userText: question,
+    activeItemId: item.id,
+    selectedTexts: selectedTextsForMessage,
+    selectedPaperContexts: paperContextsForMessage,
+    pinnedPaperContexts: pinnedPaperContextsForMessage,
+    attachments,
+    screenshots: images,
+    model: effectiveRequestConfig.model,
+    apiBase: effectiveRequestConfig.apiBase,
+    apiKey: effectiveRequestConfig.apiKey,
+    authMode: effectiveRequestConfig.authMode,
+    reasoning: effectiveRequestConfig.reasoning,
+    advanced: effectiveRequestConfig.advanced,
+    history: llmHistory,
+    item,
+    systemPrompt: getStringPref("systemPrompt") || undefined,
+    modelProviderLabel: effectiveRequestConfig.modelProviderLabel,
+    libraryID: item.libraryID,
+  };
+  const agentRuntime = getAgentRuntime();
+  const capabilities = agentRuntime.getCapabilities(runtimeRequest);
+  if (!capabilities.toolCalls) {
+    const fallback = await agentRuntime.runTurn({
+      request: runtimeRequest,
+    });
+    if (fallback.kind === "fallback") {
+      await sendQuestion(
+        body,
+        item,
+        question,
+        images,
+        model,
+        apiBase,
+        apiKey,
+        reasoning,
+        advanced,
+        displayQuestion,
+        selectedTexts,
+        selectedTextSources,
+        selectedTextPaperContexts,
+        paperContexts,
+        pinnedPaperContexts,
+        attachments,
+        "agent",
+        fallback.runId,
+        true,
+      );
+      return;
+    }
+  }
+
+  const ui = getPanelRequestUI(body);
+  const thisRequestId = nextRequestId();
+  setPendingRequestId(thisRequestId);
+  const initialConversationKey = getConversationKey(item);
+  setRequestUIBusy(body, ui, initialConversationKey, "Preparing agent...");
+
+  const historyForRun = chatHistory.get(conversationKey) || [];
+  const shownQuestion = displayQuestion || question;
+  const selectedTextSourcesForMessage = normalizeSelectedTextSources(
+    selectedTextSources,
+    selectedTextsForMessage.length,
+  );
+  const selectedTextPaperContextsForMessage =
+    normalizeSelectedTextPaperContextsByIndex(
+      selectedTextPaperContexts,
+      selectedTextsForMessage.length,
+    );
+  const screenshotImagesForMessage = Array.isArray(images)
+    ? images
+        .filter((entry): entry is string => typeof entry === "string")
+        .map((entry) => entry.trim())
+        .filter(Boolean)
+        .slice(0, MAX_SELECTED_IMAGES)
+    : [];
+  const userMessage: Message = {
+    role: "user",
+    text: shownQuestion,
+    timestamp: Date.now(),
+    runMode: "agent",
+    selectedText: selectedTextsForMessage[0] || undefined,
+    selectedTextExpanded: false,
+    selectedTexts: selectedTextsForMessage.length
+      ? selectedTextsForMessage
+      : undefined,
+    selectedTextSources: selectedTextSourcesForMessage.length
+      ? selectedTextSourcesForMessage
+      : undefined,
+    selectedTextPaperContexts: selectedTextPaperContextsForMessage.some(
+      (entry) => Boolean(entry),
+    )
+      ? selectedTextPaperContextsForMessage
+      : undefined,
+    selectedTextExpandedIndex: -1,
+    paperContexts: paperContextsForMessage.length
+      ? paperContextsForMessage
+      : undefined,
+    pinnedPaperContexts: pinnedPaperContextsForMessage.length
+      ? pinnedPaperContextsForMessage
+      : undefined,
+    paperContextsExpanded: false,
+    screenshotImages: screenshotImagesForMessage.length
+      ? screenshotImagesForMessage
+      : undefined,
+    screenshotExpanded: false,
+    screenshotActiveIndex: 0,
+    attachments: attachments?.length ? attachments : undefined,
+  };
+  historyForRun.push(userMessage);
+  await persistConversationMessage(conversationKey, {
+    role: "user",
+    text: userMessage.text,
+    timestamp: userMessage.timestamp,
+    runMode: "agent",
+    selectedText: userMessage.selectedText,
+    selectedTexts: userMessage.selectedTexts,
+    selectedTextSources: userMessage.selectedTextSources,
+    selectedTextPaperContexts: userMessage.selectedTextPaperContexts,
+    paperContexts: userMessage.paperContexts,
+    screenshotImages: userMessage.screenshotImages,
+    attachments: userMessage.attachments,
+  });
+
+  const assistantMessage: Message = {
+    role: "assistant",
+    text: "",
+    timestamp: Date.now(),
+    runMode: "agent",
+    modelName: effectiveRequestConfig.model,
+    modelEntryId: effectiveRequestConfig.modelEntryId,
+    modelProviderLabel: effectiveRequestConfig.modelProviderLabel,
+    streaming: true,
+    reasoningOpen: false,
+  };
+  historyForRun.push(assistantMessage);
+  const { refreshChatSafely, setStatusSafely } = createPanelUpdateHelpers(
+    body,
+    item,
+    conversationKey,
+    ui,
+  );
+  refreshChatSafely();
+
+  let assistantPersisted = false;
+  const persistAssistantOnce = async () => {
+    if (assistantPersisted) return;
+    assistantPersisted = true;
+    await persistConversationMessage(conversationKey, {
+      role: "assistant",
+      text: assistantMessage.text,
+      timestamp: assistantMessage.timestamp,
+      runMode: "agent",
+      agentRunId: assistantMessage.agentRunId,
+      modelName: assistantMessage.modelName,
+      modelEntryId: assistantMessage.modelEntryId,
+      modelProviderLabel: assistantMessage.modelProviderLabel,
+    });
+  };
+  const markCancelled = async () => {
+    finalizeCancelledAssistantMessage(assistantMessage);
+    refreshChatSafely();
+    await persistAssistantOnce();
+    setStatusSafely("Cancelled", "ready");
+  };
+
+  try {
+    const AbortControllerCtor = getAbortController();
+    setCurrentAbortController(
+      AbortControllerCtor ? new AbortControllerCtor() : null,
+    );
+    const queueRefresh = createQueuedRefresh(refreshChatSafely);
+
+    const pushTraceEvent = (runId: string, event: AgentEvent) => {
+      const list = agentRunTraceCache.get(runId) || [];
+      list.push({
+        runId,
+        seq: list.length + 1,
+        eventType: event.type,
+        payload: event,
+        createdAt: Date.now(),
+      });
+      agentRunTraceCache.set(runId, list);
+    };
+
+    const outcome = await agentRuntime.runTurn({
+      request: runtimeRequest,
+      signal: currentAbortController?.signal,
+      onStart: async (runId) => {
+        assistantMessage.agentRunId = runId;
+        userMessage.agentRunId = runId;
+        agentRunTraceCache.set(runId, []);
+        await updateStoredLatestUserMessage(conversationKey, {
+          text: userMessage.text,
+          timestamp: userMessage.timestamp,
+          runMode: "agent",
+          agentRunId: runId,
+          selectedText: userMessage.selectedText,
+          selectedTexts: userMessage.selectedTexts,
+          selectedTextSources: userMessage.selectedTextSources,
+          selectedTextPaperContexts: userMessage.selectedTextPaperContexts,
+          screenshotImages: userMessage.screenshotImages,
+          paperContexts: userMessage.paperContexts,
+          attachments: userMessage.attachments,
+        });
+      },
+      onEvent: async (event) => {
+        if (assistantMessage.agentRunId) {
+          pushTraceEvent(assistantMessage.agentRunId, event);
+        }
+        switch (event.type) {
+          case "status":
+            setStatusSafely(event.text, "sending");
+            break;
+          case "fallback":
+            setStatusSafely(event.reason, "sending");
+            break;
+          case "message_delta":
+            assistantMessage.text += sanitizeText(event.text);
+            break;
+          case "final":
+            if (!assistantMessage.text.trim()) {
+              assistantMessage.text = sanitizeText(event.text);
+            }
+            assistantMessage.streaming = false;
+            break;
+          default:
+            break;
+        }
+        queueRefresh();
+      },
+    });
+
+    if (
+      cancelledRequestId >= thisRequestId ||
+      Boolean(currentAbortController?.signal.aborted)
+    ) {
+      await markCancelled();
+      return;
+    }
+
+    assistantMessage.agentRunId = outcome.runId;
+    assistantMessage.runMode = "agent";
+    const finalOutcomeText =
+      outcome.kind === "completed" ? outcome.text : assistantMessage.text;
+    assistantMessage.text =
+      sanitizeText(finalOutcomeText) || assistantMessage.text || "No response.";
+    assistantMessage.streaming = false;
+    refreshChatSafely();
+    await persistAssistantOnce();
+    setStatusSafely("Ready", "ready");
+  } catch (err) {
+    const isCancelled =
+      cancelledRequestId >= thisRequestId ||
+      Boolean(currentAbortController?.signal.aborted) ||
+      (err as { name?: string }).name === "AbortError";
+    if (isCancelled) {
+      await markCancelled();
+      return;
+    }
+    const errMsg = (err as Error).message || "Error";
+    assistantMessage.text = `Error: ${errMsg}`;
+    assistantMessage.streaming = false;
+    refreshChatSafely();
+    await persistAssistantOnce();
+    setStatusSafely(`Error: ${errMsg.slice(0, 40)}`, "error");
+  } finally {
+    setHistoryControlsDisabled(body, false);
+    restoreRequestUIIdle(body, conversationKey, thisRequestId);
+    setCurrentAbortController(null);
+    setPendingRequestId(0);
+  }
+}
+
 export async function sendQuestion(
   body: Element,
   item: Zotero.Item,
@@ -2133,7 +2885,31 @@ export async function sendQuestion(
   paperContexts?: PaperContextRef[],
   pinnedPaperContexts?: PaperContextRef[],
   attachments?: ChatAttachment[],
+  runtimeMode: ChatRuntimeMode = "chat",
+  agentRunId?: string,
+  skipAgentDispatch = false,
 ) {
+  if (runtimeMode === "agent" && !skipAgentDispatch) {
+    await sendAgentQuestion(
+      body,
+      item,
+      question,
+      images,
+      model,
+      apiBase,
+      apiKey,
+      reasoning,
+      advanced,
+      displayQuestion,
+      selectedTexts,
+      selectedTextSources,
+      selectedTextPaperContexts,
+      paperContexts,
+      pinnedPaperContexts,
+      attachments,
+    );
+    return;
+  }
   const ui = getPanelRequestUI(body);
 
   // Track this request
@@ -2198,6 +2974,8 @@ export async function sendQuestion(
     role: "user",
     text: userMessageText,
     timestamp: Date.now(),
+    runMode: runtimeMode,
+    agentRunId: agentRunId || undefined,
     selectedText: selectedTextForMessage || undefined,
     selectedTextExpanded: false,
     selectedTexts: selectedTextsForMessage.length
@@ -2231,6 +3009,8 @@ export async function sendQuestion(
     role: "user",
     text: userMessage.text,
     timestamp: userMessage.timestamp,
+    runMode: userMessage.runMode,
+    agentRunId: userMessage.agentRunId,
     selectedText: userMessage.selectedText,
     selectedTexts: userMessage.selectedTexts,
     selectedTextSources: userMessage.selectedTextSources,
@@ -2244,6 +3024,8 @@ export async function sendQuestion(
     role: "assistant",
     text: "",
     timestamp: Date.now(),
+    runMode: runtimeMode,
+    agentRunId: agentRunId || undefined,
     modelName: effectiveRequestConfig.model,
     modelEntryId: effectiveRequestConfig.modelEntryId,
     modelProviderLabel: effectiveRequestConfig.modelProviderLabel,
@@ -2270,6 +3052,8 @@ export async function sendQuestion(
       role: "assistant",
       text: assistantMessage.text,
       timestamp: assistantMessage.timestamp,
+      runMode: assistantMessage.runMode,
+      agentRunId: assistantMessage.agentRunId,
       modelName: assistantMessage.modelName,
       modelEntryId: assistantMessage.modelEntryId,
       modelProviderLabel: assistantMessage.modelProviderLabel,
@@ -2308,6 +3092,8 @@ export async function sendQuestion(
     await updateStoredLatestUserMessage(conversationKey, {
       text: userMessage.text,
       timestamp: userMessage.timestamp,
+      runMode: userMessage.runMode,
+      agentRunId: userMessage.agentRunId,
       selectedText: userMessage.selectedText,
       selectedTexts: userMessage.selectedTexts,
       selectedTextSources: userMessage.selectedTextSources,
@@ -2407,6 +3193,8 @@ export async function sendQuestion(
 
     assistantMessage.text =
       sanitizeText(answer) || assistantMessage.text || "No response.";
+    assistantMessage.runMode = runtimeMode;
+    assistantMessage.agentRunId = agentRunId || assistantMessage.agentRunId;
     assistantMessage.streaming = false;
     refreshChatSafely();
     await persistAssistantOnce();
@@ -2646,7 +3434,11 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
     const assistantPairMsg = history[index + 1];
     const hasAssistantPair = isUser && assistantPairMsg?.role === "assistant";
     const canEditUserPrompt = Boolean(
-      isUser && item && conversationIsIdle && hasAssistantPair,
+      isUser &&
+        item &&
+        conversationIsIdle &&
+        hasAssistantPair &&
+        assistantPairMsg?.runMode !== "agent",
     );
     const isInlineEditBubble = Boolean(
       canEditUserPrompt &&
@@ -3209,6 +4001,8 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
     } else {
       const hasModelName = Boolean(msg.modelName?.trim());
       const hasAnswerText = Boolean(msg.text);
+      const agentTraceEl =
+        msg.runMode === "agent" ? renderAgentTrace(doc, body, item, msg) : null;
       if (hasAnswerText) {
         const safeText = sanitizeText(msg.text);
         if (msg.streaming) bubble.classList.add("streaming");
@@ -3390,6 +4184,10 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
         bubbleHeaderNodes.push(details);
       }
 
+      if (agentTraceEl) {
+        bubbleHeaderNodes.push(agentTraceEl);
+      }
+
       for (let i = bubbleHeaderNodes.length - 1; i >= 0; i -= 1) {
         bubble.insertBefore(bubbleHeaderNodes[i], bubble.firstChild);
       }
@@ -3414,7 +4212,8 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
       !isUser &&
       index === latestAssistantIndex &&
       !msg.streaming &&
-      msg.text.trim()
+      msg.text.trim() &&
+      msg.runMode !== "agent"
     ) {
       const retryBtn = doc.createElement("button") as HTMLButtonElement;
       retryBtn.type = "button";

@@ -7,6 +7,7 @@ export type PanelDomRefs = {
   modelSlot: HTMLDivElement | null;
   modelMenu: HTMLDivElement | null;
   reasoningBtn: HTMLButtonElement | null;
+  runtimeModeBtn: HTMLButtonElement | null;
   reasoningSlot: HTMLDivElement | null;
   reasoningMenu: HTMLDivElement | null;
   actionsRow: HTMLDivElement | null;
@@ -89,6 +90,9 @@ export function getPanelDomRefs(body: Element): PanelDomRefs {
     modelMenu: body.querySelector("#llm-model-menu") as HTMLDivElement | null,
     reasoningBtn: body.querySelector(
       "#llm-reasoning-toggle",
+    ) as HTMLButtonElement | null,
+    runtimeModeBtn: body.querySelector(
+      "#llm-runtime-mode-toggle",
     ) as HTMLButtonElement | null,
     reasoningSlot: body.querySelector(
       "#llm-reasoning-dropdown",

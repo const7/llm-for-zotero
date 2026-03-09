@@ -14,6 +14,8 @@ export interface Message {
   role: "user" | "assistant";
   text: string;
   timestamp: number;
+  runMode?: "chat" | "agent";
+  agentRunId?: string;
   selectedText?: string;
   selectedTextExpanded?: boolean;
   selectedTexts?: string[];
@@ -37,6 +39,8 @@ export interface Message {
   reasoningDetails?: string;
   reasoningOpen?: boolean;
 }
+
+export type ChatRuntimeMode = "chat" | "agent";
 
 export type ReasoningProviderKind =
   | "openai"
@@ -180,6 +184,7 @@ export type PaperContextCandidate = {
   bm25Score: number;
   embeddingScore: number;
   hybridScore: number;
+  evidenceScore: number;
 };
 
 export type MultiContextPlan = {

@@ -214,9 +214,9 @@ const SECTION_HEADING_PATTERNS: SectionHeadingPattern[] = [
 ];
 
 const FIGURE_CAPTION_PATTERN =
-  /^(?:\d+\s+)?(?:fig(?:ure)?\.?)\s*\d+[a-z]?(?:\s*[:.)-]\s*|\s+)/i;
+  /^(?:\d+\s+)?(?:fig(?:ure)?\.?)\s*(?:s(?:upp(?:lementary)?)?\s*)?\d+[a-z]?(?:\s*[:.)-]\s*|\s+)/i;
 const TABLE_CAPTION_PATTERN =
-  /^(?:\d+\s+)?table\s*\d+[a-z]?(?:\s*[:.)-]\s*|\s+)/i;
+  /^(?:\d+\s+)?table\s*(?:s(?:upp(?:lementary)?)?\s*)?\d+[a-z]?(?:\s*[:.)-]\s*|\s+)/i;
 
 function normalizeEvidenceText(value: string): string {
   return sanitizePdfText(value).replace(/\s+/g, " ").trim();
@@ -909,11 +909,13 @@ export async function buildPaperRetrievalCandidates(
       bm25Score,
       embeddingScore,
       hybridScore,
+      evidenceScore: hybridScore,
     };
     const evidenceScore =
       retrievalMode === "evidence"
         ? hybridScore + scoreEvidenceHeuristics({ candidate, question })
         : hybridScore;
+    candidate.evidenceScore = evidenceScore;
     return {
       candidate,
       score: evidenceScore,

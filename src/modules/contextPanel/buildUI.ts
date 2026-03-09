@@ -415,6 +415,35 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
   const contextPreviews = createElement(doc, "div", "llm-context-previews", {
     id: "llm-context-previews",
   });
+  const runtimeModeBtn = createElement(
+    doc,
+    "button",
+    "llm-context-agent-toggle llm-agent-process-summary",
+    {
+      id: "llm-runtime-mode-toggle",
+      type: "button",
+      title: "Switch to Agent mode",
+      disabled: !hasItem,
+    },
+  );
+  runtimeModeBtn.setAttribute("aria-label", "Switch to Agent mode");
+  runtimeModeBtn.setAttribute("aria-pressed", "false");
+  const runtimeModeIndicator = createElement(
+    doc,
+    "span",
+    "llm-agent-toggle-indicator",
+  );
+  runtimeModeIndicator.setAttribute("aria-hidden", "true");
+  const runtimeModeLabel = createElement(
+    doc,
+    "span",
+    "llm-agent-toggle-label llm-agent-process-summary-label",
+    {
+      textContent: "Agent mode",
+    },
+  );
+  runtimeModeBtn.append(runtimeModeIndicator, runtimeModeLabel);
+  contextPreviews.appendChild(runtimeModeBtn);
   const selectedContextList = createElement(
     doc,
     "div",

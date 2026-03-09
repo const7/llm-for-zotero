@@ -18,6 +18,8 @@ export type StoredChatMessage = {
   role: "user" | "assistant";
   text: string;
   timestamp: number;
+  runMode?: "chat" | "agent";
+  agentRunId?: string;
   selectedText?: string;
   selectedTexts?: string[];
   selectedTextSources?: SelectedTextSource[];
@@ -157,6 +159,8 @@ export async function initChatStore(): Promise<void> {
         role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
         text TEXT NOT NULL,
         timestamp INTEGER NOT NULL,
+        run_mode TEXT CHECK(run_mode IN ('chat', 'agent')),
+        agent_run_id TEXT,
         selected_text TEXT,
         selected_texts_json TEXT,
         selected_text_sources_json TEXT,
@@ -200,6 +204,24 @@ export async function initChatStore(): Promise<void> {
       await Zotero.DB.queryAsync(
         `ALTER TABLE ${CHAT_MESSAGES_TABLE}
          ADD COLUMN model_provider_label TEXT`,
+      );
+    }
+    const hasRunModeColumn = Boolean(
+      columns?.some((column) => column?.name === "run_mode"),
+    );
+    if (!hasRunModeColumn) {
+      await Zotero.DB.queryAsync(
+        `ALTER TABLE ${CHAT_MESSAGES_TABLE}
+         ADD COLUMN run_mode TEXT`,
+      );
+    }
+    const hasAgentRunIdColumn = Boolean(
+      columns?.some((column) => column?.name === "agent_run_id"),
+    );
+    if (!hasAgentRunIdColumn) {
+      await Zotero.DB.queryAsync(
+        `ALTER TABLE ${CHAT_MESSAGES_TABLE}
+         ADD COLUMN agent_run_id TEXT`,
       );
     }
     const hasSelectedTextColumn = Boolean(
@@ -336,6 +358,8 @@ export async function loadConversation(
     `SELECT role,
             text,
             timestamp,
+            run_mode AS runMode,
+            agent_run_id AS agentRunId,
             selected_text AS selectedText,
             selected_texts_json AS selectedTextsJson,
             selected_text_sources_json AS selectedTextSourcesJson,
@@ -359,6 +383,8 @@ export async function loadConversation(
         text: unknown;
         timestamp: unknown;
         selectedText?: unknown;
+        runMode?: unknown;
+        agentRunId?: unknown;
         selectedTextsJson?: unknown;
         selectedTextSourcesJson?: unknown;
         selectedTextPaperContextsJson?: unknown;
@@ -554,6 +580,16 @@ export async function loadConversation(
       role,
       text: typeof row.text === "string" ? row.text : "",
       timestamp: Number.isFinite(timestamp) ? timestamp : Date.now(),
+      runMode:
+        row.runMode === "agent"
+          ? "agent"
+          : row.runMode === "chat"
+            ? "chat"
+            : undefined,
+      agentRunId:
+        typeof row.agentRunId === "string" && row.agentRunId.trim()
+          ? row.agentRunId.trim()
+          : undefined,
       selectedText:
         typeof row.selectedText === "string" ? row.selectedText : undefined,
       selectedTexts: normalizedTexts.length ? normalizedTexts : undefined,
@@ -635,13 +671,15 @@ export async function appendMessage(
     : [];
   await Zotero.DB.queryAsync(
     `INSERT INTO ${CHAT_MESSAGES_TABLE}
-      (conversation_key, role, text, timestamp, selected_text, selected_texts_json, selected_text_sources_json, selected_text_paper_contexts_json, paper_contexts_json, screenshot_images, attachments_json, model_name, model_entry_id, model_provider_label, reasoning_summary, reasoning_details)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      (conversation_key, role, text, timestamp, run_mode, agent_run_id, selected_text, selected_texts_json, selected_text_sources_json, selected_text_paper_contexts_json, paper_contexts_json, screenshot_images, attachments_json, model_name, model_entry_id, model_provider_label, reasoning_summary, reasoning_details)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       normalizedKey,
       message.role,
       message.text,
       Number.isFinite(timestamp) ? Math.floor(timestamp) : Date.now(),
+      message.runMode || null,
+      message.agentRunId || null,
       selectedTexts[0] || message.selectedText || null,
       selectedTexts.length ? JSON.stringify(selectedTexts) : null,
       selectedTextSources.length ? JSON.stringify(selectedTextSources) : null,
@@ -666,6 +704,8 @@ export async function updateLatestUserMessage(
     StoredChatMessage,
     | "text"
     | "timestamp"
+    | "runMode"
+    | "agentRunId"
     | "selectedText"
     | "selectedTexts"
     | "selectedTextSources"
@@ -721,6 +761,8 @@ export async function updateLatestUserMessage(
     `UPDATE ${CHAT_MESSAGES_TABLE}
      SET text = ?,
          timestamp = ?,
+         run_mode = ?,
+         agent_run_id = ?,
          selected_text = ?,
          selected_texts_json = ?,
          selected_text_sources_json = ?,
@@ -738,6 +780,8 @@ export async function updateLatestUserMessage(
     [
       message.text || "",
       Number.isFinite(timestamp) ? Math.floor(timestamp) : Date.now(),
+      message.runMode || null,
+      message.agentRunId || null,
       selectedTexts[0] || message.selectedText || null,
       selectedTexts.length ? JSON.stringify(selectedTexts) : null,
       selectedTextSources.length ? JSON.stringify(selectedTextSources) : null,
@@ -758,6 +802,8 @@ export async function updateLatestAssistantMessage(
     StoredChatMessage,
     | "text"
     | "timestamp"
+    | "runMode"
+    | "agentRunId"
     | "modelName"
     | "modelEntryId"
     | "modelProviderLabel"
@@ -773,6 +819,8 @@ export async function updateLatestAssistantMessage(
     `UPDATE ${CHAT_MESSAGES_TABLE}
      SET text = ?,
          timestamp = ?,
+         run_mode = ?,
+         agent_run_id = ?,
          model_name = ?,
          model_entry_id = ?,
          model_provider_label = ?,
@@ -788,6 +836,8 @@ export async function updateLatestAssistantMessage(
     [
       message.text || "",
       Number.isFinite(timestamp) ? Math.floor(timestamp) : Date.now(),
+      message.runMode || null,
+      message.agentRunId || null,
       message.modelName || null,
       message.modelEntryId || null,
       message.modelProviderLabel || null,

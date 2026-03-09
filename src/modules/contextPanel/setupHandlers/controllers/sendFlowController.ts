@@ -17,6 +17,7 @@ type SelectedProfile = {
   apiBase: string;
   apiKey: string;
   providerLabel: string;
+  authMode?: "api_key" | "codex_auth";
 };
 
 type LatestEditablePair = {
@@ -61,6 +62,7 @@ type SendFlowControllerDeps = {
     question: string,
     attachments: ChatAttachment[],
   ) => string;
+  isAgentMode: () => boolean;
   isGlobalMode: () => boolean;
   normalizeConversationTitleSeed: (raw: unknown) => string;
   getConversationKey: (item: Zotero.Item) => number;
@@ -117,6 +119,7 @@ type SendFlowControllerDeps = {
     paperContexts?: PaperContextRef[],
     pinnedPaperContexts?: PaperContextRef[],
     attachments?: ChatAttachment[],
+    runtimeMode?: "chat" | "agent",
   ) => Promise<void>;
   retainPinnedImageState: (itemId: number) => void;
   retainPaperState: (itemId: number) => void;
@@ -194,10 +197,12 @@ export function createSendFlowController(deps: SendFlowControllerDeps): {
         )
       : resolvedPromptText;
 
-    const composedQuestion = deps.buildModelPromptWithFileContext(
-      composedQuestionBase,
-      selectedFiles,
-    );
+    const composedQuestion = deps.isAgentMode()
+      ? resolvedPromptText
+      : deps.buildModelPromptWithFileContext(
+          composedQuestionBase,
+          selectedFiles,
+        );
     const displayQuestion = primarySelectedText
       ? resolvedPromptText
       : text || resolvedPromptText;
@@ -348,6 +353,7 @@ export function createSendFlowController(deps: SendFlowControllerDeps): {
       selectedPaperContexts.length ? selectedPaperContexts : undefined,
       pinnedPaperContexts.length ? pinnedPaperContexts : undefined,
       selectedFiles.length ? selectedFiles : undefined,
+      deps.isAgentMode() ? "agent" : "chat",
     );
     const win = deps.body.ownerDocument?.defaultView;
     if (win) {

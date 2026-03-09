@@ -16,6 +16,7 @@ import {
 } from "./utils/attachmentRefStore";
 import { runLegacyMigrations } from "./utils/migrations";
 import { createZToolkit } from "./utils/ztoolkit";
+import { getAgentApi, initAgentSubsystem } from "./agent";
 
 async function onStartup() {
   await Promise.all([
@@ -36,6 +37,12 @@ async function onStartup() {
     await initChatStore();
   } catch (err) {
     ztoolkit.log("LLM: Failed to initialize chat store", err);
+  }
+  try {
+    await initAgentSubsystem();
+    addon.api.agent = getAgentApi();
+  } catch (err) {
+    ztoolkit.log("LLM: Failed to initialize agent subsystem", err);
   }
   try {
     await initAttachmentRefStore();

@@ -35,6 +35,8 @@ describe("sendFlowController", function () {
     let retainTextCalled = 0;
     let persistDraftInputCalls = 0;
     let setActiveEditSessionCalls = 0;
+    let lastSentQuestion = "";
+    let lastRuntimeMode = "";
 
     const deps = {
       body: {} as Element,
@@ -57,6 +59,7 @@ describe("sendFlowController", function () {
         question: string,
         attachments: ChatAttachment[],
       ) => `${question} [files=${attachments.length}]`,
+      isAgentMode: () => false,
       isGlobalMode: () => false,
       normalizeConversationTitleSeed: (raw: unknown) => String(raw || ""),
       getConversationKey: () => item.id,
@@ -110,8 +113,11 @@ describe("sendFlowController", function () {
         _paperContexts?: PaperContextRef[],
         _pinnedPaperContexts?: PaperContextRef[],
         _attachments?: ChatAttachment[],
+        runtimeMode?: "chat" | "agent",
       ) => {
         sendCalled += 1;
+        lastSentQuestion = _question;
+        lastRuntimeMode = runtimeMode || "";
       },
       retainPinnedImageState: () => {
         retainImageCalled += 1;
@@ -155,6 +161,10 @@ describe("sendFlowController", function () {
         setActiveEditSessionCalls,
       }),
       getDraftValue: () => draftValue,
+      getLastSend: () => ({
+        lastSentQuestion,
+        lastRuntimeMode,
+      }),
     };
   }
 
@@ -258,5 +268,17 @@ describe("sendFlowController", function () {
     assert.equal(getDraftValue(), "");
     assert.equal(inputBox.value, "");
     assert.equal(counts.persistDraftInputCalls, 1);
+  });
+
+  it("sends raw prompt text in agent mode and marks runtime mode as agent", async function () {
+    const { controller, getLastSend } = createBaseDeps({
+      isAgentMode: () => true,
+    });
+
+    await controller.doSend();
+    const lastSend = getLastSend();
+
+    assert.equal(lastSend.lastSentQuestion, "ask question");
+    assert.equal(lastSend.lastRuntimeMode, "agent");
   });
 });

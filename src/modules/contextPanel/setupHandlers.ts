@@ -28,6 +28,7 @@ import {
 import {
   selectedModelCache,
   selectedReasoningCache,
+  selectedRuntimeModeCache,
   selectedImageCache,
   selectedFileAttachmentCache,
   selectedImagePreviewExpandedCache,
@@ -181,6 +182,7 @@ import {
 } from "../../utils/attachmentRefStore";
 import type {
   Message,
+  ChatRuntimeMode,
   ReasoningLevelSelection,
   ReasoningOption,
   AdvancedModelParams,
@@ -290,6 +292,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     modelSlot,
     modelMenu,
     reasoningBtn,
+    runtimeModeBtn,
     reasoningSlot,
     reasoningMenu,
     actionsRow,
@@ -418,6 +421,38 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     if (fromItem > 0) return fromItem;
     return resolveActiveLibraryID() || 0;
   };
+  const getCurrentRuntimeMode = (): ChatRuntimeMode => {
+    if (!item) return "chat";
+    const key = getConversationKey(item);
+    return selectedRuntimeModeCache.get(key) || "chat";
+  };
+  const updateRuntimeModeButton = () => {
+    if (!runtimeModeBtn) return;
+    const mode = getCurrentRuntimeMode();
+    const enabled = mode === "agent";
+    const label = runtimeModeBtn.querySelector(
+      ".llm-agent-toggle-label",
+    ) as HTMLSpanElement | null;
+    if (label) {
+      label.textContent = "Agent mode";
+    }
+    runtimeModeBtn.classList.toggle("llm-agent-toggle-enabled", enabled);
+    runtimeModeBtn.dataset.mode = mode;
+    runtimeModeBtn.title = enabled
+      ? "Agent mode ON. Click to switch to Chat mode"
+      : "Agent mode OFF. Click to switch to Agent mode";
+    runtimeModeBtn.setAttribute(
+      "aria-label",
+      mode === "agent" ? "Switch to Chat mode" : "Switch to Agent mode",
+    );
+    runtimeModeBtn.setAttribute("aria-pressed", enabled ? "true" : "false");
+    panelRoot.dataset.runtimeMode = mode;
+  };
+  const setCurrentRuntimeMode = (mode: ChatRuntimeMode) => {
+    if (!item) return;
+    selectedRuntimeModeCache.set(getConversationKey(item), mode);
+    updateRuntimeModeButton();
+  };
   const resolveCurrentPaperBaseItem = (): Zotero.Item | null => {
     if (basePaperItem?.isRegularItem?.()) return basePaperItem;
     const resolvedFromItem = resolveConversationBaseItem(item);
@@ -524,6 +559,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
         isLocked ? "Unlock open chat default" : "Lock open chat as default",
       );
     }
+    updateRuntimeModeButton();
   };
   syncConversationIdentity();
   let activeEditSession: EditLatestTurnMarker | null = null;
@@ -6786,6 +6822,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     resolvePromptText,
     buildQuestionWithSelectedTextContexts,
     buildModelPromptWithFileContext,
+    isAgentMode: () => getCurrentRuntimeMode() === "agent",
     isGlobalMode,
     normalizeConversationTitleSeed,
     getConversationKey,
@@ -6939,6 +6976,24 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     e.stopPropagation();
     void executeSend();
   });
+
+  if (runtimeModeBtn) {
+    runtimeModeBtn.addEventListener("click", (e: Event) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!item) return;
+      const nextMode: ChatRuntimeMode =
+        getCurrentRuntimeMode() === "agent" ? "chat" : "agent";
+      setCurrentRuntimeMode(nextMode);
+      if (status) {
+        setStatus(
+          status,
+          nextMode === "agent" ? "Agent mode enabled" : "Chat mode enabled",
+          "ready",
+        );
+      }
+    });
+  }
 
   // Enter key (Shift+Enter for newline)
   inputBox.addEventListener("keydown", (e: Event) => {
