@@ -49,7 +49,9 @@ const AGENT_TRACE_TOOL_LABELS: Record<string, string> = {
   list_paper_contexts: "List Papers",
   retrieve_paper_evidence: "Retrieve Evidence",
   read_paper_excerpt: "Read Excerpt",
+  read_paper_front_matter: "Read Front Matter",
   search_library_items: "Search Library",
+  audit_article_metadata: "Audit Metadata",
   read_attachment_text: "Read Attachment",
   save_answer_to_note: "Save to Note",
   edit_article_metadata: "Edit Metadata",
@@ -165,6 +167,60 @@ function getPendingWriteTargets(
   ];
 }
 
+function renderPendingWriteReviewItems(
+  doc: Document,
+  action: PendingWriteAction,
+): HTMLDivElement | null {
+  if (!Array.isArray(action.reviewItems) || !action.reviewItems.length) {
+    return null;
+  }
+  const list = doc.createElement("div");
+  list.className = "llm-agent-hitl-review-list";
+
+  for (const item of action.reviewItems) {
+    const row = doc.createElement("div");
+    row.className = "llm-agent-hitl-review-item";
+
+    const label = doc.createElement("div");
+    label.className = "llm-agent-hitl-review-label";
+    label.textContent = item.label;
+    row.appendChild(label);
+
+    const values = doc.createElement("div");
+    values.className = "llm-agent-hitl-review-values";
+
+    const beforeCol = doc.createElement("div");
+    beforeCol.className = "llm-agent-hitl-review-column";
+    const beforeLabel = doc.createElement("div");
+    beforeLabel.className = "llm-agent-hitl-review-column-label";
+    beforeLabel.textContent = "Before";
+    const beforeValue = doc.createElement("div");
+    beforeValue.className = item.multiline
+      ? "llm-agent-hitl-review-value llm-agent-hitl-review-value-multiline"
+      : "llm-agent-hitl-review-value";
+    beforeValue.textContent = item.before?.trim() || "Empty";
+    beforeCol.append(beforeLabel, beforeValue);
+
+    const afterCol = doc.createElement("div");
+    afterCol.className = "llm-agent-hitl-review-column";
+    const afterLabel = doc.createElement("div");
+    afterLabel.className = "llm-agent-hitl-review-column-label";
+    afterLabel.textContent = "After";
+    const afterValue = doc.createElement("div");
+    afterValue.className = item.multiline
+      ? "llm-agent-hitl-review-value llm-agent-hitl-review-value-multiline llm-agent-hitl-review-value-after"
+      : "llm-agent-hitl-review-value llm-agent-hitl-review-value-after";
+    afterValue.textContent = item.after.trim() || "Empty";
+    afterCol.append(afterLabel, afterValue);
+
+    values.append(beforeCol, afterCol);
+    row.append(values);
+    list.appendChild(row);
+  }
+
+  return list;
+}
+
 function renderPendingWriteActionCard(
   doc: Document,
   pending: { requestId: string; action: PendingWriteAction },
@@ -187,20 +243,27 @@ function renderPendingWriteActionCard(
   contentLabel.textContent = pending.action.contentLabel || "Content";
   card.appendChild(contentLabel);
 
-  const editor = doc.createElement("textarea");
-  editor.className =
-    pending.action.editorMode === "json"
-      ? "llm-agent-hitl-input llm-agent-hitl-input-code"
-      : "llm-agent-hitl-input";
-  editor.value = getPendingWriteEditableContent(pending.action);
-  editor.spellcheck = pending.action.editorMode !== "json";
-  const resizeEditor = () => {
-    editor.style.height = "auto";
-    editor.style.height = `${Math.min(editor.scrollHeight, 260)}px`;
-  };
-  resizeEditor();
-  editor.addEventListener("input", resizeEditor);
-  card.appendChild(editor);
+  const reviewItems = renderPendingWriteReviewItems(doc, pending.action);
+  let editor: HTMLTextAreaElement | null = null;
+  if (reviewItems) {
+    card.appendChild(reviewItems);
+  } else {
+    editor = doc.createElement("textarea");
+    editor.className =
+      pending.action.editorMode === "json"
+        ? "llm-agent-hitl-input llm-agent-hitl-input-code"
+        : "llm-agent-hitl-input";
+    editor.value = getPendingWriteEditableContent(pending.action);
+    editor.spellcheck = pending.action.editorMode !== "json";
+    const resizeEditor = () => {
+      if (!editor) return;
+      editor.style.height = "auto";
+      editor.style.height = `${Math.min(editor.scrollHeight, 260)}px`;
+    };
+    resizeEditor();
+    editor.addEventListener("input", resizeEditor);
+    card.appendChild(editor);
+  }
 
   const actionRow = doc.createElement("div");
   actionRow.className = "llm-agent-hitl-actions";
@@ -212,13 +275,15 @@ function renderPendingWriteActionCard(
     "default";
   const buttons: HTMLButtonElement[] = [];
   const setButtonsDisabled = (disabled: boolean) => {
-    editor.disabled = disabled;
+    if (editor) {
+      editor.disabled = disabled;
+    }
     for (const button of buttons) {
       button.disabled = disabled;
     }
   };
   const syncSaveButtons = () => {
-    const hasContent = editor.value.trim().length > 0;
+    const hasContent = editor ? editor.value.trim().length > 0 : true;
     for (const button of buttons) {
       if (button.dataset.kind === "save") {
         button.disabled = !hasContent;
@@ -228,7 +293,7 @@ function renderPendingWriteActionCard(
   const handleSave = (targetId: string) => {
     setButtonsDisabled(true);
     getAgentRuntime().resolveConfirmation(pending.requestId, true, {
-      content: editor.value,
+      ...(editor ? { content: editor.value } : {}),
       target: targetId === "default" ? undefined : targetId,
     });
   };
@@ -262,7 +327,7 @@ function renderPendingWriteActionCard(
   actionRow.appendChild(cancelButton);
   card.appendChild(actionRow);
   syncSaveButtons();
-  editor.addEventListener("input", syncSaveButtons);
+  editor?.addEventListener("input", syncSaveButtons);
 
   return card;
 }
@@ -412,11 +477,23 @@ function summarizeAgentTraceToolCall(name: string): AgentTraceSummaryRow {
         icon: "¶",
         text: "Opening the exact passage behind that evidence",
       };
+    case "read_paper_front_matter":
+      return {
+        kind: "tool",
+        icon: "¶",
+        text: "Inspecting the paper front matter for metadata",
+      };
     case "search_library_items":
       return {
         kind: "tool",
         icon: "⌕",
         text: "Searching your library for matching papers",
+      };
+    case "audit_article_metadata":
+      return {
+        kind: "tool",
+        icon: "≡",
+        text: "Auditing the article metadata field by field",
       };
     case "read_attachment_text":
       return {
@@ -568,6 +645,29 @@ function summarizeAgentTraceToolResult(
             : "No matching papers found in the library",
       };
     }
+    case "audit_article_metadata": {
+      const suggestions = Array.isArray(normalized?.suggestions)
+        ? normalized.suggestions
+        : [];
+      const includesCreators = suggestions.some(
+        (entry) =>
+          isAgentTraceRecord(entry) && readAgentTraceText(entry.field) === "creators",
+      );
+      return {
+        kind: suggestions.length > 0 ? "ok" : "skip",
+        icon: suggestions.length > 0 ? "✓" : "−",
+        text:
+          suggestions.length > 0
+            ? includesCreators
+              ? `Identified ${suggestions.length} metadata update${
+                  suggestions.length === 1 ? "" : "s"
+                }, including the author list`
+              : `Identified ${suggestions.length} metadata update${
+                  suggestions.length === 1 ? "" : "s"
+                }`
+            : "The metadata already looks complete from the available evidence",
+      };
+    }
     case "read_paper_excerpt":
       return {
         kind: "ok",
@@ -579,6 +679,12 @@ function summarizeAgentTraceToolResult(
         kind: "ok",
         icon: "✓",
         text: "Read the attached file",
+      };
+    case "read_paper_front_matter":
+      return {
+        kind: "ok",
+        icon: "✓",
+        text: "Checked the opening paper metadata text",
       };
     case "save_answer_to_note": {
       const status = readAgentTraceText(normalized?.status);
@@ -644,6 +750,11 @@ function buildInitialAgentMessage(
       ? "I’ve got your request and the attached context. I’ll review the article metadata first, then show you the proposed changes before I apply them."
       : "I’ve got your request. I’ll review the article metadata first, then show you the proposed changes before I apply them.";
   }
+  if (firstToolName === "audit_article_metadata") {
+    return requestChips.length
+      ? "I’ve got your request and the attached context. I’ll audit the article metadata first, then show you the proposed changes before I apply them."
+      : "I’ve got your request. I’ll audit the article metadata first, then show you the proposed changes before I apply them.";
+  }
   return requestChips.length
     ? "I’ve got your question and the attached context. I’m checking that first so I can ground the answer properly."
     : "I’ve got your question. I’m checking the current context first.";
@@ -663,8 +774,12 @@ function buildToolFollowUpMessage(
           : "I have the right lead, so I’m pulling the strongest evidence next.";
       case "read_paper_excerpt":
         return "I found a useful lead, and I want to inspect the exact passage next.";
+      case "read_paper_front_matter":
+        return "I need to verify the paper header next so I can check the metadata directly.";
       case "search_library_items":
         return "I know what I need now, so I’m searching your library next.";
+      case "audit_article_metadata":
+        return "I know which article is in scope now, so I’m auditing the metadata field by field next.";
       case "read_attachment_text":
         return "I’ve narrowed it down, so I’m opening the attached file next.";
       case "save_answer_to_note":

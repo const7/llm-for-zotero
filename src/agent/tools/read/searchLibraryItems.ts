@@ -19,7 +19,7 @@ export function createSearchLibraryItemsTool(
     spec: {
       name: "search_library_items",
       description:
-        "Search library papers by title, citation key, author, year, DOI, or attachment title.",
+        "Search library papers by title, citation key, author, year, DOI, or attachment title. Results include full editable metadata for each matching bibliographic item.",
       inputSchema: {
         type: "object",
         required: ["query"],
@@ -55,14 +55,20 @@ export function createSearchLibraryItemsTool(
       if (!libraryID) {
         throw new Error("No active library available for search");
       }
+      const results = await zoteroGateway.searchLibraryItems({
+        libraryID,
+        query: input.query,
+        excludeContextItemId:
+          zoteroGateway.getActiveContextItem(item)?.id || null,
+        limit: input.limit,
+      });
       return {
-        results: await zoteroGateway.searchLibraryItems({
-          libraryID,
-          query: input.query,
-          excludeContextItemId:
-            zoteroGateway.getActiveContextItem(item)?.id || null,
-          limit: input.limit,
-        }),
+        results: results.map((entry) => ({
+          ...entry,
+          metadata: zoteroGateway.getEditableArticleMetadata(
+            zoteroGateway.getItem(entry.itemId),
+          ),
+        })),
       };
     },
   };

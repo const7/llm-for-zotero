@@ -77,6 +77,28 @@ function isMultimodalRequestSupported(request: AgentRuntimeRequest): boolean {
   );
 }
 
+function getMetadataEditDirective(userText: string): string {
+  const normalized = userText.trim().toLowerCase();
+  const looksLikeMetadataTask =
+    /\bmetadata\b/.test(normalized) ||
+    /\b(doi|title|abstract|journal|authors?|creator|date|pages|volume|issue|url|isbn|issn|publisher)\b/.test(
+      normalized,
+    ) &&
+      /\b(fix|edit|correct|clean|standardi[sz]e|complete|update|fill|repair)\b/.test(
+        normalized,
+      );
+  if (!looksLikeMetadataTask) return "";
+  return [
+    "When the user asks to fix, clean up, standardize, or complete article metadata, do not default to a follow-up conversation.",
+    "Treat metadata fixing as a full audit, not a spot edit. Review all supported metadata fields, especially creators/authors, title, venue, date, pages, DOI, URL, ISSN/ISBN, abstract, language, and extra.",
+    "Start by inspecting the current article metadata. If any field is missing, incomplete, inconsistent, or likely non-standard, gather stronger evidence before editing.",
+    "Use audit_article_metadata first. It compares the current item against matching library metadata and paper front matter, and it returns a suggestedPatch plus field-by-field reasons, including creator-list issues.",
+    "Treat suggestedPatch from audit_article_metadata as the high-confidence subset. If it is non-empty, pass it directly into edit_article_metadata, either as patch or suggestedPatch, so the user can review the proposed change set.",
+    "Only fall back to lower-level metadata tools such as search_library_items or read_paper_front_matter yourself when audit_article_metadata is inconclusive and you still need more evidence.",
+    "Only ask a follow-up if the target article is ambiguous or you truly cannot infer a safe metadata correction.",
+  ].join("\n");
+}
+
 function stringifyContent(content: AgentModelMessage["content"]): string {
   if (typeof content === "string") return content;
   return content
@@ -167,6 +189,7 @@ function buildInitialMessages(request: AgentRuntimeRequest): AgentModelMessage[]
     "Use tools for paper/library/document operations instead of claiming hidden access.",
     "If a write action is needed, call the write tool and wait for confirmation.",
     "When enough evidence has been collected, answer clearly and concisely.",
+    getMetadataEditDirective(request.userText || ""),
   ]
     .filter(Boolean)
     .join("\n\n");

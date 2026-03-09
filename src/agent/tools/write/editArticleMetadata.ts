@@ -112,6 +112,7 @@ function extractMetadataPatchFromArgs(
     args.changes,
     args.updates,
     args.patch,
+    args.suggestedPatch,
   ];
   for (const container of containers) {
     const parsed = parseMetadataContainer(container);
@@ -144,6 +145,46 @@ function truncateTitle(value: string): string {
   return `${trimmed.slice(0, 69).trimEnd()}...`;
 }
 
+function formatFieldLabel(fieldName: string): string {
+  switch (fieldName) {
+    case "abstractNote":
+      return "Abstract";
+    case "publicationTitle":
+      return "Publication title";
+    case "journalAbbreviation":
+      return "Journal abbreviation";
+    case "proceedingsTitle":
+      return "Proceedings title";
+    case "shortTitle":
+      return "Short title";
+    default:
+      return fieldName
+        .replace(/([a-z])([A-Z])/g, "$1 $2")
+        .replace(/\bdoi\b/gi, "DOI")
+        .replace(/\bissn\b/gi, "ISSN")
+        .replace(/\bisbn\b/gi, "ISBN")
+        .replace(/^./, (char) => char.toUpperCase());
+  }
+}
+
+function formatCreatorList(creators: EditableArticleCreator[] | undefined): string {
+  if (!Array.isArray(creators) || !creators.length) return "";
+  return creators
+    .map((creator) => {
+      const name =
+        creator.fieldMode === 1 || creator.name
+          ? creator.name || ""
+          : [creator.firstName || "", creator.lastName || ""]
+              .filter(Boolean)
+              .join(" ")
+              .trim();
+      const creatorType = creator.creatorType?.trim() || "author";
+      return name ? `${name} (${creatorType})` : "";
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
 export function createEditArticleMetadataTool(
   zoteroGateway: ZoteroGateway,
 ): AgentToolDefinition<EditArticleMetadataInput, unknown> {
@@ -152,7 +193,7 @@ export function createEditArticleMetadataTool(
     spec: {
       name: "edit_article_metadata",
       description:
-        "Edit or complete bibliographic metadata for a single Zotero article after user confirmation. Pass the proposed changes either in metadata, fields, changes, updates, or as top-level metadata fields. Supports common fields such as title, abstractNote, publicationTitle, date, DOI, url, pages, volume, issue, extra, and creators.",
+        "Edit or complete bibliographic metadata for a single Zotero article after user confirmation. Pass the proposed changes either in metadata, fields, changes, updates, patch, suggestedPatch, or as top-level metadata fields. Supports common fields such as title, abstractNote, publicationTitle, date, DOI, url, pages, volume, issue, extra, and creators.",
       inputSchema: {
         type: "object",
         additionalProperties: false,
@@ -182,6 +223,10 @@ export function createEditArticleMetadataTool(
             type: "object",
             additionalProperties: true,
           },
+          suggestedPatch: {
+            type: "object",
+            additionalProperties: true,
+          },
           creators: {
             type: "array",
             items: {
@@ -202,7 +247,7 @@ export function createEditArticleMetadataTool(
       const metadata = extractMetadataPatchFromArgs(args);
       if (!metadata) {
         return fail(
-          "metadata must include at least one supported field in metadata, fields, changes, updates, patch, or top-level field form",
+          "metadata must include at least one supported field in metadata, fields, changes, updates, patch, suggestedPatch, or top-level field form",
         );
       }
       let paperContext: PaperContextRef | undefined;
@@ -223,12 +268,41 @@ export function createEditArticleMetadataTool(
         itemId: input.itemId,
         paperContext: input.paperContext,
       });
+      const currentMetadata = zoteroGateway.getEditableArticleMetadata(targetItem);
       const targetLabel =
         truncateTitle(
           input.paperContext?.title ||
-            zoteroGateway.getEditableArticleMetadata(targetItem)?.title ||
+            currentMetadata?.title ||
             "",
         ) || "the selected article";
+      const reviewItems = [
+        ...Object.entries(input.metadata)
+          .filter(([fieldName]) => fieldName !== "creators")
+          .map(([fieldName, value]) => ({
+            key: fieldName,
+            label: formatFieldLabel(fieldName),
+            before:
+              currentMetadata?.fields[
+                fieldName as EditableArticleMetadataField
+              ] || "",
+            after: `${value ?? ""}`.trim(),
+            multiline:
+              fieldName === "abstractNote" ||
+              fieldName === "extra" ||
+              `${value ?? ""}`.includes("\n"),
+          })),
+        ...(Array.isArray(input.metadata.creators)
+          ? [
+              {
+                key: "creators",
+                label: "Creators",
+                before: formatCreatorList(currentMetadata?.creators),
+                after: formatCreatorList(input.metadata.creators),
+                multiline: true,
+              },
+            ]
+          : []),
+      ];
       return {
         toolName: "edit_article_metadata",
         args: input,
@@ -236,8 +310,9 @@ export function createEditArticleMetadataTool(
         confirmLabel: "Apply",
         cancelLabel: "Cancel",
         editableContent: formatMetadataPatch(input.metadata),
-        contentLabel: "Metadata updates (JSON)",
+        contentLabel: "Metadata updates",
         editorMode: "json",
+        reviewItems,
       };
     },
     applyConfirmation: (input, resolutionData) => {

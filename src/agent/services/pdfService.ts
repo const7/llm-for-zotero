@@ -81,9 +81,38 @@ export class PdfService {
     };
   }
 
+  async getFrontMatterExcerpt(params: {
+    paperContext: PaperContextRef;
+    maxChunks?: number;
+    maxChars?: number;
+  }): Promise<{
+    text: string;
+    chunkIndexes: number[];
+    totalChunks: number;
+    paperContext: PaperContextRef;
+  }> {
+    const pdfContext = await this.ensurePaperContext(params.paperContext);
+    if (!pdfContext || !pdfContext.chunks.length) {
+      throw new Error("No extractable PDF text available for this paper");
+    }
+    const maxChunks = Number.isFinite(params.maxChunks)
+      ? Math.max(1, Math.min(4, Math.floor(params.maxChunks as number)))
+      : 2;
+    const maxChars = Number.isFinite(params.maxChars)
+      ? Math.max(200, Math.min(4000, Math.floor(params.maxChars as number)))
+      : 2000;
+    const selectedChunks = pdfContext.chunks.slice(0, maxChunks);
+    const text = selectedChunks.join("\n\n").slice(0, maxChars).trim();
+    return {
+      text,
+      chunkIndexes: selectedChunks.map((_, index) => index),
+      totalChunks: pdfContext.chunks.length,
+      paperContext: params.paperContext,
+    };
+  }
+
   getPaperContextForItem(item: Zotero.Item | null | undefined): PaperContextRef | null {
     const attachment = getFirstPdfChildAttachment(item);
     return resolvePaperContextRefFromAttachment(attachment);
   }
 }
-

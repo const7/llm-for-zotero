@@ -2089,6 +2089,65 @@
   white-space: pre;
 }
 
+.llm-agent-hitl-review-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.llm-agent-hitl-review-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.llm-agent-hitl-review-label {
+  font-size: var(--llm-fs-10);
+  font-weight: 700;
+  color: var(--fill-primary);
+}
+
+.llm-agent-hitl-review-values {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.llm-agent-hitl-review-column {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.llm-agent-hitl-review-column-label {
+  font-size: var(--llm-fs-10);
+  color: var(--fill-tertiary);
+}
+
+.llm-agent-hitl-review-value {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--fill-quaternary);
+  color: var(--fill-secondary);
+  font-size: var(--llm-fs-10);
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.llm-agent-hitl-review-value-multiline {
+  white-space: pre-wrap;
+  overflow: auto;
+  text-overflow: initial;
+  max-height: 144px;
+}
+
+.llm-agent-hitl-review-value-after {
+  color: var(--fill-primary);
+}
+
 .llm-agent-hitl-actions {
   display: flex;
   flex-wrap: wrap;

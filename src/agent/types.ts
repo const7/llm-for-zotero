@@ -33,6 +33,13 @@ export type PendingWriteAction = {
   editableContent?: string;
   contentLabel?: string;
   editorMode?: "plain" | "json";
+  reviewItems?: Array<{
+    key: string;
+    label: string;
+    before?: string;
+    after: string;
+    multiline?: boolean;
+  }>;
   saveTargets?: Array<{
     id: string;
     label: string;

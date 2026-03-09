@@ -74,6 +74,18 @@ describe("editArticleMetadata tool", function () {
     assert.equal(pending?.cancelLabel, "Cancel");
     assert.equal(pending?.editorMode, "json");
     assert.include(pending?.editableContent || "", "\"DOI\": \"10.1000/original\"");
+    assert.deepInclude(pending?.reviewItems?.[0] || {}, {
+      key: "title",
+      label: "Title",
+      before: "Original Paper",
+      after: "Original Paper",
+    });
+    assert.deepInclude(pending?.reviewItems?.[1] || {}, {
+      key: "DOI",
+      label: "DOI",
+      before: "",
+      after: "10.1000/original",
+    });
 
     const confirmed = tool.applyConfirmation?.(validated.value, {
       content: JSON.stringify(
@@ -168,6 +180,41 @@ describe("editArticleMetadata tool", function () {
     assert.deepEqual(validated.value.metadata, {
       publicationTitle: "Neuron",
       date: "2020",
+    });
+  });
+
+  it("accepts metadata from suggestedPatch", function () {
+    const fakeGateway = {
+      resolveMetadataItem: () => ({ id: 42 }),
+      getEditableArticleMetadata: () => null,
+      updateArticleMetadata: async () => ({ status: "updated" }),
+    };
+    const tool = createEditArticleMetadataTool(fakeGateway as never);
+    const validated = tool.validate({
+      suggestedPatch: {
+        DOI: "10.1000/suggested",
+        creators: [
+          {
+            firstName: "Timothy",
+            lastName: "Muller",
+          },
+        ],
+      },
+    });
+
+    assert.isTrue(validated.ok);
+    if (!validated.ok) return;
+    assert.deepEqual(validated.value.metadata, {
+      DOI: "10.1000/suggested",
+      creators: [
+        {
+          creatorType: "author",
+          firstName: "Timothy",
+          lastName: "Muller",
+          fieldMode: 0,
+          name: undefined,
+        },
+      ],
     });
   });
 });

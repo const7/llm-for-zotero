@@ -8,6 +8,8 @@ import { createRetrievePaperEvidenceTool } from "./read/retrievePaperEvidence";
 import { createReadPaperExcerptTool } from "./read/readPaperExcerpt";
 import { createSearchLibraryItemsTool } from "./read/searchLibraryItems";
 import { createReadAttachmentTextTool } from "./read/readAttachmentText";
+import { createReadPaperFrontMatterTool } from "./read/readPaperFrontMatter";
+import { createAuditArticleMetadataTool } from "./read/auditArticleMetadata";
 import { createSaveAnswerToNoteTool } from "./write/saveAnswerToNote";
 import { createEditArticleMetadataTool } from "./write/editArticleMetadata";
 
@@ -30,7 +32,13 @@ export function createBuiltInToolRegistry(
     ),
   );
   registry.register(createReadPaperExcerptTool(deps.pdfService));
+  registry.register(
+    createReadPaperFrontMatterTool(deps.pdfService, deps.zoteroGateway),
+  );
   registry.register(createSearchLibraryItemsTool(deps.zoteroGateway));
+  registry.register(
+    createAuditArticleMetadataTool(deps.zoteroGateway, deps.pdfService),
+  );
   registry.register(createReadAttachmentTextTool());
   registry.register(createSaveAnswerToNoteTool(deps.zoteroGateway));
   registry.register(createEditArticleMetadataTool(deps.zoteroGateway));
