@@ -1,5 +1,10 @@
 import { assert } from "chai";
-import { callEmbeddings, callLLM, prepareChatRequest } from "../src/utils/llmClient";
+import {
+  callEmbeddings,
+  callLLM,
+  callLLMStream,
+  prepareChatRequest,
+} from "../src/utils/llmClient";
 
 describe("llmClient prepareChatRequest", function () {
   const originalZotero = globalThis.Zotero;
@@ -102,6 +107,91 @@ describe("llmClient prepareChatRequest", function () {
       "You are an intelligent research assistant",
     );
     assert.equal(input[input.length - 1]?.role, "user");
+  });
+
+  it("merges non-agent chat system messages into a single leading system entry", async function () {
+    let capturedBody: Record<string, unknown> | null = null;
+    (
+      globalThis.Zotero.Prefs as { set: (key: string, value: unknown) => void }
+    ).set(
+      "extensions.zotero.llmforzotero.systemPrompt",
+      "You are a custom paper analyst.",
+    );
+    (
+      globalThis as typeof globalThis & {
+        ztoolkit: { getGlobal: (name: string) => unknown; log: () => void };
+      }
+    ).ztoolkit = {
+      getGlobal: (name: string) => {
+        if (name === "fetch") {
+          return async (_url: string, init?: RequestInit) => {
+            capturedBody = JSON.parse(String(init?.body || "{}")) as Record<
+              string,
+              unknown
+            >;
+            const encoder = new TextEncoder();
+            return {
+              ok: true,
+              status: 200,
+              statusText: "OK",
+              body: new ReadableStream<Uint8Array>({
+                start(controller) {
+                  controller.enqueue(
+                    encoder.encode(
+                      'data: {"choices":[{"delta":{"content":"OK"}}]}\n\n',
+                    ),
+                  );
+                  controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+                  controller.close();
+                },
+              }),
+              json: async () => ({}),
+              text: async () => "",
+            };
+          };
+        }
+        return undefined;
+      },
+      log: () => undefined,
+    };
+
+    const output = await callLLMStream(
+      {
+        prompt: "Summarize the attached paper.",
+        context: "Paper context body.",
+        history: [
+          { role: "user", content: "Earlier question." },
+          { role: "assistant", content: "Earlier answer." },
+        ],
+        model: "Qwen/Qwen3.5-27B",
+        apiBase: "https://api.siliconflow.cn/v1",
+        apiKey: "sf-test",
+        systemMessages: ["Mention if the document context was trimmed."],
+      },
+      () => undefined,
+    );
+
+    assert.equal(output, "OK");
+    assert.isNotNull(capturedBody);
+    assert.isArray(capturedBody?.messages);
+    const messages = capturedBody?.messages as Array<Record<string, unknown>>;
+    assert.deepEqual(
+      messages.map((message) => message.role),
+      ["system", "user", "assistant", "user"],
+    );
+    assert.equal(
+      messages.filter((message) => message.role === "system").length,
+      1,
+    );
+    assert.include(
+      String(messages[0]?.content || ""),
+      "You are a custom paper analyst.",
+    );
+    assert.include(String(messages[0]?.content || ""), "Document Context:");
+    assert.include(
+      String(messages[0]?.content || ""),
+      "Mention if the document context was trimmed.",
+    );
   });
 
   it("keeps explicit codex auth mode in prepared request", function () {

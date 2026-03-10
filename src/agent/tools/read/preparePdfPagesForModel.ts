@@ -1,4 +1,5 @@
 import type { AgentModelContentPart, AgentToolDefinition } from "../../types";
+import { classifyRequest } from "../../model/requestClassifier";
 import {
   formatPageSelectionValue,
   type PdfPageService,
@@ -82,6 +83,15 @@ export function createPreparePdfPagesForModelTool(
       mutability: "read",
       requiresConfirmation: true,
     },
+    guidance: {
+      matches: (request) => classifyRequest(request).isPdfVisualQuery,
+      instruction: [
+        "Use prepare_pdf_pages_for_model whenever the user wants you to visually inspect one or more PDF pages (figures, equations, tables, page layout, etc.).",
+        "If the user names specific pages or a range (e.g. 'page 3', 'pages 2–4', 'pages 2, 4, 7'), call this tool with the corresponding pages array.",
+        "If the user asks to send or inspect the entire PDF/document/paper (e.g. 'send the whole PDF and summarise it'), treat that as a whole-document visual request and call this tool with scope:\"whole_document\" so all pages are sent as images.",
+        "Prefer this tool over prepare_pdf_file_for_model for whole-document inspection so behaviour is consistent across providers — the model can read text, figures, tables, and equations from the rendered page images.",
+      ].join("\n"),
+    },
     presentation: {
       label: "Prepare PDF Pages",
       summaries: {
@@ -108,18 +118,43 @@ export function createPreparePdfPagesForModelTool(
     validate: (args) => {
       const parsed = parsePdfTargetArgs(args);
       if (!parsed.ok) return parsed;
-      if (!parsed.value.pages?.length) {
-        return fail("pages is required");
+      const value = parsed.value;
+      if (!value.pages?.length && value.scope !== "whole_document") {
+        return fail("pages or scope:\"whole_document\" is required");
       }
-      return ok(parsed.value);
+      return ok(value);
     },
     shouldRequireConfirmation: async (input, context) => {
-      // Same page set already confirmed earlier in this conversation — skip
+      // Same page set already confirmed earlier in this conversation — skip.
       const cached = getCachedPages(context.request.conversationKey);
       if (cached && samePageSet(input.pages, cached.pageIndexes)) return false;
       return true;
     },
     createPendingAction: async (input, context) => {
+      let pages = input.pages || [];
+      let description =
+        "Review the pages below, then click \"Send to model\" to send them for visual inspection.";
+      // Whole-document mode: expand to all pages up front so the user can review.
+      if (input.scope === "whole_document" && !pages.length) {
+        const pageCount = await pdfPageService.getPageCountForTarget({
+          request: context.request,
+          paperContext: input.paperContext,
+          itemId: input.itemId,
+          contextItemId: input.contextItemId,
+          attachmentId: input.attachmentId,
+          name: input.name,
+        });
+        pages = Array.from({ length: pageCount }, (_v, index) => index);
+        if (pageCount > 50) {
+          description =
+            `This will send all ${pageCount} pages of the PDF as images. ` +
+            "Consider narrowing to a smaller range if you only need specific sections.";
+        } else {
+          description =
+            `This will send all ${pageCount} pages of the PDF as images for visual inspection.`;
+        }
+      }
+
       const preview = await pdfPageService.preparePagesForModel({
         request: context.request,
         paperContext: input.paperContext,
@@ -127,14 +162,16 @@ export function createPreparePdfPagesForModelTool(
         contextItemId: input.contextItemId,
         attachmentId: input.attachmentId,
         name: input.name,
-        pages: input.pages || [],
+        pages,
         neighborPages: 0,
       });
       return {
         toolName: "prepare_pdf_pages_for_model",
-        title: `${preview.target.title} — ${formatPageSelectionValue(input.pages || [])}`,
-        description:
-          "Review the pages below, then click \"Send to model\" to send them for visual inspection.",
+        title:
+          pages.length === 1
+            ? `${preview.target.title} — p${pages[0] + 1}`
+            : `${preview.target.title} — ${formatPageSelectionValue(pages)}`,
+        description,
         confirmLabel: "Send to model",
         cancelLabel: "Cancel",
         fields: [
@@ -142,7 +179,9 @@ export function createPreparePdfPagesForModelTool(
             type: "text",
             id: "pageSelection",
             label: "Pages to send",
-            value: getUserEditablePageSelection(input.pages),
+            // Default to the actual pages that will be sent so the user can
+            // see and edit the full selection (including whole-document mode).
+            value: getUserEditablePageSelection(pages),
             placeholder: "e.g. p3 or p3-5",
           },
           {
@@ -172,6 +211,19 @@ export function createPreparePdfPagesForModelTool(
       });
     },
     execute: async (input, context) => {
+      let pages = input.pages || [];
+      if (input.scope === "whole_document" && !pages.length) {
+        const pageCount = await pdfPageService.getPageCountForTarget({
+          request: context.request,
+          paperContext: input.paperContext,
+          itemId: input.itemId,
+          contextItemId: input.contextItemId,
+          attachmentId: input.attachmentId,
+          name: input.name,
+        });
+        pages = Array.from({ length: pageCount }, (_v, index) => index);
+      }
+
       const prepared = await pdfPageService.preparePagesForModel({
         request: context.request,
         paperContext: input.paperContext,
@@ -179,7 +231,7 @@ export function createPreparePdfPagesForModelTool(
         contextItemId: input.contextItemId,
         attachmentId: input.attachmentId,
         name: input.name,
-        pages: input.pages || [],
+        pages,
         neighborPages: input.neighborPages,
       });
       setCachedPages(
@@ -214,6 +266,7 @@ export function createPreparePdfPagesForModelTool(
       const content = result.content as {
         pages?: Array<{ pageIndex: number; pageLabel: string }>;
         pageTexts?: Record<number, string>;
+        scope?: "whole_document";
       } | null;
       const pages = Array.isArray(content?.pages) ? content.pages : [];
       const pageTexts: Record<number, string> = content?.pageTexts ?? {};
@@ -223,7 +276,15 @@ export function createPreparePdfPagesForModelTool(
         ? `[PDF ${pageLabels} — extracted text and image${pages.length !== 1 ? "s" : ""} below]`
         : "[PDF pages — extracted text and images below]";
 
-      const combinedText = pages
+      const MAX_PAGES_WITH_FULL_TEXT = 20;
+      const includeAllText =
+        pages.length <= MAX_PAGES_WITH_FULL_TEXT || content?.scope !== "whole_document";
+
+      const limitedPages = includeAllText
+        ? pages
+        : pages.slice(0, MAX_PAGES_WITH_FULL_TEXT);
+
+      const combinedText = limitedPages
         .map((p) => {
           const text = pageTexts[p.pageIndex]?.trim();
           return text
@@ -235,9 +296,18 @@ export function createPreparePdfPagesForModelTool(
         .filter((entry): entry is string => entry !== null)
         .join("\n\n");
 
-      const textSection = combinedText
-        ? `\n\nExtracted page text:\n"""\n${combinedText}\n"""`
-        : "";
+      let textSection = "";
+      if (combinedText) {
+        textSection = `\n\nExtracted page text:\n"""\n${combinedText}\n"""`;
+        if (!includeAllText) {
+          const remaining = pages.length - limitedPages.length;
+          if (remaining > 0) {
+            textSection += `\n\n[Truncated: ${remaining} additional page${
+              remaining === 1 ? "" : "s"
+            } not shown in text. Use the attached images if you need those pages.]`;
+          }
+        }
+      }
 
       const parts: AgentModelContentPart[] = [
         {

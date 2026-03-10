@@ -171,18 +171,58 @@ async function pathExists(path: string): Promise<boolean> {
   return false;
 }
 
+/**
+ * Convert whatever a file-read API returns to a Uint8Array.
+ *
+ * Firefox extensions run in a separate JavaScript realm from the privileged
+ * system APIs (IOUtils, OS.File).  Objects returned by those APIs are created
+ * in the system realm, so `instanceof Uint8Array` / `instanceof ArrayBuffer`
+ * comparisons against the extension realm's constructors silently return false
+ * even for valid typed arrays.  We use realm-agnostic checks instead:
+ *  - ArrayBuffer.isView()  → works cross-realm for any TypedArray / DataView
+ *  - typeof .byteLength    → distinguishes a plain ArrayBuffer from everything else
+ */
+function coerceToUint8Array(data: Uint8Array | ArrayBuffer): Uint8Array | null {
+  if (data == null) return null;
+  // Fast path – same realm (unit tests, Node, some Zotero versions).
+  if (data instanceof Uint8Array) return data;
+  if (data instanceof ArrayBuffer) return new Uint8Array(data);
+  // Cross-realm TypedArray / DataView (ArrayBuffer.isView is spec-required to
+  // work across realms because it checks internal slots, not the prototype).
+  if (ArrayBuffer.isView(data)) {
+    const view = data as ArrayBufferView;
+    return new Uint8Array(view.buffer, view.byteOffset, view.byteLength);
+  }
+  // Cross-realm ArrayBuffer: it has a numeric byteLength but no "buffer" slot.
+  const buf = data as unknown as { byteLength?: unknown };
+  if (typeof buf.byteLength === "number" && !ArrayBuffer.isView(data)) {
+    try {
+      return new Uint8Array(data as unknown as ArrayBuffer);
+    } catch {
+      // Not actually an ArrayBuffer — fall through.
+    }
+  }
+  return null;
+}
+
 async function readBytes(path: string): Promise<Uint8Array> {
   const io = getIOUtils();
   if (io?.read) {
-    const data = await io.read(path);
-    if (data instanceof Uint8Array) return data;
-    if (data instanceof ArrayBuffer) return new Uint8Array(data);
+    try {
+      const data = await io.read(path);
+      const bytes = coerceToUint8Array(data);
+      if (bytes) return bytes;
+    } catch (err) {
+      // IOUtils threw (e.g. file not found) – fall through to OS.File.
+      const osFile2 = getOSFile();
+      if (!osFile2?.read) throw err;
+    }
   }
   const osFile = getOSFile();
   if (osFile?.read) {
     const data = await osFile.read(path);
-    if (data instanceof Uint8Array) return data;
-    if (data instanceof ArrayBuffer) return new Uint8Array(data);
+    const bytes = coerceToUint8Array(data);
+    if (bytes) return bytes;
   }
   throw new Error("No binary read API available");
 }

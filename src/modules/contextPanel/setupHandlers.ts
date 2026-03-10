@@ -328,6 +328,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     slashMenu,
     slashUploadOption,
     slashReferenceOption,
+    slashSendPdfVisualOption,
     imagePreview,
     selectedContextList,
     previewStrip,
@@ -7483,6 +7484,21 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       e.stopPropagation();
       closeSlashMenu();
       openReferenceSlashFromMenu();
+    });
+  }
+
+  if (slashSendPdfVisualOption) {
+    slashSendPdfVisualOption.addEventListener("click", (e: Event) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!item || !inputBox) return;
+      closeSlashMenu();
+      // Insert a natural-language command that the agent understands as
+      // a whole-document visual request, preserving any existing text prefix.
+      const prefix = inputBox.value.trim();
+      const command = "Send the whole PDF visually and summarise it.";
+      inputBox.value = prefix ? `${prefix}\n${command}` : command;
+      inputBox.focus();
     });
   }
 

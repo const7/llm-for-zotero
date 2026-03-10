@@ -62,7 +62,7 @@ export function createPreparePdfFileForModelTool(
     spec: {
       name: "prepare_pdf_file_for_model",
       description:
-        "Prepare a whole PDF file for direct model input. Use this only when the user explicitly asks to inspect the entire PDF/document, and only on file-input capable models.",
+        "Prepare a whole PDF file for direct model input. This is an advanced path for file-input capable models only. For most \"whole PDF\" requests you should instead use prepare_pdf_pages_for_model with scope:\"whole_document\" so the model receives page images.",
       inputSchema: {
         type: "object",
         additionalProperties: false,
@@ -90,6 +90,20 @@ export function createPreparePdfFileForModelTool(
       });
     },
     shouldRequireConfirmation: async (_input, context) => {
+      // Reject immediately if the model/auth does not support native file input
+      // so the agent gets a useful error before we do any file I/O.
+      if (
+        !supportsNativePdfInput({
+          providerProtocol: context.request.providerProtocol,
+          apiBase: context.request.apiBase,
+          authMode: context.request.authMode,
+        })
+      ) {
+        throw new Error(
+          "Whole-document PDF input is not supported by this model/provider. " +
+            "Use prepare_pdf_pages_for_model to send specific pages as images instead.",
+        );
+      }
       return getCachedFile(context.request.conversationKey) === null;
     },
     createPendingAction: async (input, context) => {

@@ -1444,6 +1444,24 @@ function stringifyContent(content: MessageContent): string {
     .join("\n");
 }
 
+function mergeSystemMessagesForChatPayload(
+  messages: ChatMessage[],
+): ChatMessage[] {
+  if (!Array.isArray(messages) || !messages.length) return [];
+  const systemParts = messages
+    .filter((message) => message.role === "system")
+    .map((message) => stringifyContent(message.content).trim())
+    .filter(Boolean);
+  if (!systemParts.length) return messages;
+  return [
+    {
+      role: "system",
+      content: systemParts.join("\n\n"),
+    },
+    ...messages.filter((message) => message.role !== "system"),
+  ];
+}
+
 function buildResponsesInput(
   messages: ChatMessage[],
   responseFileIds?: string[],
@@ -1720,6 +1738,9 @@ function createChatPayloadBuilder(params: {
           preserveSystemMessages: isGrokApiBase(apiBase),
         })
       : null;
+    const chatMessages = useResponses
+      ? messages
+      : mergeSystemMessagesForChatPayload(messages);
     if (useResponses && isCodexAuth && responsesInput) {
       const codexReasoningEffort =
         reasoningOverride &&
@@ -1773,7 +1794,7 @@ function createChatPayloadBuilder(params: {
         }
       : {
           model,
-          messages,
+          messages: chatMessages,
           ...reasoningPayload.extra,
           ...temperatureParam,
           ...buildTokenParam(model, effectiveMaxTokens),

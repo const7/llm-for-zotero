@@ -30,8 +30,9 @@ export function createSearchPdfPagesTool(
         "When the user asks about a figure, equation, table, page layout, or any PDF-specific visual detail, use the PDF tools instead of guessing from text alone.",
         "If the user names a specific numbered equation, figure, or table (e.g. 'explain equation 3', 'what is Figure 2', 'eq. 4') OR refers to something visible in the reader ('this equation', 'explain this', 'what I see'), call capture_reader_view — it captures exactly the page open in the reader, so it cannot pick the wrong page the way keyword search can. It handles its own confirmation; after the result returns, the page text and image are in the follow-up message — read them and answer directly.",
         "Only use search_pdf_pages when the user does NOT have a PDF open in the reader and is asking a general question that requires locating a page (e.g. 'find the section about plasticity').",
-        "If the user explicitly names page numbers, call prepare_pdf_pages_for_model directly without search.",
-        "Only use prepare_pdf_file_for_model when the user explicitly asks to inspect the entire PDF or whole document.",
+        "If the user explicitly names page numbers (a single page or a range like 'pages 3–5'), call prepare_pdf_pages_for_model directly without search, passing those pages.",
+        "If the user asks to send or inspect the entire PDF/document/paper (e.g. 'send the whole PDF and summarise it'), treat this as a whole-document *visual* request and call prepare_pdf_pages_for_model with scope:\"whole_document\" so all pages are sent as images.",
+        "Avoid using prepare_pdf_file_for_model for normal requests — whole-document inspection should go through prepare_pdf_pages_for_model so it works consistently across providers.",
       ].join("\n"),
     },
     presentation: {
