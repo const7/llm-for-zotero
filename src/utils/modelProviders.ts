@@ -8,6 +8,10 @@ import {
   normalizeOptionalInputTokenCap,
   normalizeTemperature,
 } from "./normalization";
+import {
+  normalizeProviderProtocolForAuthMode,
+  type ProviderProtocol,
+} from "./providerProtocol";
 import { detectProviderPreset, getProviderPreset } from "./providerPresets";
 import type { ProviderPresetId } from "./providerPresets";
 
@@ -35,6 +39,7 @@ export type ModelProviderGroup = {
   apiBase: string;
   apiKey: string;
   authMode: ModelProviderAuthMode;
+  providerProtocol: ProviderProtocol;
   models: ModelProviderModel[];
   /** When "customized", UI shows Customized and allows editing URL; when undefined, preset is derived from apiBase. */
   presetIdOverride?: ProviderPresetId;
@@ -47,6 +52,7 @@ export type RuntimeModelEntry = {
   apiBase: string;
   apiKey: string;
   authMode: ModelProviderAuthMode;
+  providerProtocol: ProviderProtocol;
   providerLabel: string;
   providerOrder: number;
   displayModelLabel: string;
@@ -81,7 +87,7 @@ const MODEL_PROVIDER_GROUPS_MIGRATION_VERSION_PREF_KEY =
   "modelProviderGroupsMigrationVersion";
 const LAST_USED_MODEL_ENTRY_ID_PREF_KEY = "lastUsedModelEntryId";
 const LEGACY_LAST_MODEL_PROFILE_PREF_KEY = "lastUsedModelProfile";
-const MODEL_PROVIDER_GROUPS_MIGRATION_VERSION = 2;
+const MODEL_PROVIDER_GROUPS_MIGRATION_VERSION = 3;
 
 function getZoteroPrefs(): ZoteroPrefsAPI | null {
   return (
@@ -212,6 +218,7 @@ function normalizeGroup(
     apiBase?: unknown;
     apiKey?: unknown;
     authMode?: unknown;
+    providerProtocol?: unknown;
     models?: unknown;
     presetIdOverride?: unknown;
   };
@@ -222,14 +229,21 @@ function normalizeGroup(
         .filter((entry): entry is ModelProviderModel => Boolean(entry))
     : [];
 
+  const authMode = normalizeProviderAuthMode(rawGroup.authMode);
+  const apiBase = normalizeApiBase(normalizeString(rawGroup.apiBase));
   return {
     id:
       typeof rawGroup.id === "string" && rawGroup.id.trim()
         ? rawGroup.id.trim()
         : createId("provider"),
-    apiBase: normalizeApiBase(normalizeString(rawGroup.apiBase)),
+    apiBase,
     apiKey: normalizeString(rawGroup.apiKey),
-    authMode: normalizeProviderAuthMode(rawGroup.authMode),
+    authMode,
+    providerProtocol: normalizeProviderProtocolForAuthMode({
+      protocol: rawGroup.providerProtocol,
+      authMode,
+      apiBase,
+    }),
     models,
     presetIdOverride: normalizePresetIdOverride(rawGroup.presetIdOverride),
   };
@@ -367,6 +381,10 @@ export function buildModelProviderGroupsFromLegacySlots(
         apiBase: normalizedBase,
         apiKey: normalizedKey,
         authMode: "api_key",
+        providerProtocol: normalizeProviderProtocolForAuthMode({
+          authMode: "api_key",
+          apiBase: normalizedBase,
+        }),
         models: [],
       };
       groups.push(group);
@@ -443,6 +461,7 @@ export function createEmptyProviderGroup(): ModelProviderGroup {
     apiBase: "",
     apiKey: "",
     authMode: "api_key",
+    providerProtocol: "openai_chat_compat",
     models: [],
   };
 }
@@ -485,6 +504,11 @@ export function getRuntimeModelEntries(): RuntimeModelEntry[] {
         apiBase: normalizeApiBase(group.apiBase),
         apiKey: group.apiKey.trim(),
         authMode,
+        providerProtocol: normalizeProviderProtocolForAuthMode({
+          protocol: group.providerProtocol,
+          authMode,
+          apiBase: group.apiBase,
+        }),
         providerLabel,
         providerOrder: groupIndex,
         displayModelLabel:

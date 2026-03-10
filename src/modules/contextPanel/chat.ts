@@ -21,6 +21,7 @@ import {
   UsageStats,
 } from "../../utils/llmClient";
 import { estimateConversationTokens } from "../../utils/modelInputCap";
+import type { ProviderProtocol } from "../../utils/providerProtocol";
 import {
   PERSISTED_HISTORY_LIMIT,
   AUTO_SCROLL_BOTTOM_THRESHOLD,
@@ -1033,6 +1034,7 @@ type EffectiveRequestConfig = {
   apiBase: string;
   apiKey: string;
   authMode: "api_key" | "codex_auth";
+  providerProtocol?: ProviderProtocol;
   modelEntryId?: string;
   modelProviderLabel?: string;
   reasoning: LLMReasoningConfig | undefined;
@@ -1045,6 +1047,7 @@ function resolveEffectiveRequestConfig(params: {
   apiBase?: string;
   apiKey?: string;
   authMode?: "api_key" | "codex_auth";
+  providerProtocol?: ProviderProtocol;
   modelEntryId?: string;
   modelProviderLabel?: string;
   reasoning?: LLMReasoningConfig;
@@ -1084,6 +1087,10 @@ function resolveEffectiveRequestConfig(params: {
     apiBase,
     apiKey,
     authMode,
+    providerProtocol:
+      params.providerProtocol ||
+      explicitEntry?.providerProtocol ||
+      fallbackEntry?.providerProtocol,
     modelEntryId:
       params.modelEntryId || explicitEntry?.entryId || fallbackEntry?.entryId,
     modelProviderLabel:
@@ -2231,6 +2238,7 @@ async function sendAgentQuestion(
     apiBase: effectiveRequestConfig.apiBase,
     apiKey: effectiveRequestConfig.apiKey,
     authMode: effectiveRequestConfig.authMode,
+    providerProtocol: effectiveRequestConfig.providerProtocol,
     reasoning: effectiveRequestConfig.reasoning,
     advanced: effectiveRequestConfig.advanced,
     history: llmHistory,

@@ -1,56 +1,35 @@
-import { RESPONSES_ENDPOINT, resolveEndpoint } from "../../utils/apiHelpers";
 import {
+  buildReasoningPayload,
   postWithReasoningFallback,
   resolveRequestAuthState,
   uploadFilesForResponses,
   type ChatFileAttachment,
 } from "../../utils/llmClient";
+import { normalizeMaxTokens, normalizeTemperature } from "../../utils/normalization";
+import { resolveProviderTransportEndpoint } from "../../utils/providerTransport";
 import type {
   AgentModelCapabilities,
   AgentModelContentPart,
-  AgentModelMessage,
   AgentModelStep,
   AgentRuntimeRequest,
-  AgentToolCall,
-  ToolSpec,
 } from "../types";
 import type { AgentModelAdapter, AgentStepParams } from "./adapter";
-import { normalizeStepFromPayload } from "./codexResponses";
 import {
-  isMultimodalRequestSupported,
-  stringifyMessageContent,
-} from "./messageBuilder";
-
-type ResponsesInputItem =
-  | {
-      type: "message";
-      role: "system" | "user" | "assistant";
-      content:
-        | string
-        | Array<
-            | { type: "input_text"; text: string }
-            | { type: "input_image"; image_url: string; detail?: "low" | "high" | "auto" }
-            | { type: "input_file"; file_id: string }
-          >;
-    }
-  | {
-      type: "function_call_output";
-      call_id: string;
-      output: string;
-    };
-
-type ResponsesPayload = {
-  id?: unknown;
-  output_text?: unknown;
-  output?: unknown;
-};
+  buildResponsesContinuationInput,
+  buildResponsesInitialInput,
+  limitNormalizedResponsesStep,
+  type ResponsesPayload,
+  normalizeResponsesStepFromPayload,
+  parseResponsesStepStream,
+} from "./responsesShared";
+import { buildResponsesFunctionTools, getToolContinuationMessages } from "./shared";
 
 async function uploadFilePart(
   part: Extract<AgentModelContentPart, { type: "file_ref" }>,
   request: AgentRuntimeRequest,
   signal?: AbortSignal,
-): Promise<string[]> {
-  return uploadFilesForResponses({
+) {
+  const fileIds = await uploadFilesForResponses({
     apiBase: request.apiBase || "",
     apiKey: request.apiKey || "",
     attachments: [
@@ -63,94 +42,9 @@ async function uploadFilePart(
     ],
     signal,
   });
-}
-
-async function buildResponsesInput(
-  messages: AgentModelMessage[],
-  request: AgentRuntimeRequest,
-  signal?: AbortSignal,
-): Promise<{ instructions?: string; input: ResponsesInputItem[] }> {
-  const instructionsParts: string[] = [];
-  const input: ResponsesInputItem[] = [];
-  for (const message of messages) {
-    if (message.role === "tool") continue;
-    if (message.role === "system") {
-      const text = stringifyMessageContent(message.content);
-      if (text) instructionsParts.push(text);
-      continue;
-    }
-    if (typeof message.content === "string") {
-      input.push({
-        type: "message",
-        role: message.role,
-        content: message.content,
-      });
-      continue;
-    }
-    const contentParts: Array<
-      | { type: "input_text"; text: string }
-      | { type: "input_image"; image_url: string; detail?: "low" | "high" | "auto" }
-      | { type: "input_file"; file_id: string }
-    > = [];
-    for (const part of message.content) {
-      if (part.type === "text") {
-        contentParts.push({ type: "input_text", text: part.text });
-        continue;
-      }
-      if (part.type === "image_url") {
-        contentParts.push({
-          type: "input_image",
-          image_url: part.image_url.url,
-          detail: part.image_url.detail,
-        });
-        continue;
-      }
-      const fileIds = await uploadFilePart(part, request, signal);
-      for (const fileId of fileIds) {
-        contentParts.push({
-          type: "input_file",
-          file_id: fileId,
-        });
-      }
-    }
-    input.push({
-      type: "message",
-      role: message.role,
-      content: contentParts,
-    });
-  }
-  return {
-    instructions: instructionsParts.length
-      ? instructionsParts.join("\n\n")
-      : undefined,
-    input,
-  };
-}
-
-function buildToolOutputInput(messages: AgentModelMessage[]): ResponsesInputItem[] {
-  const outputs: ResponsesInputItem[] = [];
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message.role !== "tool") {
-      if (outputs.length) break;
-      continue;
-    }
-    outputs.unshift({
-      type: "function_call_output",
-      call_id: message.tool_call_id,
-      output: message.content,
-    });
-  }
-  return outputs;
-}
-
-function buildResponsesTools(tools: ToolSpec[]) {
-  return tools.map((tool) => ({
-    type: "function" as const,
-    name: tool.name,
-    description: tool.description,
-    parameters: tool.inputSchema,
-    strict: false,
+  return fileIds.map((fileId) => ({
+    type: "input_file" as const,
+    file_id: fileId,
   }));
 }
 
@@ -159,9 +53,11 @@ export class OpenAIResponsesAgentAdapter implements AgentModelAdapter {
 
   getCapabilities(_request: AgentRuntimeRequest): AgentModelCapabilities {
     return {
-      streaming: false,
+      streaming: true,
       toolCalls: true,
       multimodal: true,
+      fileInputs: true,
+      reasoning: true,
     };
   }
 
@@ -176,40 +72,69 @@ export class OpenAIResponsesAgentAdapter implements AgentModelAdapter {
       apiKey: request.apiKey || "",
       signal: params.signal,
     });
-    const initialInput = await buildResponsesInput(
-      params.messages,
-      request,
-      params.signal,
-    );
+    const initialInput = await buildResponsesInitialInput(params.messages, {
+      resolveFilePart: async (part, signal) =>
+        uploadFilePart(part, request, signal),
+      signal: params.signal,
+    });
     const instructions =
       initialInput.instructions?.trim() ||
       "You are the agent runtime inside a Zotero plugin.";
     const followupInput = this.conversationItems
-      ? buildToolOutputInput(params.messages)
+      ? await buildResponsesContinuationInput(
+          getToolContinuationMessages(params.messages),
+          {
+            resolveFilePart: async (part, signal) =>
+              uploadFilePart(part, request, signal),
+            signal: params.signal,
+          },
+        )
       : [];
     const inputItems = this.conversationItems
       ? [...this.conversationItems, ...followupInput]
       : initialInput.input;
-    const payload = {
-      model: request.model,
-      instructions,
-      input: inputItems,
-      tools: buildResponsesTools(params.tools),
-      tool_choice: "auto",
-      store: false,
-      stream: false,
-    };
-    const url = resolveEndpoint(request.apiBase || "", RESPONSES_ENDPOINT);
+    const url = resolveProviderTransportEndpoint({
+      protocol: "responses_api",
+      apiBase: request.apiBase || "",
+    });
     const response = await postWithReasoningFallback({
       url,
       auth,
       modelName: request.model,
-      initialReasoning: undefined,
-      buildPayload: () => payload,
+      initialReasoning: request.reasoning,
+      buildPayload: (reasoningOverride) => {
+        const reasoningPayload = buildReasoningPayload(
+          reasoningOverride,
+          true,
+          request.model,
+          request.apiBase,
+        );
+        return {
+          model: request.model,
+          instructions,
+          input: inputItems,
+          include: ["reasoning.encrypted_content"],
+          tools: buildResponsesFunctionTools(params.tools),
+          tool_choice: "auto",
+          store: false,
+          stream: true,
+          max_output_tokens: normalizeMaxTokens(request.advanced?.maxTokens),
+          ...reasoningPayload.extra,
+          ...(reasoningPayload.omitTemperature
+            ? {}
+            : {
+                temperature: normalizeTemperature(request.advanced?.temperature),
+              }),
+        };
+      },
       signal: params.signal,
     });
-    const normalized = normalizeStepFromPayload(
-      (await response.json()) as ResponsesPayload,
+    const normalized = limitNormalizedResponsesStep(
+      response.body
+        ? await parseResponsesStepStream(response.body, params.onTextDelta)
+        : normalizeResponsesStepFromPayload(
+            (await response.json()) as ResponsesPayload,
+          ),
     );
     this.conversationItems = [...inputItems, ...normalized.outputItems];
     if (normalized.toolCalls.length) {

@@ -10,12 +10,6 @@ import {
   normalizeTemperature,
 } from "../utils/normalization";
 import {
-  buildHeaders,
-  isResponsesBase as checkIsResponsesBase,
-  resolveEndpoint,
-  usesMaxCompletionTokens,
-} from "../utils/apiHelpers";
-import {
   createEmptyProviderGroup,
   createProviderModelEntry,
   getModelProviderGroups,
@@ -30,6 +24,13 @@ import {
   getProviderPreset,
   type ProviderPresetId,
 } from "../utils/providerPresets";
+import {
+  PROVIDER_PROTOCOL_SPECS,
+  normalizeProviderProtocolForAuthMode,
+  getProviderProtocolSpec,
+  type ProviderProtocol,
+} from "../utils/providerProtocol";
+import { runProviderConnectionTest } from "../utils/providerConnectionTest";
 
 type PrefKey = "systemPrompt";
 
@@ -82,6 +83,41 @@ function getPresetSelectHelperText(presetId: ProviderPresetId): string {
     return CUSTOMIZED_API_HELPER_TEXT;
   }
   return `${getProviderPreset(presetId).helperText} Switch to Customized to edit the URL manually.`;
+}
+
+function getProtocolOptions(
+  authMode: ModelProviderAuthMode,
+  presetId: ProviderPresetId,
+): ProviderProtocol[] {
+  if (authMode === "codex_auth") return ["codex_responses"];
+  if (presetId !== "customized") {
+    return getProviderPreset(presetId).supportedProtocols.filter(
+      (protocol) => protocol !== "codex_responses",
+    );
+  }
+  return PROVIDER_PROTOCOL_SPECS.map((entry) => entry.id).filter(
+    (protocol) => protocol !== "codex_responses",
+  );
+}
+
+function resolveSelectedProtocol(
+  group: ModelProviderGroup,
+  presetId: ProviderPresetId,
+): ProviderProtocol {
+  const fallback =
+    group.authMode === "codex_auth"
+      ? "codex_responses"
+      : presetId === "customized"
+        ? "openai_chat_compat"
+        : getProviderPreset(presetId).defaultProtocol;
+  const allowed = getProtocolOptions(group.authMode, presetId);
+  const normalized = normalizeProviderProtocolForAuthMode({
+    protocol: group.providerProtocol,
+    authMode: group.authMode,
+    apiBase: group.apiBase,
+    fallback,
+  });
+  return allowed.includes(normalized) ? normalized : allowed[0];
 }
 
 // ── DOM helpers ────────────────────────────────────────────────────
@@ -445,11 +481,15 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
       authModeSelect.append(apiKeyOption, codexOption);
       authModeSelect.value = group.authMode;
       authModeSelect.addEventListener("change", () => {
-        group.authMode = normalizeAuthMode(authModeSelect.value);
-        if (
-          group.authMode === "codex_auth" &&
-          !group.apiBase.trim()
-        ) {
+        const nextAuthMode = normalizeAuthMode(authModeSelect.value);
+        group.authMode = nextAuthMode;
+        if (nextAuthMode === "codex_auth") {
+          group.providerProtocol = "codex_responses";
+        } else if (group.providerProtocol === "codex_responses") {
+          group.providerProtocol =
+            selectedPreset?.defaultProtocol || "openai_chat_compat";
+        }
+        if (nextAuthMode === "codex_auth" && !group.apiBase.trim()) {
           group.apiBase = DEFAULT_CODEX_API_BASE;
         }
         persistGroups(groups);
@@ -476,6 +516,7 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
           : getProviderPreset(selectedPresetId);
       const isCustomizedPreset =
         group.authMode !== "codex_auth" && selectedPresetId === "customized";
+      group.providerProtocol = resolveSelectedProtocol(group, selectedPresetId);
 
       // ── Provider preset ─────────────────────────────────────────
       const providerPresetWrap = el(
@@ -513,6 +554,7 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
           } else {
             group.presetIdOverride = undefined;
             group.apiBase = getProviderPreset(nextPresetId).defaultApiBase;
+            group.providerProtocol = getProviderPreset(nextPresetId).defaultProtocol;
           }
           persistGroups(groups);
           // Defer rerender so the browser can close the dropdown before we replace the DOM
@@ -522,6 +564,47 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
 
         providerPresetWrap.append(providerPresetLabel, providerPresetSelect);
       }
+
+      // ── Protocol ────────────────────────────────────────────────
+      const protocolWrap = el(
+        doc,
+        "div",
+        "display: flex; flex-direction: column;",
+      );
+      const protocolLabel = el(doc, "label", LABEL_STYLE, "Protocol");
+      const protocolSelect = el(doc, "select", INPUT_STYLE) as HTMLSelectElement;
+      protocolSelect.id = `${config.addonRef}-provider-protocol-${group.id}`;
+      protocolLabel.setAttribute("for", protocolSelect.id);
+      const protocolOptions = getProtocolOptions(group.authMode, selectedPresetId);
+      for (const protocol of protocolOptions) {
+        const option = el(doc, "option") as HTMLOptionElement;
+        option.value = protocol;
+        option.textContent = getProviderProtocolSpec(protocol).label;
+        protocolSelect.appendChild(option);
+      }
+      protocolSelect.value = group.providerProtocol;
+      protocolSelect.disabled = protocolOptions.length <= 1;
+      protocolSelect.addEventListener("change", () => {
+        group.providerProtocol = resolveSelectedProtocol(
+          {
+            ...group,
+            providerProtocol: protocolSelect.value as ProviderProtocol,
+          },
+          selectedPresetId,
+        );
+        persistGroups(groups);
+        setTimeout(() => rerender(), 0);
+      });
+      protocolWrap.append(
+        protocolLabel,
+        protocolSelect,
+        el(
+          doc,
+          "span",
+          HELPER_STYLE,
+          getProviderProtocolSpec(group.providerProtocol).helperText,
+        ),
+      );
 
       // ── API URL ──────────────────────────────────────────────────
       const apiUrlWrap = el(doc, "div", "display: flex; flex-direction: column;");
@@ -533,7 +616,7 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
       apiUrlInput.placeholder =
         group.authMode === "codex_auth"
           ? DEFAULT_CODEX_API_BASE
-          : selectedPreset?.defaultApiBase || "https://api.openai.com/v1/responses";
+          : selectedPreset?.defaultApiBase || "https://api.openai.com/v1";
       apiUrlInput.value = group.apiBase;
       apiUrlInput.readOnly = group.authMode !== "codex_auth" && !isCustomizedPreset;
       apiUrlInput.style.opacity = apiUrlInput.readOnly ? "0.85" : "1";
@@ -769,6 +852,7 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
             const modelName = (
               modelEntry.model || profile.defaultModel || "gpt-5.4"
             ).trim();
+            const providerProtocol = resolveSelectedProtocol(group, selectedPresetId);
 
             if (!apiBase) throw new Error("API URL is required");
             if (!apiKey) {
@@ -779,77 +863,18 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
               );
             }
 
-            const headers = buildHeaders(apiKey);
-            const isResponsesBase =
-              authMode === "codex_auth" || checkIsResponsesBase(apiBase);
-            const testUrl = resolveEndpoint(
-              apiBase,
-              isResponsesBase ? "/v1/responses" : "/v1/chat/completions",
-            );
-            const isCodexAuth = authMode === "codex_auth";
-            const tokenParam = isResponsesBase
-              ? isCodexAuth
-                ? {}
-                : { max_output_tokens: 16 }
-              : usesMaxCompletionTokens(modelName)
-                ? { max_completion_tokens: 5 }
-                : { max_tokens: 5 };
-            const testPayload = isResponsesBase
-              ? isCodexAuth
-                ? {
-                    model: modelName,
-                    instructions: "You are a concise assistant. Reply with OK.",
-                    input: [
-                      {
-                        type: "message",
-                        role: "user",
-                        content: [{ type: "input_text", text: "Say OK" }],
-                      },
-                    ],
-                    store: false,
-                    stream: true,
-                  }
-                : {
-                    model: modelName,
-                    instructions: "You are a concise assistant. Reply with OK.",
-                    input: "Say OK",
-                    ...tokenParam,
-                  }
-              : {
-                  model: modelName,
-                  messages: [{ role: "user", content: "Say OK" }],
-                  ...tokenParam,
-                };
-
             const fetchFn = ztoolkit.getGlobal("fetch") as typeof fetch;
-            const response = await fetchFn(testUrl, {
-              method: "POST",
-              headers,
-              body: JSON.stringify(testPayload),
+            const result = await runProviderConnectionTest({
+              fetchFn,
+              protocol: providerProtocol,
+              authMode,
+              apiBase,
+              apiKey,
+              modelName,
             });
-
-            if (!response.ok) {
-              const errorText = await response.text();
-              throw new Error(`HTTP ${response.status}: ${errorText}`);
-            }
-
-            if (isCodexAuth && isResponsesBase) {
-              const streamRaw = await response.text();
-              const reply = extractTextFromCodexSSE(streamRaw) || "OK";
-              statusLine.textContent = `✓ Success — model says: "${reply}"`;
-              statusLine.style.color = "green";
-              return;
-            }
-
-            const data = (await response.json()) as {
-              choices?: Array<{ message?: { content?: string } }>;
-              output_text?: string;
-            };
-            const reply =
-              data?.choices?.[0]?.message?.content ||
-              data?.output_text ||
-              "OK";
-            statusLine.textContent = `✓ Success — model says: "${reply}"`;
+            statusLine.textContent =
+              `✓ Success — model says: "${result.reply}"\n` +
+              `Agent capability: ${result.capabilityLabel}`;
             statusLine.style.color = "green";
           } catch (error) {
             statusLine.textContent = `✗ ${(error as Error).message}`;
@@ -872,11 +897,19 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
         "border: none; border-top: 1px solid var(--stroke-secondary, #c8c8c8); margin: 0;",
       );
       if (group.authMode === "codex_auth") {
-        cardBody.append(authModeWrap, apiUrlWrap, apiKeyWrap, divider, modelsWrap);
+        cardBody.append(
+          authModeWrap,
+          protocolWrap,
+          apiUrlWrap,
+          apiKeyWrap,
+          divider,
+          modelsWrap,
+        );
       } else {
         cardBody.append(
           authModeWrap,
           providerPresetWrap,
+          protocolWrap,
           apiUrlWrap,
           apiKeyWrap,
           divider,

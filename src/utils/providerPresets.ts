@@ -1,3 +1,5 @@
+import type { ProviderProtocol } from "./providerProtocol";
+
 export type SupportedProviderPresetId =
   | "openai"
   | "gemini"
@@ -13,6 +15,8 @@ export type ProviderPreset = {
   id: SupportedProviderPresetId;
   label: string;
   defaultApiBase: string;
+  defaultProtocol: ProviderProtocol;
+  supportedProtocols: ProviderProtocol[];
   helperText: string;
   matches: (apiBase: string) => boolean;
   /** When true, prefer /v1/responses over /v1/chat/completions when calling the API. */
@@ -71,13 +75,14 @@ const OPENAI_PATHS = [
 const GEMINI_PATHS = [
   "/",
   "/v1beta",
+  "/v1beta/models",
   "/v1beta/openai",
   "/v1beta/openai/chat/completions",
   "/v1beta/openai/responses",
   "/v1beta/openai/files",
 ];
 
-const ANTHROPIC_PATHS = ["/", "/v1", "/v1/chat/completions"];
+const ANTHROPIC_PATHS = ["/", "/v1", "/v1/messages", "/v1/chat/completions"];
 const DEEPSEEK_PATHS = ["/", "/v1", "/v1/chat/completions"];
 const GROK_PATHS = ["/", "/v1", "/v1/chat/completions", "/v1/responses"];
 const QWEN_PATHS = ["/", "/compatible-mode/v1", "/compatible-mode/v1/chat/completions"];
@@ -88,6 +93,8 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     id: "openai",
     label: "OpenAI",
     defaultApiBase: "https://api.openai.com/v1/responses",
+    defaultProtocol: "responses_api",
+    supportedProtocols: ["responses_api", "openai_chat_compat"],
     helperText: "Preset uses OpenAI's official Responses endpoint.",
     matches: makeHostAndPathMatcher(["api.openai.com"], OPENAI_PATHS),
     supportsResponsesEndpoint: true,
@@ -95,28 +102,36 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
   {
     id: "gemini",
     label: "Gemini",
-    defaultApiBase:
-      "https://generativelanguage.googleapis.com/v1beta/openai/responses",
+    defaultApiBase: "https://generativelanguage.googleapis.com/v1beta",
+    defaultProtocol: "gemini_native",
+    supportedProtocols: [
+      "gemini_native",
+      "responses_api",
+      "openai_chat_compat",
+    ],
     helperText:
-      "Preset uses Gemini's Responses endpoint when available; falls back to chat/completions.",
+      "Preset uses Gemini's native generateContent endpoint.",
     matches: makeHostAndPathMatcher(
       ["generativelanguage.googleapis.com"],
       GEMINI_PATHS,
     ),
-    supportsResponsesEndpoint: true,
   },
   {
     id: "anthropic",
     label: "Anthropic",
     defaultApiBase: "https://api.anthropic.com/v1",
+    defaultProtocol: "anthropic_messages",
+    supportedProtocols: ["anthropic_messages", "openai_chat_compat"],
     helperText:
-      "Preset uses Anthropic's official OpenAI SDK compatibility endpoint.",
+      "Preset uses Anthropic's native Messages API.",
     matches: makeHostAndPathMatcher(["api.anthropic.com"], ANTHROPIC_PATHS),
   },
   {
     id: "deepseek",
     label: "DeepSeek",
     defaultApiBase: "https://api.deepseek.com/v1",
+    defaultProtocol: "openai_chat_compat",
+    supportedProtocols: ["openai_chat_compat"],
     helperText: "Preset uses DeepSeek's official API base (v1).",
     matches: makeHostAndPathMatcher(["api.deepseek.com"], DEEPSEEK_PATHS),
   },
@@ -124,6 +139,8 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     id: "grok",
     label: "Grok",
     defaultApiBase: "https://api.x.ai/v1/responses",
+    defaultProtocol: "responses_api",
+    supportedProtocols: ["responses_api", "openai_chat_compat"],
     helperText: "Preset uses xAI's official Responses endpoint.",
     matches: makeHostAndPathMatcher(["api.x.ai"], GROK_PATHS),
     supportsResponsesEndpoint: true,
@@ -132,6 +149,8 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     id: "qwen",
     label: "Qwen",
     defaultApiBase: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    defaultProtocol: "openai_chat_compat",
+    supportedProtocols: ["openai_chat_compat"],
     helperText:
       "Preset uses DashScope's compatible-mode API base (v1).",
     matches: makeHostAndPathMatcher(
@@ -143,6 +162,8 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     id: "kimi",
     label: "Kimi",
     defaultApiBase: "https://api.moonshot.cn/v1",
+    defaultProtocol: "openai_chat_compat",
+    supportedProtocols: ["openai_chat_compat"],
     helperText:
       "Preset uses Moonshot's official API base (v1).",
     matches: makeHostAndPathMatcher(

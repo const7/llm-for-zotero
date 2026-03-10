@@ -1,15 +1,25 @@
-import { API_ENDPOINT, resolveEndpoint, usesMaxCompletionTokens } from "../../utils/apiHelpers";
+import { usesMaxCompletionTokens } from "../../utils/apiHelpers";
+import {
+  buildReasoningPayload,
+  postWithReasoningFallback,
+  resolveRequestAuthState,
+} from "../../utils/llmClient";
 import { normalizeMaxTokens, normalizeTemperature } from "../../utils/normalization";
+import { resolveProviderTransportEndpoint } from "../../utils/providerTransport";
 import type {
   AgentModelCapabilities,
   AgentModelMessage,
   AgentModelStep,
   AgentRuntimeRequest,
   AgentToolCall,
-  ToolSpec,
 } from "../types";
 import type { AgentModelAdapter, AgentStepParams } from "./adapter";
 import { isMultimodalRequestSupported } from "./messageBuilder";
+import {
+  buildOpenAIFunctionTools,
+  createFallbackToolCallId,
+  parseToolCallArguments,
+} from "./shared";
 
 type ChatCompletionChoice = {
   message?: {
@@ -24,38 +34,11 @@ type ChatCompletionChoice = {
   };
 };
 
-function getFetch(): typeof fetch {
-  return ztoolkit.getGlobal("fetch") as typeof fetch;
-}
-
 function isToolCapableApiBase(request: AgentRuntimeRequest): boolean {
   const apiBase = (request.apiBase || "").trim();
   if (!apiBase) return false;
   if (request.authMode === "codex_auth") return false;
-  const endpoint = resolveEndpoint(apiBase, API_ENDPOINT);
-  if (!endpoint) return false;
-  if (/chatgpt\.com\/backend-api\/codex\/responses/i.test(endpoint)) {
-    return false;
-  }
   return true;
-}
-
-function buildTools(tools: ToolSpec[]): Array<{
-  type: "function";
-  function: {
-    name: string;
-    description: string;
-    parameters: object;
-  };
-}> {
-  return tools.map((tool) => ({
-    type: "function",
-    function: {
-      name: tool.name,
-      description: tool.description,
-      parameters: tool.inputSchema,
-    },
-  }));
 }
 
 function buildMessagesPayload(messages: AgentModelMessage[]) {
@@ -101,15 +84,6 @@ function buildMessagesPayload(messages: AgentModelMessage[]) {
   });
 }
 
-function parseToolCallArguments(raw: string | undefined): unknown {
-  if (!raw || !raw.trim()) return {};
-  try {
-    return JSON.parse(raw);
-  } catch (_error) {
-    return { raw };
-  }
-}
-
 function normalizeToolCalls(
   toolCalls:
     | Array<{
@@ -127,7 +101,7 @@ function normalizeToolCalls(
       const name = call?.function?.name?.trim();
       if (!name) return null;
       return {
-        id: call?.id?.trim() || `tool-${Date.now()}-${index}`,
+        id: call?.id?.trim() || createFallbackToolCallId("tool", index),
         name,
         arguments: parseToolCallArguments(call?.function?.arguments),
       };
@@ -135,12 +109,14 @@ function normalizeToolCalls(
     .filter((call): call is AgentToolCall => Boolean(call));
 }
 
-export class OpenAICompatibleAgentAdapter implements AgentModelAdapter {
+export class OpenAIChatCompatAgentAdapter implements AgentModelAdapter {
   getCapabilities(request: AgentRuntimeRequest): AgentModelCapabilities {
     return {
       streaming: false,
       toolCalls: isToolCapableApiBase(request),
       multimodal: isMultimodalRequestSupported(request),
+      fileInputs: false,
+      reasoning: true,
     };
   }
 
@@ -149,32 +125,50 @@ export class OpenAICompatibleAgentAdapter implements AgentModelAdapter {
   }
 
   async runStep(params: AgentStepParams): Promise<AgentModelStep> {
-    const payload = {
-      model: params.request.model,
-      messages: buildMessagesPayload(params.messages),
-      tools: buildTools(params.tools),
-      tool_choice: "auto",
-      ...(usesMaxCompletionTokens(params.request.model || "")
-        ? {
-            max_completion_tokens: normalizeMaxTokens(
-              params.request.advanced?.maxTokens,
-            ),
-          }
-        : {
-            max_tokens: normalizeMaxTokens(params.request.advanced?.maxTokens),
-          }),
-      temperature: normalizeTemperature(params.request.advanced?.temperature),
-    };
-    const url = resolveEndpoint(params.request.apiBase || "", API_ENDPOINT);
-    const response = await getFetch()(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(params.request.apiKey
-          ? { Authorization: `Bearer ${params.request.apiKey}` }
-          : {}),
+    const request = params.request;
+    const auth = await resolveRequestAuthState({
+      authMode: request.authMode || "api_key",
+      apiKey: request.apiKey || "",
+      signal: params.signal,
+    });
+    const url = resolveProviderTransportEndpoint({
+      protocol: "openai_chat_compat",
+      apiBase: request.apiBase || "",
+    });
+    const response = await postWithReasoningFallback({
+      url,
+      auth,
+      modelName: request.model,
+      initialReasoning: request.reasoning,
+      buildPayload: (reasoningOverride) => {
+        const reasoningPayload = buildReasoningPayload(
+          reasoningOverride,
+          false,
+          request.model,
+          request.apiBase,
+        );
+        return {
+          model: request.model,
+          messages: buildMessagesPayload(params.messages),
+          tools: buildOpenAIFunctionTools(params.tools),
+          tool_choice: "auto",
+          ...(usesMaxCompletionTokens(request.model || "")
+            ? {
+                max_completion_tokens: normalizeMaxTokens(
+                  request.advanced?.maxTokens,
+                ),
+              }
+            : {
+                max_tokens: normalizeMaxTokens(request.advanced?.maxTokens),
+              }),
+          ...reasoningPayload.extra,
+          ...(reasoningPayload.omitTemperature
+            ? {}
+            : {
+                temperature: normalizeTemperature(request.advanced?.temperature),
+              }),
+        };
       },
-      body: JSON.stringify(payload),
       signal: params.signal,
     });
     if (!response.ok) {
@@ -207,3 +201,5 @@ export class OpenAICompatibleAgentAdapter implements AgentModelAdapter {
     };
   }
 }
+
+export { OpenAIChatCompatAgentAdapter as OpenAICompatibleAgentAdapter };

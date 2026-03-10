@@ -1,5 +1,7 @@
-import { isResponsesBase } from "../../../utils/apiHelpers";
-import { providerSupportsResponsesEndpoint } from "../../../utils/providerPresets";
+import {
+  normalizeProviderProtocolForAuthMode,
+  supportsProviderProtocolFileInputs,
+} from "../../../utils/providerProtocol";
 import type { AgentToolDefinition } from "../../types";
 import {
   isExplicitWholeDocumentRequest,
@@ -12,10 +14,17 @@ import {
 } from "./pdfToolShared";
 import { fail, ok } from "../shared";
 
-function supportsNativePdfInput(apiBase: string | undefined, authMode: string | undefined): boolean {
-  const normalizedBase = (apiBase || "").trim();
-  if (!normalizedBase || authMode === "codex_auth") return false;
-  return isResponsesBase(normalizedBase) || providerSupportsResponsesEndpoint(normalizedBase);
+function supportsNativePdfInput(params: {
+  providerProtocol?: string;
+  apiBase?: string;
+  authMode?: string;
+}): boolean {
+  const protocol = normalizeProviderProtocolForAuthMode({
+    protocol: params.providerProtocol,
+    authMode: params.authMode,
+    apiBase: params.apiBase,
+  });
+  return supportsProviderProtocolFileInputs(protocol);
 }
 
 export function createPreparePdfFileForModelTool(
@@ -25,7 +34,7 @@ export function createPreparePdfFileForModelTool(
     spec: {
       name: "prepare_pdf_file_for_model",
       description:
-        "Prepare a whole PDF file for direct model input. Use this only when the user explicitly asks to inspect the entire PDF/document, and only on Responses-capable non-codex providers.",
+        "Prepare a whole PDF file for direct model input. Use this only when the user explicitly asks to inspect the entire PDF/document, and only on file-input capable models.",
       inputSchema: {
         type: "object",
         additionalProperties: false,
@@ -91,10 +100,14 @@ export function createPreparePdfFileForModelTool(
     },
     execute: async (input, context) => {
       if (
-        !supportsNativePdfInput(context.request.apiBase, context.request.authMode)
+        !supportsNativePdfInput({
+          providerProtocol: context.request.providerProtocol,
+          apiBase: context.request.apiBase,
+          authMode: context.request.authMode,
+        })
       ) {
         throw new Error(
-          "Whole-document PDF input is only available on Responses-capable non-codex providers. Use page images instead for this model.",
+          "Whole-document PDF input is only available on file-input capable models. Use page images instead for this model.",
         );
       }
       if (!isExplicitWholeDocumentRequest(context.request.userText)) {

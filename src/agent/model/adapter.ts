@@ -11,6 +11,7 @@ export type AgentStepParams = {
   messages: AgentModelMessage[];
   tools: ToolSpec[];
   signal?: AbortSignal;
+  onTextDelta?: (delta: string) => void | Promise<void>;
 };
 
 export interface AgentModelAdapter {

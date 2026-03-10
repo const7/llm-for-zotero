@@ -187,7 +187,7 @@ describe("PDF agent tools", function () {
     assert.equal(result.ok, false);
     assert.include(
       String((result.content as { error?: string }).error),
-      "Responses-capable non-codex providers",
+      "file-input capable models",
     );
   });
 });

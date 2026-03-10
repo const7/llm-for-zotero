@@ -35,6 +35,7 @@ import {
   RESPONSES_ENDPOINT,
   EMBEDDINGS_ENDPOINT,
   FILES_ENDPOINT,
+  isGeminiBase,
   resolveEndpoint,
   usesMaxCompletionTokens,
   isResponsesBase,
@@ -1549,7 +1550,7 @@ function emptyReasoningPayload() {
   return { extra: {}, omitTemperature: false } as const;
 }
 
-function buildReasoningPayload(
+export function buildReasoningPayload(
   reasoning: ReasoningConfig | undefined,
   useResponses: boolean,
   modelName?: string,
@@ -1982,10 +1983,10 @@ async function postWithTemperatureFallback(params: {
       return res;
     }
     const secondErr = await res.text();
-    throw new Error(`${res.status} ${res.statusText} - ${secondErr}`);
+    throw new Error(`${res.status} ${res.statusText} (${params.url}) - ${secondErr}`);
   }
 
-  throw new Error(`${res.status} ${res.statusText} - ${firstErr}`);
+  throw new Error(`${res.status} ${res.statusText} (${params.url}) - ${firstErr}`);
 }
 
 function parseStatusFromErrorMessage(message: string): number | null {
@@ -2164,7 +2165,8 @@ export async function callLLM(params: ChatParams): Promise<string> {
   }
   // codex_auth is handled above via callLLMStream
   const useResponses =
-    isResponsesBase(apiBase) || providerSupportsResponsesEndpoint(apiBase);
+    !isGeminiBase(apiBase) &&
+    (isResponsesBase(apiBase) || providerSupportsResponsesEndpoint(apiBase));
   const responseFileIds = useResponses
     ? await uploadFilesForResponses({
         apiBase,
@@ -2242,8 +2244,8 @@ export async function callLLMStream(
   }
   const useResponses =
     authMode === "codex_auth" ||
-    isResponsesBase(apiBase) ||
-    providerSupportsResponsesEndpoint(apiBase);
+    (!isGeminiBase(apiBase) &&
+      (isResponsesBase(apiBase) || providerSupportsResponsesEndpoint(apiBase)));
   if (authMode === "codex_auth" && Array.isArray(params.attachments) && params.attachments.length) {
     throw new Error(
       "codex auth currently does not support file attachments in this plugin v1.",

@@ -5,6 +5,7 @@ import type {
   AgentConfirmationResolution,
   AgentEvent,
   AgentModelMessage,
+  AgentModelStep,
   AgentRuntimeOutcome,
   AgentRuntimeRequest,
   AgentToolArtifact,
@@ -12,6 +13,10 @@ import type {
   AgentToolResult,
 } from "./types";
 import type { AgentModelAdapter } from "./model/adapter";
+import {
+  MAX_AGENT_ROUNDS,
+  MAX_AGENT_TOOL_CALLS_PER_ROUND,
+} from "./model/limits";
 import { buildAgentInitialMessages } from "./model/messageBuilder";
 import {
   appendAgentRunEvent,
@@ -246,47 +251,108 @@ export class AgentRuntime {
     ) as AgentModelMessage[];
 
     let consecutiveToolErrors = 0;
-    const maxRounds = 4;
-    const maxToolCallsPerRound = 3;
-    for (let round = 1; round <= maxRounds; round += 1) {
+    const maxRounds = MAX_AGENT_ROUNDS;
+    const maxToolCallsPerRound = MAX_AGENT_TOOL_CALLS_PER_ROUND;
+    const shouldFlushStreamBuffer = (value: string): boolean => {
+      if (!value) return false;
+      if (value.length >= 48) return true;
+      return /(?:\n|[.!?]\s)$/u.test(value);
+    };
+    const emitFinalStep = async (
+      step: Extract<AgentModelStep, { kind: "final" }>,
+      stepStreamedText: string,
+    ): Promise<AgentRuntimeOutcome> => {
+      const finalText = step.text || stepStreamedText || currentAnswerText || "No response.";
+      if (finalText) {
+        if (!stepStreamedText) {
+          currentAnswerText = finalText;
+          await emit({
+            type: "message_delta",
+            text: finalText,
+          });
+        } else if (finalText.startsWith(stepStreamedText)) {
+          const remainder = finalText.slice(stepStreamedText.length);
+          if (remainder) {
+            currentAnswerText += remainder;
+            await emit({
+              type: "message_delta",
+              text: remainder,
+            });
+          }
+        } else {
+          currentAnswerText = finalText;
+        }
+      }
+      await emit({
+        type: "final",
+        text: finalText,
+      });
+      await finishAgentRun(runId, "completed", finalText);
+      return {
+        kind: "completed",
+        runId,
+        text: finalText,
+        usedFallback: false,
+      };
+    };
+    const runModelStep = async (
+      statusText: string,
+    ): Promise<{ step: AgentModelStep; stepStreamedText: string }> => {
       if (params.signal?.aborted) {
         await finishAgentRun(runId, "cancelled", currentAnswerText);
         throw new Error("Aborted");
       }
       await emit({
         type: "status",
-        text: round === 1 ? "Running agent" : `Continuing agent (${round}/${maxRounds})`,
+        text: statusText,
       });
+      let stepStreamedText = "";
+      let stepPendingDelta = "";
+      const flushStepDelta = async () => {
+        if (!stepPendingDelta) return;
+        const text = stepPendingDelta;
+        stepPendingDelta = "";
+        currentAnswerText += text;
+        await emit({
+          type: "message_delta",
+          text,
+        });
+      };
       const step = await adapter.runStep({
         request,
         messages,
         tools: this.registry.listTools(),
         signal: params.signal,
+        onTextDelta: async (delta) => {
+          if (!delta) return;
+          stepStreamedText += delta;
+          stepPendingDelta += delta;
+          if (shouldFlushStreamBuffer(stepPendingDelta)) {
+            await flushStepDelta();
+          }
+        },
       });
+      await flushStepDelta();
+      return {
+        step,
+        stepStreamedText,
+      };
+    };
+    for (let round = 1; round <= maxRounds; round += 1) {
+      const { step, stepStreamedText } = await runModelStep(
+        round === 1 ? "Running agent" : `Continuing agent (${round}/${maxRounds})`,
+      );
       if (step.kind === "final") {
-        const finalText = step.text || currentAnswerText || "No response.";
-        if (finalText) {
-          currentAnswerText = finalText;
-          await emit({
-            type: "message_delta",
-            text: finalText,
-          });
-        }
-        await emit({
-          type: "final",
-          text: finalText,
-        });
-        await finishAgentRun(runId, "completed", finalText);
-        return {
-          kind: "completed",
-          runId,
-          text: finalText,
-          usedFallback: false,
-        };
+        return emitFinalStep(step, stepStreamedText);
       }
 
-      messages.push(step.assistantMessage);
       const calls = step.calls.slice(0, maxToolCallsPerRound);
+      messages.push({
+        ...step.assistantMessage,
+        tool_calls: Array.isArray(step.assistantMessage.tool_calls)
+          ? step.assistantMessage.tool_calls.slice(0, maxToolCallsPerRound)
+          : step.assistantMessage.tool_calls,
+      });
       if (!calls.length) break;
       for (const call of calls) {
         await emit({

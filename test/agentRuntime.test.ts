@@ -431,4 +431,260 @@ describe("AgentRuntime", function () {
       restoreDb();
     }
   });
+
+  it("allows one final synthesis step after the last tool round", async function () {
+    const restoreDb = installMockDb();
+    try {
+      const registry = new AgentToolRegistry();
+      registry.register({
+        spec: {
+          name: "read_context",
+          description: "read",
+          inputSchema: { type: "object" },
+          mutability: "read",
+          requiresConfirmation: false,
+        },
+        validate: () => ({ ok: true, value: {} }),
+        execute: async () => ({
+          ok: true,
+        }),
+      });
+
+      const runtime = new AgentRuntime({
+        registry,
+        adapterFactory: () =>
+          new MockAdapter(
+            [
+              1, 2, 3, 4,
+            ].map((index) => ({
+              kind: "tool_calls" as const,
+              calls: [
+                {
+                  id: `call-${index}`,
+                  name: "read_context",
+                  arguments: {},
+                },
+              ],
+              assistantMessage: {
+                role: "assistant" as const,
+                content: "",
+                tool_calls: [
+                  {
+                    id: `call-${index}`,
+                    name: "read_context",
+                    arguments: {},
+                  },
+                ],
+              },
+            })).concat([
+              {
+                kind: "final" as const,
+                text: "Summary ready.",
+                assistantMessage: {
+                  role: "assistant",
+                  content: "Summary ready.",
+                },
+              },
+            ]),
+            {
+              streaming: false,
+              toolCalls: true,
+              multimodal: false,
+            },
+          ),
+      });
+
+      const events: AgentEvent[] = [];
+      const outcome = await runtime.runTurn({
+        request: {
+          conversationKey: 1,
+          mode: "agent",
+          userText: "summarize the paper",
+          model: "deepseek-chat",
+          apiBase: "https://api.deepseek.com/v1/chat/completions",
+          apiKey: "test",
+        },
+        onEvent: async (event) => {
+          events.push(event);
+        },
+      });
+
+      assert.equal(outcome.kind, "completed");
+      if (outcome.kind !== "completed") return;
+      assert.equal(outcome.text, "Summary ready.");
+      assert.isTrue(
+        events.some(
+          (event) => event.type === "status" && event.text === "Continuing agent (5/6)",
+        ),
+      );
+      assert.equal(
+        events.filter((event) => event.type === "tool_result").length,
+        4,
+      );
+      assert.isFalse(
+        events.some(
+          (event) =>
+            event.type === "final" &&
+            event.text ===
+              "Agent stopped before reaching a final answer. Try narrowing the request.",
+        ),
+      );
+    } finally {
+      restoreDb();
+    }
+  });
+
+  it("keeps assistant tool calls aligned with executed tool outputs when capped", async function () {
+    const restoreDb = installMockDb();
+    try {
+      const registry = new AgentToolRegistry();
+      registry.register({
+        spec: {
+          name: "read_context",
+          description: "read",
+          inputSchema: { type: "object" },
+          mutability: "read",
+          requiresConfirmation: false,
+        },
+        validate: () => ({ ok: true, value: {} }),
+        execute: async () => ({
+          ok: true,
+        }),
+      });
+
+      let sawConsistentFollowup = false;
+      const runtime = new AgentRuntime({
+        registry,
+        adapterFactory: () => ({
+          getCapabilities: () => ({
+            streaming: false,
+            toolCalls: true,
+            multimodal: false,
+          }),
+          supportsTools: () => true,
+          async runStep(params: AgentStepParams): Promise<AgentModelStep> {
+            if (!sawConsistentFollowup) {
+              const priorAssistant = params.messages.findLast(
+                (message) =>
+                  message.role === "assistant" &&
+                  Array.isArray(message.tool_calls) &&
+                  message.tool_calls.length > 0,
+              );
+              if (!priorAssistant || !Array.isArray(priorAssistant.tool_calls)) {
+                return {
+                  kind: "tool_calls",
+                  calls: [1, 2, 3, 4, 5].map((index) => ({
+                    id: `call-${index}`,
+                    name: "read_context",
+                    arguments: {},
+                  })),
+                  assistantMessage: {
+                    role: "assistant",
+                    content: "",
+                    tool_calls: [1, 2, 3, 4, 5].map((index) => ({
+                      id: `call-${index}`,
+                      name: "read_context",
+                      arguments: {},
+                    })),
+                  },
+                };
+              }
+              const toolMessages = params.messages.filter(
+                (message) => message.role === "tool",
+              );
+              sawConsistentFollowup =
+                priorAssistant.tool_calls.length === 4 &&
+                toolMessages.length === 4 &&
+                toolMessages.every(
+                  (message, index) => message.tool_call_id === `call-${index + 1}`,
+                );
+            }
+            return {
+              kind: "final",
+              text: sawConsistentFollowup ? "Done." : "Inconsistent.",
+              assistantMessage: {
+                role: "assistant",
+                content: sawConsistentFollowup ? "Done." : "Inconsistent.",
+              },
+            };
+          },
+        }),
+      });
+
+      const outcome = await runtime.runTurn({
+        request: {
+          conversationKey: 1,
+          mode: "agent",
+          userText: "summarize the paper",
+          model: "gpt-4o-mini",
+          apiBase: "https://api.openai.com/v1/chat/completions",
+          apiKey: "test",
+        },
+      });
+
+      assert.equal(outcome.kind, "completed");
+      if (outcome.kind !== "completed") return;
+      assert.equal(outcome.text, "Done.");
+      assert.isTrue(sawConsistentFollowup);
+    } finally {
+      restoreDb();
+    }
+  });
+
+  it("emits incremental message_delta events when the adapter streams text", async function () {
+    const restoreDb = installMockDb();
+    try {
+      const runtime = new AgentRuntime({
+        registry: new AgentToolRegistry(),
+        adapterFactory: () => ({
+          getCapabilities: () => ({
+            streaming: true,
+            toolCalls: true,
+            multimodal: false,
+          }),
+          supportsTools: () => true,
+          async runStep(params: AgentStepParams): Promise<AgentModelStep> {
+            await params.onTextDelta?.("Hello ");
+            return {
+              kind: "final",
+              text: "Hello world.",
+              assistantMessage: {
+                role: "assistant",
+                content: "Hello world.",
+              },
+            };
+          },
+        }),
+      });
+
+      const events: AgentEvent[] = [];
+      const outcome = await runtime.runTurn({
+        request: {
+          conversationKey: 1,
+          mode: "agent",
+          userText: "hello",
+          model: "gpt-5.4",
+          apiBase: "https://api.openai.com/v1/responses",
+          apiKey: "test",
+        },
+        onEvent: async (event) => {
+          events.push(event);
+        },
+      });
+
+      assert.equal(outcome.kind, "completed");
+      if (outcome.kind !== "completed") return;
+      assert.equal(outcome.text, "Hello world.");
+      assert.deepEqual(
+        events
+          .filter((event) => event.type === "message_delta")
+          .map((event) =>
+            event.type === "message_delta" ? event.text : "",
+          ),
+        ["Hello ", "world."],
+      );
+    } finally {
+      restoreDb();
+    }
+  });
 });

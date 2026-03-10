@@ -1,18 +1,14 @@
 import { AgentRuntime } from "./runtime";
 import { createBuiltInToolRegistry } from "./tools";
-import { OpenAICompatibleAgentAdapter } from "./model/openaiCompatible";
-import { CodexResponsesAgentAdapter } from "./model/codexResponses";
 import { ZoteroGateway } from "./services/zoteroGateway";
 import { PdfService } from "./services/pdfService";
 import { PdfPageService } from "./services/pdfPageService";
 import { RetrievalService } from "./services/retrievalService";
-import { providerSupportsResponsesEndpoint } from "../utils/providerPresets";
-import { isResponsesBase } from "../utils/apiHelpers";
-import { OpenAIResponsesAgentAdapter } from "./model/openaiResponses";
 import {
   initAgentTraceStore,
   getAgentRunTrace,
 } from "./store/traceStore";
+import { createAgentModelAdapter } from "./model/factory";
 import type {
   AgentEvent,
   AgentRuntimeRequest,
@@ -38,19 +34,7 @@ export async function initAgentSubsystem(): Promise<AgentRuntime> {
   await initAgentTraceStore();
   runtime = new AgentRuntime({
     registry: createToolRegistry(),
-    adapterFactory: (request) => {
-      if (request.authMode === "codex_auth") {
-        return new CodexResponsesAgentAdapter();
-      }
-      const apiBase = (request.apiBase || "").trim();
-      if (
-        apiBase &&
-        (isResponsesBase(apiBase) || providerSupportsResponsesEndpoint(apiBase))
-      ) {
-        return new OpenAIResponsesAgentAdapter();
-      }
-      return new OpenAICompatibleAgentAdapter();
-    },
+    adapterFactory: (request) => createAgentModelAdapter(request),
   });
   return runtime;
 }

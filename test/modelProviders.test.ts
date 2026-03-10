@@ -88,6 +88,7 @@ describe("modelProviders", function () {
     assert.equal(result.groups[0].apiBase, "https://api.openai.com/v1");
     assert.equal(result.groups[0].apiKey, "sk-openai");
     assert.equal(result.groups[0].authMode, "api_key");
+    assert.equal(result.groups[0].providerProtocol, "openai_chat_compat");
     assert.equal(result.groups[0].models[0].model, "gpt-4o-mini");
     assert.equal(result.groups[0].models[1].model, "gpt-4o");
     assert.equal(result.groups[0].models[1].temperature, 0.1);
@@ -139,6 +140,7 @@ describe("modelProviders", function () {
     assert.equal(entries[1].displayModelLabel, "gpt-4o-mini #2");
     assert.equal(entries[0].providerLabel, "OpenAI");
     assert.equal(entries[0].authMode, "api_key");
+    assert.equal(entries[0].providerProtocol, "openai_chat_compat");
   });
 
   it("keeps input token cap unset when no override is stored", function () {
@@ -197,5 +199,37 @@ describe("modelProviders", function () {
     const entries = getRuntimeModelEntries();
     assert.lengthOf(entries, 1);
     assert.equal(entries[0].authMode, "api_key");
+    assert.equal(entries[0].providerProtocol, "responses_api");
+  });
+
+  it("forces stored codex auth groups onto codex_responses", function () {
+    (
+      globalThis.Zotero.Prefs as {
+        set: (key: string, value: unknown, global?: boolean) => void;
+      }
+    ).set(
+      `${config.prefsPrefix}.modelProviderGroups`,
+      JSON.stringify([
+        {
+          id: "provider-codex",
+          apiBase: "https://chatgpt.com/backend-api/codex/responses",
+          apiKey: "",
+          authMode: "codex_auth",
+          providerProtocol: "gemini_native",
+          models: [{ id: "m1", model: "gpt-5.4", temperature: 0.3, maxTokens: 4096 }],
+        },
+      ]),
+      true,
+    );
+    (
+      globalThis.Zotero.Prefs as {
+        set: (key: string, value: unknown, global?: boolean) => void;
+      }
+    ).set(`${config.prefsPrefix}.modelProviderGroupsMigrationVersion`, 3, true);
+
+    const entries = getRuntimeModelEntries();
+    assert.lengthOf(entries, 1);
+    assert.equal(entries[0].authMode, "codex_auth");
+    assert.equal(entries[0].providerProtocol, "codex_responses");
   });
 });

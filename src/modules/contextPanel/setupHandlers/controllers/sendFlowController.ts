@@ -1,4 +1,5 @@
 import { MAX_SELECTED_IMAGES } from "../../constants";
+import type { ProviderProtocol } from "../../../../utils/providerProtocol";
 import type {
   AdvancedModelParams,
   ChatAttachment,
@@ -18,6 +19,7 @@ type SelectedProfile = {
   apiKey: string;
   providerLabel: string;
   authMode?: "api_key" | "codex_auth";
+  providerProtocol?: ProviderProtocol;
 };
 
 type LatestEditablePair = {

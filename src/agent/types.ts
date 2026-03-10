@@ -1,5 +1,6 @@
 import type { ChatMessage } from "../utils/llmClient";
 import type { ModelProviderAuthMode } from "../utils/modelProviders";
+import type { ProviderProtocol } from "../utils/providerProtocol";
 import type {
   AdvancedModelParams,
   ChatAttachment,
@@ -20,6 +21,7 @@ export type AgentRequest = {
   model?: string;
   apiBase?: string;
   apiKey?: string;
+  providerProtocol?: ProviderProtocol;
   reasoning?: LLMReasoningConfig;
   advanced?: AdvancedModelParams;
 };
@@ -218,6 +220,8 @@ export type AgentModelCapabilities = {
   streaming: boolean;
   toolCalls: boolean;
   multimodal: boolean;
+  fileInputs: boolean;
+  reasoning: boolean;
 };
 
 export type AgentModelContentPart =
