@@ -200,7 +200,7 @@ Now, the plugin natively supports different provider protocols, such as `respons
 You can always check the connections by clicking the "Test Connection" button.
 
 
-### Agent Mode
+### Agent Mode (beta)
 
 When you enable the agent mode in the preferences settings, you will see the `Agent (beta)` toggle in the context bar. Click it to switch to agent mode.
 
