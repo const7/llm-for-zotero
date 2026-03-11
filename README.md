@@ -196,8 +196,62 @@ I will give some popular model as example:
 
 Now, the plugin natively supports different provider protocols, such as `responses_api`, `openai_chat_compat`, `anthropic_messages`, `gemini_native`, etc. You can choose the one that suits your needs.
 
-
 You can always check the connections by clicking the "Test Connection" button.
+
+
+### Agent Mode
+
+When you enable the agent mode, you will see the `Agent (beta)` toggle in the context bar. Click it to switch to agent mode.
+
+Currently, the agent mode supports the following tools:
+- `search_related_papers_online`: Search for related or similar papers online.
+- `read_paper_evidence`: Read the paper evidence.
+- `read_paper_excerpt`: Read the paper excerpt.
+- `prepare_pdf_pages_for_model`: Prepare the PDF pages for the model.
+- `prepare_pdf_file_for_model`: Prepare the PDF file for the model.
+- `write_note`: Write a note.
+- `apply_tags`: Apply tags to the paper.
+- ... And more!
+
+I only show some of the tools in the demos below. You can always check the tools by asking the agent what it can do. 
+
+**More tools will be supported in the future.** And I also welcome you to contribute your own tools to the agent!!
+
+#### Multi-steps workflow with agent mode:
+
+<p align="center">
+  <img src="./assets/agent/multi_steps.gif" alt="agent mode demo" width="1024" />
+</p>
+
+#### Directly read the figure with agent mode:
+
+<p align="center">
+  <img src="./assets/agent/single_figure.gif" alt="agent mode demo" width="1024" />
+</p>
+
+#### Directly read the multiple pages with agent mode:
+
+<p align="center">
+  <img src="./assets/agent/full_docs.gif" alt="agent mode demo" width="1024" />
+</p>
+
+#### Find related papers with agent mode:
+
+<p align="center">
+  <img src="./assets/agent/related_papers.gif" alt="agent mode demo" width="1024" />
+</p>
+
+#### Apply tags to the paper:
+
+<p align="center">
+  <img src="./assets/agent/apply_tags.gif" alt="agent mode demo" width="1024" />
+</p>
+
+#### Write a note with agent mode:
+<p align="center">
+  <img src="./assets/agent/write_note.gif" alt="agent mode demo" width="1024" />
+</p>
+
 
 ### Usage Guide
 
