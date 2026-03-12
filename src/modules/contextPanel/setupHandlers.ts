@@ -197,12 +197,19 @@ import {
   browsePaperCollectionCandidates,
   normalizePaperSearchText,
   parsePaperSearchSlashToken,
+  parseAtSearchToken,
   searchPaperCandidates,
   type PaperBrowseCollectionCandidate,
   type PaperSearchAttachmentCandidate,
   type PaperSearchGroupCandidate,
   type PaperSearchSlashToken,
 } from "./paperSearch";
+import { getAgentApi } from "../../agent/index";
+import { renderPendingActionCard } from "./agentTrace/render";
+import type {
+  AgentPendingAction,
+  AgentConfirmationResolution,
+} from "../../agent/types";
 import {
   createGlobalPortalItem,
   createPaperPortalItem,
@@ -346,6 +353,9 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     paperPreviewList,
     paperPicker,
     paperPickerList,
+    actionPicker,
+    actionPickerList,
+    actionHitlPanel,
     responseMenu,
     responseMenuCopyBtn,
     responseMenuNoteBtn,
@@ -6045,7 +6055,17 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     paperPickerRows = [];
     paperPickerActiveRowIndex = 0;
   };
-  const getActiveSlashToken = (): ActiveSlashToken | null => {
+  // Paper picker is now triggered by '@'; action picker is triggered by '/'
+  const getActiveAtToken = (): ActiveSlashToken | null => {
+    const caretEnd =
+      typeof inputBox.selectionStart === "number"
+        ? inputBox.selectionStart
+        : inputBox.value.length;
+    return parseAtSearchToken(inputBox.value, caretEnd);
+  };
+  // Legacy alias – used internally by consumeActiveAtToken and schedulePaperPickerSearch
+  const getActiveSlashToken = getActiveAtToken;
+  const getActiveActionToken = (): ActiveSlashToken | null => {
     const caretEnd =
       typeof inputBox.selectionStart === "number"
         ? inputBox.selectionStart
@@ -6065,6 +6085,263 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       paperPickerList.innerHTML = "";
     }
   };
+  // ── Action picker ─────────────────────────────────────────────────────────
+  type ActionPickerItem = { name: string; description: string; inputSchema: object };
+  let actionPickerItems: ActionPickerItem[] = [];
+  let actionPickerActiveIndex = 0;
+  const isActionPickerOpen = () =>
+    Boolean(actionPicker && actionPicker.style.display !== "none");
+  const closeActionPicker = () => {
+    if (actionPicker) actionPicker.style.display = "none";
+    if (actionPickerList) actionPickerList.innerHTML = "";
+    actionPickerItems = [];
+    actionPickerActiveIndex = 0;
+  };
+  const formatActionLabel = (name: string): string =>
+    name.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+
+  /** Renders the action picker dropdown. */
+  const renderActionPicker = () => {
+    if (!actionPicker || !actionPickerList) return;
+    const ownerDoc = body.ownerDocument;
+    if (!ownerDoc) return;
+    actionPickerList.innerHTML = "";
+    if (!actionPickerItems.length) {
+      const empty = createElement(ownerDoc, "div", "llm-action-picker-empty", {
+        textContent: "No actions matched.",
+      });
+      actionPickerList.appendChild(empty);
+      actionPicker.style.display = "block";
+      return;
+    }
+    actionPickerItems.forEach((action, idx) => {
+      const option = createElement(ownerDoc, "div", "llm-action-picker-item", {});
+      option.setAttribute("role", "option");
+      option.setAttribute("aria-selected", idx === actionPickerActiveIndex ? "true" : "false");
+      option.tabIndex = -1;
+      const titleEl = createElement(ownerDoc, "div", "llm-action-picker-title", {
+        textContent: formatActionLabel(action.name),
+      });
+      const descEl = createElement(ownerDoc, "div", "llm-action-picker-description", {
+        textContent: action.description,
+      });
+      option.append(titleEl, descEl);
+      option.addEventListener("mousedown", (e: Event) => {
+        e.preventDefault();
+        actionPickerActiveIndex = idx;
+        void selectActionPickerItem(idx);
+      });
+      actionPickerList.appendChild(option);
+    });
+    actionPicker.style.display = "block";
+  };
+
+  /** Populates the action picker based on the current `/query` token. */
+  const scheduleActionPickerTrigger = () => {
+    if (!item || !actionPicker || !actionPickerList) {
+      closeActionPicker();
+      return;
+    }
+    const token = getActiveActionToken();
+    if (!token) {
+      closeActionPicker();
+      return;
+    }
+    let allActions: ActionPickerItem[] = [];
+    try {
+      allActions = getAgentApi().listActions();
+    } catch {
+      // Agent subsystem may not be initialised yet
+      closeActionPicker();
+      return;
+    }
+    const query = token.query.toLowerCase().trim();
+    actionPickerItems = query
+      ? allActions.filter(
+          (a) =>
+            a.name.toLowerCase().includes(query) ||
+            a.description.toLowerCase().includes(query),
+        )
+      : allActions;
+    actionPickerActiveIndex = 0;
+    renderActionPicker();
+  };
+
+  // ── Action HITL panel ──────────────────────────────────────────────────────
+  const closeActionHitlPanel = () => {
+    if (actionHitlPanel) {
+      actionHitlPanel.style.display = "none";
+      actionHitlPanel.innerHTML = "";
+    }
+    chatBox?.querySelector(".llm-action-inline-card")?.remove();
+  };
+
+  const showActionHitlCard = (requestId: string, action: AgentPendingAction): Promise<AgentConfirmationResolution> => {
+    return new Promise((resolve) => {
+      getAgentApi().registerPendingConfirmation(requestId, (resolution) => {
+        closeActionHitlPanel();
+        resolve(resolution);
+      });
+      const ownerDoc = body.ownerDocument;
+      if (ownerDoc && chatBox) {
+        chatBox.querySelector(".llm-action-inline-card")?.remove();
+        const wrapper = ownerDoc.createElement("div");
+        wrapper.className = "llm-action-inline-card";
+        const card = renderPendingActionCard(ownerDoc, { requestId, action });
+        wrapper.appendChild(card);
+        chatBox.appendChild(wrapper);
+        chatBox.scrollTop = chatBox.scrollHeight;
+      }
+    });
+  };
+
+  // ── Action launch form ─────────────────────────────────────────────────────
+  /**
+   * Returns the required fields that cannot be auto-filled from context.
+   * `itemId` is auto-filled from the current item. All other required fields
+   * need user input.
+   */
+  const getNeedsUserInputFields = (actionName: string, schema: object): string[] => {
+    const s = schema as { required?: string[] };
+    if (!s.required?.length) return [];
+    const autoFillable = new Set(["itemId"]);
+    return s.required.filter((f) => !autoFillable.has(f));
+  };
+
+  /**
+   * Resolves the initial input for an action. Auto-fills `itemId` from context.
+   */
+  const buildActionInput = (actionName: string, schema: object, extraFields: Record<string, string>): Record<string, unknown> => {
+    const input: Record<string, unknown> = { ...extraFields };
+    const s = schema as { required?: string[] };
+    if (s.required?.includes("itemId") && item) {
+      input.itemId = item.id;
+    }
+    return input;
+  };
+
+  /**
+   * Shows an inline launch form for actions that require user-provided fields
+   * (currently only `literature_review` which requires `topic`).
+   * Returns a promise that resolves with the filled input, or null if cancelled.
+   */
+  const showActionLaunchForm = (
+    actionName: string,
+    requiredFields: string[],
+    schema: object,
+  ): Promise<Record<string, unknown> | null> => {
+    return new Promise((resolve) => {
+      const ownerDoc = body.ownerDocument;
+      if (!ownerDoc || !chatBox) {
+        resolve(null);
+        return;
+      }
+      const props = (schema as { properties?: Record<string, { description?: string }> }).properties || {};
+      chatBox.querySelector(".llm-action-inline-card")?.remove();
+      const wrapper = ownerDoc.createElement("div");
+      wrapper.className = "llm-action-inline-card";
+      const form = createElement(ownerDoc, "div", "llm-action-launch-form", {});
+      const header = createElement(ownerDoc, "div", "llm-action-launch-form-header", {
+        textContent: formatActionLabel(actionName),
+      });
+      form.appendChild(header);
+      const fieldEls: Array<{ name: string; input: HTMLInputElement | HTMLTextAreaElement }> = [];
+      for (const fieldName of requiredFields) {
+        const label = createElement(ownerDoc, "label", "llm-action-launch-form-label", {
+          textContent: props[fieldName]?.description ?? fieldName,
+        });
+        const input = createElement(ownerDoc, "textarea", "llm-action-launch-form-input llm-input", {
+          placeholder: fieldName,
+        }) as HTMLTextAreaElement;
+        input.rows = 2;
+        form.append(label, input);
+        fieldEls.push({ name: fieldName, input });
+      }
+      const btns = createElement(ownerDoc, "div", "llm-action-launch-form-btns", {});
+      const runBtn = createElement(ownerDoc, "button", "llm-action-launch-form-run-btn", {
+        textContent: "Run",
+        type: "button",
+      }) as HTMLButtonElement;
+      const cancelBtn2 = createElement(ownerDoc, "button", "llm-action-launch-form-cancel-btn", {
+        textContent: "Cancel",
+        type: "button",
+      }) as HTMLButtonElement;
+      btns.append(runBtn, cancelBtn2);
+      form.appendChild(btns);
+      wrapper.appendChild(form);
+      const dismiss = () => {
+        closeActionHitlPanel();
+        inputBox.focus({ preventScroll: true });
+      };
+      runBtn.addEventListener("click", () => {
+        const filled: Record<string, unknown> = {};
+        for (const { name, input } of fieldEls) {
+          filled[name] = input.value.trim();
+        }
+        dismiss();
+        resolve(filled);
+      });
+      cancelBtn2.addEventListener("click", () => {
+        dismiss();
+        resolve(null);
+      });
+      chatBox.appendChild(wrapper);
+      chatBox.scrollTop = chatBox.scrollHeight;
+      // Focus first field
+      fieldEls[0]?.input.focus();
+    });
+  };
+
+  /** Selects an action from the picker, shows a form if needed, then runs it. */
+  const selectActionPickerItem = async (index: number): Promise<void> => {
+    const action = actionPickerItems[index];
+    if (!action) return;
+    consumeActiveActionToken();
+    closeActionPicker();
+    inputBox.focus({ preventScroll: true });
+
+    const needsInput = getNeedsUserInputFields(action.name, action.inputSchema);
+    let extraFields: Record<string, string> = {};
+    if (needsInput.length) {
+      const filled = await showActionLaunchForm(action.name, needsInput, action.inputSchema);
+      if (!filled) return; // user cancelled
+      extraFields = Object.fromEntries(
+        Object.entries(filled).map(([k, v]) => [k, String(v)]),
+      );
+    }
+
+    const input = buildActionInput(action.name, action.inputSchema, extraFields);
+    if (status) setStatus(status, `Running: ${formatActionLabel(action.name)}…`, "ready");
+
+    try {
+      const agentApi = getAgentApi();
+      const result = await agentApi.runAction(action.name, input, {
+        confirmationMode: "native_ui",
+        onProgress: (event) => {
+          if (event.type === "step_start" && status) {
+            setStatus(status, `${event.step} (${event.index}/${event.total})`, "ready");
+          } else if (event.type === "step_done" && event.summary && status) {
+            setStatus(status, event.summary, "ready");
+          }
+        },
+        requestConfirmation: (requestId, pendingAction) =>
+          showActionHitlCard(requestId, pendingAction),
+      });
+      if (status) {
+        setStatus(
+          status,
+          result.ok
+            ? `${formatActionLabel(action.name)} complete`
+            : `${formatActionLabel(action.name)} failed: ${result.error}`,
+          result.ok ? "ready" : "error",
+        );
+      }
+    } catch (err) {
+      ztoolkit.log("LLM: action picker run error", err);
+      if (status) setStatus(status, `Error: ${String(err)}`, "error");
+    }
+  };
+
   function buildPaperMetaText(paper: {
     citationKey?: string;
     firstCreator?: string;
@@ -6329,8 +6606,21 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     }
     return true;
   };
-  const consumeActiveSlashToken = (): boolean => {
-    const token = getActiveSlashToken();
+  const consumeActiveAtToken = (): boolean => {
+    const token = getActiveAtToken();
+    if (!token) return false;
+    const beforeAt = inputBox.value.slice(0, token.slashStart);
+    const afterCaret = inputBox.value.slice(token.caretEnd);
+    inputBox.value = `${beforeAt}${afterCaret}`;
+    persistDraftInputForCurrentConversation();
+    const nextCaret = beforeAt.length;
+    inputBox.setSelectionRange(nextCaret, nextCaret);
+    return true;
+  };
+  // Legacy alias used by selectPaperPickerAttachment
+  const consumeActiveSlashToken = consumeActiveAtToken;
+  const consumeActiveActionToken = (): boolean => {
+    const token = getActiveActionToken();
     if (!token) return false;
     const beforeSlash = inputBox.value.slice(0, token.slashStart);
     const afterCaret = inputBox.value.slice(token.caretEnd);
@@ -6855,9 +7145,11 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     inputBox.addEventListener("input", () => {
       persistDraftInputForCurrentConversation();
       schedulePaperPickerSearch();
+      scheduleActionPickerTrigger();
     });
     inputBox.addEventListener("click", () => {
       schedulePaperPickerSearch();
+      scheduleActionPickerTrigger();
     });
     inputBox.addEventListener("keyup", (e: Event) => {
       const key = (e as KeyboardEvent).key;
@@ -6870,6 +7162,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
         return;
       if (key === "Enter" || key === "Tab" || key === "Escape") return;
       schedulePaperPickerSearch();
+      scheduleActionPickerTrigger();
     });
   }
 
@@ -7038,6 +7331,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       }
       return;
     }
+    closeActionPicker();
     await doSend();
     persistDraftInputForCurrentConversation();
   };
@@ -7070,6 +7364,41 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
   // Enter key (Shift+Enter for newline)
   inputBox.addEventListener("keydown", (e: Event) => {
     const ke = e as KeyboardEvent;
+    if (isActionPickerOpen()) {
+      if (ke.key === "ArrowDown") {
+        e.preventDefault();
+        e.stopPropagation();
+        if (actionPickerItems.length) {
+          actionPickerActiveIndex =
+            (actionPickerActiveIndex + 1) % actionPickerItems.length;
+          renderActionPicker();
+        }
+        return;
+      }
+      if (ke.key === "ArrowUp") {
+        e.preventDefault();
+        e.stopPropagation();
+        if (actionPickerItems.length) {
+          actionPickerActiveIndex =
+            (actionPickerActiveIndex - 1 + actionPickerItems.length) %
+            actionPickerItems.length;
+          renderActionPicker();
+        }
+        return;
+      }
+      if (ke.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        closeActionPicker();
+        return;
+      }
+      if (ke.key === "Enter" || ke.key === "Tab") {
+        e.preventDefault();
+        e.stopPropagation();
+        void selectActionPickerItem(actionPickerActiveIndex);
+        return;
+      }
+    }
     if (isPaperPickerOpen()) {
       if (ke.key === "ArrowDown") {
         e.preventDefault();
@@ -7405,7 +7734,8 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
 
   const openReferenceSlashFromMenu = () => {
     if (!item) return;
-    const existingToken = getActiveSlashToken();
+    // Paper picker is now triggered by '@'
+    const existingToken = getActiveAtToken();
     if (!existingToken) {
       const selectionStart =
         typeof inputBox.selectionStart === "number"
@@ -7418,7 +7748,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       const before = inputBox.value.slice(0, selectionStart);
       const after = inputBox.value.slice(selectionEnd);
       const needsLeadingSpace = before.length > 0 && !/\s$/.test(before);
-      const insertion = `${needsLeadingSpace ? " " : ""}/`;
+      const insertion = `${needsLeadingSpace ? " " : ""}@`;
       inputBox.value = `${before}${insertion}${after}`;
       persistDraftInputForCurrentConversation();
       const nextCaret = before.length + insertion.length;

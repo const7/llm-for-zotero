@@ -5,7 +5,7 @@ import type {
   AdvancedModelParams,
   ChatAttachment,
   PaperContextRef,
-} from "../modules/contextPanel/types";
+} from "../shared/types";
 import type { ReasoningConfig as LLMReasoningConfig } from "../utils/llmClient";
 
 export type AgentRequest = {
@@ -26,36 +26,47 @@ export type AgentRequest = {
   advanced?: AdvancedModelParams;
 };
 
+export type AgentPendingActionButton = {
+  id: string;
+  label: string;
+  style?: "primary" | "secondary" | "danger";
+  executionMode?: "immediate" | "edit";
+  submitLabel?: string;
+  backLabel?: string;
+};
+
+type AgentPendingFieldBase = {
+  id: string;
+  visibleForActionIds?: string[];
+  requiredForActionIds?: string[];
+};
+
 export type AgentPendingField =
-  | {
+  | (AgentPendingFieldBase & {
       type: "textarea";
-      id: string;
       label: string;
       value?: string;
       placeholder?: string;
       editorMode?: "plain" | "json";
       spellcheck?: boolean;
-    }
-  | {
+    })
+  | (AgentPendingFieldBase & {
       type: "text";
-      id: string;
       label: string;
       value?: string;
       placeholder?: string;
-    }
-  | {
+    })
+  | (AgentPendingFieldBase & {
       type: "select";
-      id: string;
       label: string;
       value?: string;
       options: Array<{
         id: string;
         label: string;
       }>;
-    }
-  | {
+    })
+  | (AgentPendingFieldBase & {
       type: "review_table";
-      id: string;
       label?: string;
       rows: Array<{
         key: string;
@@ -64,10 +75,9 @@ export type AgentPendingField =
         after: string;
         multiline?: boolean;
       }>;
-    }
-  | {
+    })
+  | (AgentPendingFieldBase & {
       type: "image_gallery";
-      id: string;
       label?: string;
       items: Array<{
         label: string;
@@ -75,10 +85,9 @@ export type AgentPendingField =
         mimeType?: string;
         title?: string;
       }>;
-    }
-  | {
+    })
+  | (AgentPendingFieldBase & {
       type: "checklist";
-      id: string;
       label: string;
       items: Array<{
         id: string;
@@ -86,10 +95,9 @@ export type AgentPendingField =
         description?: string;
         checked?: boolean;
       }>;
-    }
-  | {
+    })
+  | (AgentPendingFieldBase & {
       type: "assignment_table";
-      id: string;
       label: string;
       options: Array<{
         id: string;
@@ -102,10 +110,9 @@ export type AgentPendingField =
         value?: string;
         checked?: boolean;
       }>;
-    }
-  | {
+    })
+  | (AgentPendingFieldBase & {
       type: "tag_assignment_table";
-      id: string;
       label: string;
       rows: Array<{
         id: string;
@@ -114,20 +121,49 @@ export type AgentPendingField =
         value?: string | string[];
         placeholder?: string;
       }>;
-    };
+    })
+  | (AgentPendingFieldBase & {
+      type: "paper_result_list";
+      label: string;
+      rows: Array<{
+        id: string;
+        title: string;
+        subtitle?: string;
+        body?: string;
+        badges?: string[];
+        href?: string;
+        importIdentifier?: string;
+        checked?: boolean;
+      }>;
+      minSelectedByAction?: Array<{
+        actionId: string;
+        min: number;
+      }>;
+    });
 
 export type AgentPendingAction = {
   toolName: string;
   title: string;
+  mode?: "approval" | "review";
   confirmLabel: string;
   cancelLabel: string;
   description?: string;
   fields: AgentPendingField[];
+  actions?: AgentPendingActionButton[];
+  defaultActionId?: string;
+  cancelActionId?: string;
 };
 
 export type AgentConfirmationResolution = {
   approved: boolean;
+  actionId?: string;
   data?: unknown;
+};
+
+export type AgentInheritedApproval = {
+  sourceToolName: string;
+  sourceActionId: string;
+  sourceMode?: "approval" | "review";
 };
 
 export type ToolSpec = {
@@ -136,22 +172,6 @@ export type ToolSpec = {
   inputSchema: object;
   mutability: "read" | "write";
   requiresConfirmation: boolean;
-};
-
-export type ResourceSpec = {
-  name: string;
-  description: string;
-  uri: string;
-};
-
-export type PromptSpec = {
-  name: string;
-  description: string;
-  arguments?: Array<{
-    name: string;
-    description: string;
-    required?: boolean;
-  }>;
 };
 
 export type AgentEvent =
@@ -183,6 +203,7 @@ export type AgentEvent =
       type: "confirmation_resolved";
       requestId: string;
       approved: boolean;
+      actionId?: string;
       data?: unknown;
     }
   | { type: "message_delta"; text: string }
@@ -345,6 +366,32 @@ export type AgentToolResult = {
   artifacts?: AgentToolArtifact[];
 };
 
+export type AgentToolReviewResolution =
+  | {
+      kind: "deliver";
+      toolMessageContent?: unknown;
+      followupMessages?: AgentModelMessage[];
+    }
+  | {
+      kind: "stop";
+      finalText: string;
+    }
+  | {
+      kind: "invoke_tool";
+      call: {
+        name: string;
+        arguments: unknown;
+        inheritedApproval?: AgentInheritedApproval;
+      };
+      terminalText?:
+        | {
+            onSuccess: string;
+            onDenied: string;
+            onError: string;
+          }
+        | undefined;
+    };
+
 export type AgentToolExecutionOutput<TResult = unknown> =
   | TResult
   | {
@@ -382,7 +429,8 @@ export type AgentToolPresentationSummary =
 
 /**
  * A single result card rendered below a tool's success row in the agent trace.
- * Used by tools that return a list of structured items (e.g. online paper search).
+ * This path is display-only. Interactive review/approval flows should use
+ * `createPendingAction` or `createResultReviewAction` instead.
  */
 export type AgentToolResultCard = {
   title: string;
@@ -391,10 +439,8 @@ export type AgentToolResultCard = {
   badges?: string[];
   href?: string;
   /**
-   * An identifier Zotero can use to import this paper into the library.
-   * - Bare DOI string (e.g. `"10.1073/pnas.2500077122"`)
-   * - arXiv ID prefixed with `"arxiv:"` (e.g. `"arxiv:2301.12345"`)
-   * When present, the card list renders with checkboxes and an "Add to Zotero" button.
+   * Optional identifier shown for context. Result-card rendering is read-only;
+   * use review cards for any import workflow.
    */
   importIdentifier?: string;
 };
@@ -415,16 +461,14 @@ export type AgentToolPresentation = {
     request?: AgentTraceRequestSummary;
   }) => AgentTraceChip[];
   /**
-   * When provided, the agent trace renders a card list below the tool's
-   * success row.  Return `null` or an empty array to suppress cards.
+   * When provided, the agent trace renders a read-only card list below the
+   * tool's success row. Return `null` or an empty array to suppress cards.
    */
   buildResultCards?: (content: unknown) => AgentToolResultCard[] | null;
 };
 
 export type AgentToolDefinition<TInput = unknown, TResult = unknown> = {
   spec: ToolSpec;
-  /** When set, the tool is only included in the tool list when this returns true. */
-  condition?: (request: AgentRuntimeRequest) => boolean;
   guidance?: AgentToolGuidance;
   presentation?: AgentToolPresentation;
   validate: (args: unknown) => AgentToolInputValidation<TInput>;
@@ -434,6 +478,11 @@ export type AgentToolDefinition<TInput = unknown, TResult = unknown> = {
   ) => Promise<AgentToolExecutionOutput<TResult>>;
   shouldRequireConfirmation?: (
     input: TInput,
+    context: AgentToolContext,
+  ) => boolean | Promise<boolean>;
+  acceptInheritedApproval?: (
+    input: TInput,
+    approval: AgentInheritedApproval,
     context: AgentToolContext,
   ) => boolean | Promise<boolean>;
   createPendingAction?: (
@@ -449,27 +498,40 @@ export type AgentToolDefinition<TInput = unknown, TResult = unknown> = {
     result: AgentToolResult,
     context: AgentToolContext,
   ) => Promise<AgentModelMessage | null>;
+  createResultReviewAction?: (
+    input: TInput,
+    result: AgentToolResult,
+    context: AgentToolContext,
+  ) => AgentPendingAction | null | Promise<AgentPendingAction | null>;
+  resolveResultReview?: (
+    input: TInput,
+    result: AgentToolResult,
+    resolution: AgentConfirmationResolution,
+    context: AgentToolContext,
+  ) => AgentToolReviewResolution | Promise<AgentToolReviewResolution>;
 };
 
-export type AgentResourceDefinition<TValue = unknown> = {
-  spec: ResourceSpec;
-  read: (context: AgentToolContext) => Promise<TValue>;
+export type PreparedToolExecutionResult = {
+  tool: AgentToolDefinition<any, any>;
+  input: unknown;
+  result: AgentToolResult;
 };
 
-export type AgentPromptDefinition<TArgs = unknown> = {
-  spec: PromptSpec;
-  render: (args: TArgs, context: AgentToolContext) => Promise<string>;
+export type PreparedToolExecutionOptions = {
+  inheritedApproval?: AgentInheritedApproval;
 };
 
 export type PreparedToolExecution =
   | {
       kind: "result";
-      result: AgentToolResult;
+      execution: PreparedToolExecutionResult;
     }
   | {
       kind: "confirmation";
       requestId: string;
       action: AgentPendingAction;
-      execute: (resolutionData?: unknown) => Promise<AgentToolResult>;
-      deny: (resolutionData?: unknown) => AgentToolResult;
+      execute: (
+        resolutionData?: unknown,
+      ) => Promise<PreparedToolExecutionResult>;
+      deny: (resolutionData?: unknown) => PreparedToolExecutionResult;
     };

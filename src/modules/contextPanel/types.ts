@@ -1,6 +1,24 @@
 import type { ReasoningLevel as LLMReasoningLevel } from "../../utils/llmClient";
+import type {
+  SelectedTextSource,
+  ChatAttachmentCategory,
+  ChatAttachment,
+  AdvancedModelParams,
+  PaperContextRef,
+  GlobalConversationSummary,
+  PaperConversationSummary,
+} from "../../shared/types";
 
-export type SelectedTextSource = "pdf" | "model";
+export type {
+  SelectedTextSource,
+  ChatAttachmentCategory,
+  ChatAttachment,
+  AdvancedModelParams,
+  PaperContextRef,
+  GlobalConversationSummary,
+  PaperConversationSummary,
+} from "../../shared/types";
+
 export type SelectedTextContext = {
   text: string;
   source: SelectedTextSource;
@@ -67,11 +85,6 @@ export type ActionDropdownSpec = {
   menuClassName: string;
   disabled?: boolean;
 };
-export type AdvancedModelParams = {
-  temperature: number;
-  maxTokens: number;
-  inputTokenCap?: number;
-};
 export type CustomShortcut = {
   id: string;
   label: string;
@@ -80,26 +93,6 @@ export type CustomShortcut = {
 export type ResolvedContextSource = {
   contextItem: Zotero.Item | null;
   statusText: string;
-};
-
-export type ChatAttachmentCategory =
-  | "image"
-  | "pdf"
-  | "markdown"
-  | "code"
-  | "text"
-  | "file";
-
-export type ChatAttachment = {
-  id: string;
-  name: string;
-  mimeType: string;
-  sizeBytes: number;
-  category: ChatAttachmentCategory;
-  imageDataUrl?: string;
-  textContent?: string;
-  storedPath?: string;
-  contentHash?: string;
 };
 
 export type PdfContext = {
@@ -113,16 +106,6 @@ export type PdfContext = {
   embeddings?: number[][];
   embeddingPromise?: Promise<number[][] | null>;
   embeddingFailed?: boolean;
-};
-
-export type PaperContextRef = {
-  itemId: number;
-  contextItemId: number;
-  citationKey?: string;
-  title: string;
-  attachmentTitle?: string;
-  firstCreator?: string;
-  year?: string;
 };
 
 export type PdfChunkKind =
@@ -196,26 +179,6 @@ export type MultiContextPlan = {
   selectedPaperCount: number;
   selectedChunkCount: number;
   assistantInstruction?: string;
-};
-
-export type GlobalConversationSummary = {
-  conversationKey: number;
-  libraryID: number;
-  createdAt: number;
-  title?: string;
-  lastActivityAt: number;
-  userTurnCount: number;
-};
-
-export type PaperConversationSummary = {
-  conversationKey: number;
-  libraryID: number;
-  paperItemID: number;
-  sessionVersion: number;
-  createdAt: number;
-  title?: string;
-  lastActivityAt: number;
-  userTurnCount: number;
 };
 
 export type GlobalPortalItem = {

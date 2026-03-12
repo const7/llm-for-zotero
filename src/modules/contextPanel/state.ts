@@ -8,8 +8,6 @@ import type {
   PaperContextRef,
   ChatRuntimeMode,
 } from "./types";
-import type { AgentRunEventRecord } from "../../agent/types";
-
 // =============================================================================
 // Module State
 // =============================================================================
@@ -111,9 +109,6 @@ export const pinnedImageKeys = new Map<number, Set<string>>();
 export const pinnedFileKeys = new Map<number, Set<string>>();
 export const pinnedPaperKeys = new Map<number, Set<string>>();
 export const recentReaderSelectionCache = new Map<number, string>();
-export const agentRunTraceCache = new Map<string, AgentRunEventRecord[]>();
-export const agentRunTraceLoadingTasks = new Map<string, Promise<void>>();
-export const agentReasoningExpandedCache = new Map<string, boolean>();
 
 export const activePaperConversationByPaper = new Map<string, number>();
 

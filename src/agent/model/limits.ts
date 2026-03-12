@@ -1,8 +1,8 @@
-export const MAX_AGENT_ROUNDS = 6;
-export const MAX_AGENT_TOOL_CALLS_PER_ROUND = 4;
+export const MAX_AGENT_ROUNDS = 8;
+export const MAX_AGENT_TOOL_CALLS_PER_ROUND = 6;
 
-export const MAX_BULK_AGENT_ROUNDS = 12;
-export const MAX_BULK_TOOL_CALLS_PER_ROUND = 6;
+export const MAX_BULK_AGENT_ROUNDS = 16;
+export const MAX_BULK_TOOL_CALLS_PER_ROUND = 8;
 
 /**
  * Returns agent loop limits scaled to whether the request is a bulk

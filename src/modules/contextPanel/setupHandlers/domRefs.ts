@@ -58,6 +58,9 @@ export type PanelDomRefs = {
   paperPreviewList: HTMLDivElement | null;
   paperPicker: HTMLDivElement | null;
   paperPickerList: HTMLDivElement | null;
+  actionPicker: HTMLDivElement | null;
+  actionPickerList: HTMLDivElement | null;
+  actionHitlPanel: HTMLDivElement | null;
   responseMenu: HTMLDivElement | null;
   responseMenuCopyBtn: HTMLButtonElement | null;
   responseMenuNoteBtn: HTMLButtonElement | null;
@@ -232,6 +235,15 @@ export function getPanelDomRefs(body: Element): PanelDomRefs {
     ) as HTMLDivElement | null,
     paperPickerList: body.querySelector(
       "#llm-paper-picker-list",
+    ) as HTMLDivElement | null,
+    actionPicker: body.querySelector(
+      "#llm-action-picker",
+    ) as HTMLDivElement | null,
+    actionPickerList: body.querySelector(
+      "#llm-action-picker-list",
+    ) as HTMLDivElement | null,
+    actionHitlPanel: body.querySelector(
+      "#llm-action-hitl-panel",
     ) as HTMLDivElement | null,
     responseMenu: body.querySelector(
       "#llm-response-menu",

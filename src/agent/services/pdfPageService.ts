@@ -6,7 +6,7 @@ import { getActiveReaderForSelectedTab } from "../../modules/contextPanel/contex
 import type {
   ChatAttachment,
   PaperContextRef,
-} from "../../modules/contextPanel/types";
+} from "../../shared/types";
 import { warmPageTextCache } from "../../modules/contextPanel/livePdfSelectionLocator";
 import type { AgentRuntimeRequest, AgentToolArtifact } from "../types";
 import { PdfService, resolveContextItemFromPaperContext } from "./pdfService";

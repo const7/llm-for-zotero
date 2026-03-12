@@ -1,4 +1,4 @@
-import { getAgentRuntime, getSharedZoteroGateway } from "../../../agent";
+import { getAgentRuntime } from "../../../agent";
 import { renderMarkdown } from "../../../utils/markdown";
 import type {
   AgentPendingAction,
@@ -16,7 +16,7 @@ import {
   normalizePaperContextRefs,
   normalizeSelectedTextSources,
 } from "../normalizers";
-import { agentReasoningExpandedCache } from "../state";
+import { agentReasoningExpandedCache } from "../agentState";
 
 type AgentTraceSummaryKind = "plan" | "tool" | "ok" | "skip" | "done";
 
@@ -82,7 +82,7 @@ function normalizePaperContexts(paperContexts: unknown): PaperContextRef[] {
   return normalizePaperContextRefs(paperContexts, { sanitizeText });
 }
 
-function getPendingWriteConfirmation(
+function getPendingConfirmation(
   events: AgentRunEventRecord[],
 ): { requestId: string; action: AgentPendingAction } | null {
   const pending = new Map<string, AgentPendingAction>();
@@ -665,19 +665,16 @@ function renderTagAssignmentTableField(
 }
 
 /**
- * Renders a list of result cards in a HITL-style container.
- * When any card has an `importIdentifier`, the list becomes selectable
- * and shows an "Add to Zotero" button that imports checked papers.
+ * Renders a read-only list of result cards below a tool trace row.
+ * Interactive workflows should use review cards instead.
  */
 function renderResultCardList(
   doc: Document,
   cards: AgentToolResultCard[],
 ): HTMLDivElement {
-  const hasImport = cards.some((c) => Boolean(c.importIdentifier));
   const container = doc.createElement("div");
-  container.className = hasImport
-    ? "llm-agent-hitl-card llm-search-results"
-    : "llm-agent-hitl-card llm-search-results llm-search-results-readonly";
+  container.className =
+    "llm-agent-hitl-card llm-search-results llm-search-results-readonly";
 
   const header = doc.createElement("div");
   header.className = "llm-agent-hitl-header";
@@ -688,32 +685,9 @@ function renderResultCardList(
   list.className = "llm-search-results-list";
   container.appendChild(list);
 
-  const checkboxes: HTMLInputElement[] = [];
-
-  const updateImportButton = () => {
-    if (!hasImport) return;
-    const count = checkboxes.filter((cb) => cb.checked).length;
-    importBtn.textContent =
-      count > 0 ? `Add ${count} to Zotero` : "Select papers to add";
-    importBtn.disabled = count === 0;
-  };
-
   for (const card of cards) {
-    const row = doc.createElement(hasImport ? "label" : "div");
+    const row = doc.createElement("div");
     row.className = "llm-search-results-item";
-
-    if (hasImport) {
-      const checkboxWrap = doc.createElement("div");
-      checkboxWrap.className = "llm-search-results-checkbox-wrap";
-      const checkbox = doc.createElement("input");
-      checkbox.type = "checkbox";
-      checkbox.className = "llm-search-results-checkbox";
-      checkbox.disabled = !card.importIdentifier;
-      checkbox.addEventListener("change", updateImportButton);
-      checkboxes.push(checkbox);
-      checkboxWrap.appendChild(checkbox);
-      row.appendChild(checkboxWrap);
-    }
 
     const content = doc.createElement("div");
     content.className = "llm-search-results-content";
@@ -774,81 +748,290 @@ function renderResultCardList(
     row.appendChild(content);
     list.appendChild(row);
   }
-
-  if (!hasImport) return container;
-
-  // ── Import action row ─────────────────────────────────────────────────────
-  const actions = doc.createElement("div");
-  actions.className = "llm-agent-hitl-actions";
-
-  const importBtn = doc.createElement("button");
-  importBtn.type = "button";
-  importBtn.className = "llm-agent-hitl-btn";
-  importBtn.textContent = "Select papers to add";
-  importBtn.disabled = true;
-
-  const selectAllBtn = doc.createElement("button");
-  selectAllBtn.type = "button";
-  selectAllBtn.className = "llm-agent-hitl-btn llm-agent-hitl-btn-alt";
-  selectAllBtn.textContent = "Select all";
-  selectAllBtn.addEventListener("click", () => {
-    for (const cb of checkboxes) {
-      if (!cb.disabled) cb.checked = true;
-    }
-    updateImportButton();
-  });
-
-  const clearBtn = doc.createElement("button");
-  clearBtn.type = "button";
-  clearBtn.className = "llm-agent-hitl-btn llm-agent-hitl-btn-secondary";
-  clearBtn.textContent = "Clear";
-  clearBtn.addEventListener("click", () => {
-    for (const cb of checkboxes) cb.checked = false;
-    updateImportButton();
-  });
-
-  const setAllDisabled = (disabled: boolean) => {
-    importBtn.disabled = disabled;
-    selectAllBtn.disabled = disabled;
-    clearBtn.disabled = disabled;
-    for (const cb of checkboxes) cb.disabled = disabled;
-  };
-
-  importBtn.addEventListener("click", () => {
-    const identifiers = cards
-      .filter((_, i) => checkboxes[i]?.checked)
-      .map((c) => c.importIdentifier)
-      .filter((id): id is string => Boolean(id));
-    if (!identifiers.length) return;
-
-    setAllDisabled(true);
-    importBtn.disabled = true;
-    importBtn.textContent = `Adding ${identifiers.length} paper${identifiers.length === 1 ? "" : "s"}…`;
-
-    getSharedZoteroGateway()
-      .importPapersByIdentifiers(identifiers)
-      .then(({ succeeded, failed }) => {
-        if (succeeded === 0) {
-          importBtn.textContent = `Could not import ${failed} paper${failed === 1 ? "" : "s"}`;
-          setAllDisabled(false);
-        } else if (failed > 0) {
-          importBtn.textContent = `✓ Added ${succeeded} · ${failed} failed`;
-        } else {
-          importBtn.textContent = `✓ Added ${succeeded} to Zotero`;
-        }
-      })
-      .catch(() => {
-        importBtn.textContent = "Import failed — try again";
-        setAllDisabled(false);
-      });
-  });
-
-  actions.append(importBtn, selectAllBtn, clearBtn);
-  container.appendChild(actions);
   return container;
 }
 
-function renderPendingWriteActionCard(
+function renderPaperResultListField(
+  doc: Document,
+  field: Extract<AgentPendingField, { type: "paper_result_list" }>,
+): {
+  element: HTMLDivElement;
+  accessor: {
+    id: string;
+    getValue: () => string[];
+    setDisabled: (disabled: boolean) => void;
+    isValid: () => boolean;
+    bindValidity: (callback: () => void) => void;
+  };
+} {
+  const container = doc.createElement("div");
+  container.className = "llm-search-results";
+
+  const toolbar = doc.createElement("div");
+  toolbar.className = "llm-agent-hitl-checklist-toolbar";
+  container.appendChild(toolbar);
+
+  const list = doc.createElement("div");
+  list.className = "llm-search-results-list";
+  container.appendChild(list);
+
+  const listeners: Array<() => void> = [];
+  const emitValidityChange = () => {
+    for (const listener of listeners) {
+      listener();
+    }
+  };
+  const checkboxes: HTMLInputElement[] = [];
+  let selectAllButton: HTMLButtonElement | null = null;
+  let deselectAllButton: HTMLButtonElement | null = null;
+
+  selectAllButton = doc.createElement("button");
+  selectAllButton.type = "button";
+  selectAllButton.className = "llm-agent-hitl-btn llm-agent-hitl-btn-alt";
+  selectAllButton.textContent = "Select all";
+  selectAllButton.addEventListener("click", () => {
+    for (const checkbox of checkboxes) {
+      checkbox.checked = true;
+    }
+    emitValidityChange();
+  });
+  toolbar.appendChild(selectAllButton);
+
+  deselectAllButton = doc.createElement("button");
+  deselectAllButton.type = "button";
+  deselectAllButton.className = "llm-agent-hitl-btn llm-agent-hitl-btn-secondary";
+  deselectAllButton.textContent = "Deselect all";
+  deselectAllButton.addEventListener("click", () => {
+    for (const checkbox of checkboxes) {
+      checkbox.checked = false;
+    }
+    emitValidityChange();
+  });
+  toolbar.appendChild(deselectAllButton);
+
+  for (const rowData of field.rows) {
+    const row = doc.createElement("label");
+    row.className = "llm-search-results-item";
+
+    const checkboxWrap = doc.createElement("div");
+    checkboxWrap.className = "llm-search-results-checkbox-wrap";
+    const checkbox = doc.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.className = "llm-search-results-checkbox";
+    checkbox.checked = rowData.checked !== false;
+    checkbox.addEventListener("change", emitValidityChange);
+    checkboxWrap.appendChild(checkbox);
+    row.appendChild(checkboxWrap);
+    checkboxes.push(checkbox);
+
+    const content = doc.createElement("div");
+    content.className = "llm-search-results-content";
+
+    const titleRow = doc.createElement("div");
+    titleRow.className = "llm-search-results-title-row";
+
+    const titleEl = doc.createElement("span");
+    titleEl.className = "llm-search-results-title";
+    titleEl.textContent = rowData.title;
+    titleRow.appendChild(titleEl);
+
+    if (rowData.href) {
+      const openBtn = doc.createElement("a");
+      openBtn.className = "llm-search-results-open";
+      openBtn.textContent = "Open ↗";
+      openBtn.href = rowData.href;
+      openBtn.addEventListener("click", (event) => {
+        event.preventDefault();
+        try {
+          const launch = (Zotero as unknown as { launchURL?: (url: string) => void })
+            .launchURL;
+          if (typeof launch === "function") launch(rowData.href!);
+        } catch {
+          /* ignore */
+        }
+      });
+      titleRow.appendChild(openBtn);
+    }
+    content.appendChild(titleRow);
+
+    if (rowData.subtitle) {
+      const subtitleEl = doc.createElement("div");
+      subtitleEl.className = "llm-search-results-subtitle";
+      subtitleEl.textContent = rowData.subtitle;
+      content.appendChild(subtitleEl);
+    }
+
+    if (rowData.body) {
+      const bodyEl = doc.createElement("div");
+      bodyEl.className = "llm-search-results-body";
+      bodyEl.textContent = rowData.body;
+      content.appendChild(bodyEl);
+    }
+
+    if (rowData.badges?.length) {
+      const badgeRow = doc.createElement("div");
+      badgeRow.className = "llm-search-results-badges";
+      for (const badge of rowData.badges) {
+        const badgeEl = doc.createElement("span");
+        badgeEl.className = "llm-agent-hitl-badge";
+        badgeEl.textContent = badge;
+        badgeRow.appendChild(badgeEl);
+      }
+      content.appendChild(badgeRow);
+    }
+
+    row.appendChild(content);
+    list.appendChild(row);
+  }
+
+  const getSelectedIds = () =>
+    field.rows
+      .filter((_row, index) => checkboxes[index]?.checked)
+      .map((row) => row.id);
+
+  return {
+    element: container,
+    accessor: {
+      id: field.id,
+      getValue: () => getSelectedIds(),
+      setDisabled: (disabled) => {
+        for (const checkbox of checkboxes) {
+          checkbox.disabled = disabled;
+        }
+        if (selectAllButton) {
+          selectAllButton.disabled = disabled;
+        }
+        if (deselectAllButton) {
+          deselectAllButton.disabled = disabled;
+        }
+      },
+      isValid: () => getSelectedIds().length > 0,
+      bindValidity: (callback) => {
+        listeners.push(callback);
+      },
+    },
+  };
+}
+
+function normalizePendingActions(action: AgentPendingAction) {
+  const provided =
+    Array.isArray(action.actions) && action.actions.length > 0
+      ? action.actions
+      : [
+          {
+            id: "confirm",
+            label: action.confirmLabel || "Apply",
+            style: "primary" as const,
+          },
+          {
+            id: "cancel",
+            label: action.cancelLabel || "Cancel",
+            style: "secondary" as const,
+          },
+        ];
+  const cancelActionId =
+    action.cancelActionId && provided.some((entry) => entry.id === action.cancelActionId)
+      ? action.cancelActionId
+      : provided.find((entry) => entry.id === "cancel")?.id || provided[provided.length - 1]?.id;
+  const primaryActions = provided.filter((entry) => entry.id !== cancelActionId);
+  const defaultActionId =
+    action.defaultActionId && primaryActions.some((entry) => entry.id === action.defaultActionId)
+      ? action.defaultActionId
+      : primaryActions[0]?.id || cancelActionId;
+  return {
+    actions: provided,
+    primaryActions,
+    cancelAction: provided.find((entry) => entry.id === cancelActionId) || null,
+    defaultActionId,
+    cancelActionId,
+  };
+}
+
+function isDeferredActionField(field: AgentPendingField): boolean {
+  return (
+    field.type === "textarea" ||
+    field.type === "text" ||
+    field.type === "select" ||
+    field.type === "assignment_table" ||
+    field.type === "tag_assignment_table"
+  );
+}
+
+function getPendingActionButton(
+  action: AgentPendingAction,
+  actionId: string,
+) {
+  return normalizePendingActions(action).actions.find((entry) => entry.id === actionId) || null;
+}
+
+function getPendingActionExecutionMode(
+  action: AgentPendingAction,
+  actionId: string,
+): "immediate" | "edit" {
+  const button = getPendingActionButton(action, actionId);
+  if (button?.executionMode) {
+    return button.executionMode;
+  }
+  return action.fields.some((field) => {
+    const isScoped =
+      Boolean(field.visibleForActionIds?.length) ||
+      Boolean(field.requiredForActionIds?.length);
+    if (!isScoped || !isDeferredActionField(field)) {
+      return false;
+    }
+    const visibleForAction =
+      !field.visibleForActionIds?.length || field.visibleForActionIds.includes(actionId);
+    const requiredForAction = field.requiredForActionIds?.includes(actionId) || false;
+    return visibleForAction || requiredForAction;
+  })
+    ? "edit"
+    : "immediate";
+}
+
+export function getPendingActionButtonLayout(action: AgentPendingAction): {
+  hasActionChooser: boolean;
+  showsFooterExecuteButton: boolean;
+} {
+  const normalizedActions = normalizePendingActions(action);
+  const hasActionChooser = normalizedActions.primaryActions.length > 1;
+  return {
+    hasActionChooser,
+    showsFooterExecuteButton:
+      !hasActionChooser ||
+      normalizedActions.primaryActions.some(
+        (entry) => getPendingActionExecutionMode(action, entry.id) === "edit",
+      ),
+  };
+}
+
+function isFieldVisibleForAction(
+  field: AgentPendingField,
+  actionId: string,
+): boolean {
+  return !field.visibleForActionIds?.length || field.visibleForActionIds.includes(actionId);
+}
+
+function isFieldRequiredForAction(
+  field: AgentPendingField,
+  actionId: string,
+): boolean {
+  if (field.requiredForActionIds?.length) {
+    return field.requiredForActionIds.includes(actionId);
+  }
+  return isFieldVisibleForAction(field, actionId);
+}
+
+function getPaperResultMinSelection(
+  field: Extract<AgentPendingField, { type: "paper_result_list" }>,
+  actionId: string,
+): number {
+  return (
+    field.minSelectedByAction?.find((entry) => entry.actionId === actionId)?.min ||
+    0
+  );
+}
+
+export function renderPendingActionCard(
   doc: Document,
   pending: { requestId: string; action: AgentPendingAction },
 ): HTMLDivElement {
@@ -857,7 +1040,8 @@ function renderPendingWriteActionCard(
 
   const header = doc.createElement("div");
   header.className = "llm-agent-hitl-header";
-  header.textContent = "Action required";
+  header.textContent =
+    pending.action.mode === "review" ? "Review required" : "Action required";
   card.appendChild(header);
 
   const title = doc.createElement("div");
@@ -872,7 +1056,12 @@ function renderPendingWriteActionCard(
     card.appendChild(description);
   }
 
+  const normalizedActions = normalizePendingActions(pending.action);
+  const buttonLayout = getPendingActionButtonLayout(pending.action);
+  let activeActionId = normalizedActions.defaultActionId;
   const fieldAccessors: Array<{
+    field: AgentPendingField;
+    container: HTMLElement;
     id: string;
     getValue: () => unknown;
     setDisabled: (disabled: boolean) => void;
@@ -881,11 +1070,13 @@ function renderPendingWriteActionCard(
   }> = [];
 
   for (const field of pending.action.fields) {
+    const fieldContainer = doc.createElement("div");
+    fieldContainer.className = "llm-agent-hitl-field";
     if (field.type === "textarea") {
       const label = doc.createElement("label");
       label.className = "llm-agent-hitl-label";
       label.textContent = field.label;
-      card.appendChild(label);
+      fieldContainer.appendChild(label);
 
       const textarea = doc.createElement("textarea");
       textarea.className =
@@ -901,8 +1092,10 @@ function renderPendingWriteActionCard(
       };
       resizeTextarea();
       textarea.addEventListener("input", resizeTextarea);
-      card.appendChild(textarea);
+      fieldContainer.appendChild(textarea);
       fieldAccessors.push({
+        field,
+        container: fieldContainer,
         id: field.id,
         getValue: () => textarea.value,
         setDisabled: (disabled) => {
@@ -913,6 +1106,7 @@ function renderPendingWriteActionCard(
           textarea.addEventListener("input", callback);
         },
       });
+      card.appendChild(fieldContainer);
       continue;
     }
 
@@ -920,15 +1114,17 @@ function renderPendingWriteActionCard(
       const label = doc.createElement("label");
       label.className = "llm-agent-hitl-label";
       label.textContent = field.label;
-      card.appendChild(label);
+      fieldContainer.appendChild(label);
 
       const input = doc.createElement("input");
       input.type = "text";
       input.className = "llm-agent-hitl-page-input";
       input.value = field.value || "";
       input.placeholder = field.placeholder || "";
-      card.appendChild(input);
+      fieldContainer.appendChild(input);
       fieldAccessors.push({
+        field,
+        container: fieldContainer,
         id: field.id,
         getValue: () => input.value,
         setDisabled: (disabled) => {
@@ -939,6 +1135,7 @@ function renderPendingWriteActionCard(
           input.addEventListener("input", callback);
         },
       });
+      card.appendChild(fieldContainer);
       continue;
     }
 
@@ -946,7 +1143,7 @@ function renderPendingWriteActionCard(
       const label = doc.createElement("label");
       label.className = "llm-agent-hitl-label";
       label.textContent = field.label;
-      card.appendChild(label);
+      fieldContainer.appendChild(label);
 
       const select = doc.createElement("select");
       select.className = "llm-agent-hitl-page-input";
@@ -957,8 +1154,10 @@ function renderPendingWriteActionCard(
         select.appendChild(optionEl);
       }
       select.value = field.value || field.options[0]?.id || "";
-      card.appendChild(select);
+      fieldContainer.appendChild(select);
       fieldAccessors.push({
+        field,
+        container: fieldContainer,
         id: field.id,
         getValue: () => select.value,
         setDisabled: (disabled) => {
@@ -969,6 +1168,7 @@ function renderPendingWriteActionCard(
           select.addEventListener("change", callback);
         },
       });
+      card.appendChild(fieldContainer);
       continue;
     }
 
@@ -977,9 +1177,18 @@ function renderPendingWriteActionCard(
         const label = doc.createElement("label");
         label.className = "llm-agent-hitl-label";
         label.textContent = field.label;
-        card.appendChild(label);
+        fieldContainer.appendChild(label);
       }
-      card.appendChild(renderReviewTableField(doc, field));
+      fieldContainer.appendChild(renderReviewTableField(doc, field));
+      fieldAccessors.push({
+        field,
+        container: fieldContainer,
+        id: field.id,
+        getValue: () => null,
+        setDisabled: () => undefined,
+        isValid: () => true,
+      });
+      card.appendChild(fieldContainer);
       continue;
     }
 
@@ -988,9 +1197,18 @@ function renderPendingWriteActionCard(
         const label = doc.createElement("label");
         label.className = "llm-agent-hitl-label";
         label.textContent = field.label;
-        card.appendChild(label);
+        fieldContainer.appendChild(label);
       }
-      card.appendChild(renderImageGalleryField(doc, field));
+      fieldContainer.appendChild(renderImageGalleryField(doc, field));
+      fieldAccessors.push({
+        field,
+        container: fieldContainer,
+        id: field.id,
+        getValue: () => null,
+        setDisabled: () => undefined,
+        isValid: () => true,
+      });
+      card.appendChild(fieldContainer);
       continue;
     }
 
@@ -998,10 +1216,15 @@ function renderPendingWriteActionCard(
       const label = doc.createElement("label");
       label.className = "llm-agent-hitl-label";
       label.textContent = field.label;
-      card.appendChild(label);
+      fieldContainer.appendChild(label);
       const rendered = renderChecklistField(doc, field);
-      card.appendChild(rendered.element);
-      fieldAccessors.push(rendered.accessor);
+      fieldContainer.appendChild(rendered.element);
+      fieldAccessors.push({
+        field,
+        container: fieldContainer,
+        ...rendered.accessor,
+      });
+      card.appendChild(fieldContainer);
       continue;
     }
 
@@ -1009,10 +1232,15 @@ function renderPendingWriteActionCard(
       const label = doc.createElement("label");
       label.className = "llm-agent-hitl-label";
       label.textContent = field.label;
-      card.appendChild(label);
+      fieldContainer.appendChild(label);
       const rendered = renderAssignmentTableField(doc, field);
-      card.appendChild(rendered.element);
-      fieldAccessors.push(rendered.accessor);
+      fieldContainer.appendChild(rendered.element);
+      fieldAccessors.push({
+        field,
+        container: fieldContainer,
+        ...rendered.accessor,
+      });
+      card.appendChild(fieldContainer);
       continue;
     }
 
@@ -1020,16 +1248,124 @@ function renderPendingWriteActionCard(
       const label = doc.createElement("label");
       label.className = "llm-agent-hitl-label";
       label.textContent = field.label;
-      card.appendChild(label);
+      fieldContainer.appendChild(label);
       const rendered = renderTagAssignmentTableField(doc, field);
-      card.appendChild(rendered.element);
-      fieldAccessors.push(rendered.accessor);
+      fieldContainer.appendChild(rendered.element);
+      fieldAccessors.push({
+        field,
+        container: fieldContainer,
+        ...rendered.accessor,
+      });
+      card.appendChild(fieldContainer);
+      continue;
     }
+
+    if (field.type === "paper_result_list") {
+      const label = doc.createElement("label");
+      label.className = "llm-agent-hitl-label";
+      label.textContent = field.label;
+      fieldContainer.appendChild(label);
+      const rendered = renderPaperResultListField(doc, field);
+      fieldContainer.appendChild(rendered.element);
+      fieldAccessors.push({
+        field,
+        container: fieldContainer,
+        ...rendered.accessor,
+      });
+      card.appendChild(fieldContainer);
+    }
+  }
+
+  const buttons: HTMLButtonElement[] = [];
+  const isActionValid = (actionId: string) =>
+    fieldAccessors.every((accessor) => isAccessorValidForAction(accessor, actionId));
+  const getActionById = (actionId: string) =>
+    normalizedActions.actions.find((entry) => entry.id === actionId) || null;
+  const actionNeedsSeparateSubmit = (actionId: string) =>
+    getPendingActionExecutionMode(pending.action, actionId) === "edit";
+  const getSeparateSubmitLabel = (actionId: string) => {
+    const actionButton = getActionById(actionId);
+    return actionButton?.submitLabel || actionButton?.label || pending.action.confirmLabel || "Apply";
+  };
+  const getBackLabel = (actionId: string) => {
+    return getActionById(actionId)?.backLabel || "Get back";
+  };
+  const actionNeedsExplicitReview = (actionId: string) =>
+    fieldAccessors.some(({ field }) => {
+      const hasScopedVisibility =
+        Array.isArray(field.visibleForActionIds) &&
+        field.visibleForActionIds.length > 0 &&
+        field.visibleForActionIds.includes(actionId);
+      const hasScopedRequirement =
+        Array.isArray(field.requiredForActionIds) &&
+        field.requiredForActionIds.length > 0 &&
+        field.requiredForActionIds.includes(actionId);
+      return hasScopedVisibility || hasScopedRequirement;
+    });
+  const handleExecute = () => {
+    setButtonsDisabled(true);
+    const payload = Object.fromEntries(
+      fieldAccessors.map((accessor) => [accessor.id, accessor.getValue()]),
+    );
+    getAgentRuntime().resolveConfirmation(pending.requestId, {
+      approved: activeActionId !== normalizedActions.cancelActionId,
+      actionId: activeActionId,
+      data: payload,
+    });
+  };
+  let lastChooserActionId =
+    normalizedActions.primaryActions.find(
+      (action) => !actionNeedsSeparateSubmit(action.id),
+    )?.id || normalizedActions.defaultActionId;
+  let actionChooser: HTMLDivElement | null = null;
+  if (buttonLayout.hasActionChooser) {
+    actionChooser = doc.createElement("div");
+    actionChooser.className = "llm-agent-hitl-action-choices";
+    for (const action of normalizedActions.primaryActions) {
+      const actionButton = doc.createElement("button");
+      actionButton.type = "button";
+      actionButton.dataset.actionChoice = action.id;
+      actionButton.dataset.primary = action.style === "primary" ? "true" : "false";
+      actionButton.className =
+        action.id === activeActionId
+          ? "llm-agent-hitl-btn llm-agent-hitl-btn-active"
+          : action.style === "primary"
+            ? "llm-agent-hitl-btn"
+            : "llm-agent-hitl-btn llm-agent-hitl-btn-secondary";
+      actionButton.textContent = action.label;
+      actionButton.addEventListener("click", () => {
+        const nextActionNeedsSeparateSubmit = actionNeedsSeparateSubmit(action.id);
+        if (activeActionId === action.id) {
+          if (!nextActionNeedsSeparateSubmit && isActionValid(action.id)) {
+            handleExecute();
+          }
+          return;
+        }
+        if (!nextActionNeedsSeparateSubmit) {
+          lastChooserActionId = action.id;
+        } else if (!actionNeedsSeparateSubmit(activeActionId)) {
+          lastChooserActionId = activeActionId;
+        }
+        activeActionId = action.id;
+        syncActionUi();
+        if (
+          !actionNeedsExplicitReview(action.id) &&
+          !nextActionNeedsSeparateSubmit &&
+          isActionValid(action.id)
+        ) {
+          handleExecute();
+        }
+      });
+      buttons.push(actionButton);
+      actionChooser.appendChild(actionButton);
+    }
+    card.appendChild(actionChooser);
   }
 
   const actionRow = doc.createElement("div");
   actionRow.className = "llm-agent-hitl-actions";
-  const buttons: HTMLButtonElement[] = [];
+  let executeButton: HTMLButtonElement | null = null;
+  let backButton: HTMLButtonElement | null = null;
   const setButtonsDisabled = (disabled: boolean) => {
     for (const accessor of fieldAccessors) {
       accessor.setDisabled(disabled);
@@ -1040,48 +1376,112 @@ function renderPendingWriteActionCard(
       }
     }
   };
-  const syncConfirmButton = () => {
-    const isValid = fieldAccessors.every((accessor) => accessor.isValid());
+  const isAccessorValidForAction = (
+    accessor: (typeof fieldAccessors)[number],
+    actionId: string,
+  ) => {
+    if (!isFieldRequiredForAction(accessor.field, actionId)) {
+      return true;
+    }
+    if (accessor.field.type === "paper_result_list") {
+      const selectedCount = Array.isArray(accessor.getValue())
+        ? (accessor.getValue() as unknown[]).length
+        : 0;
+      return selectedCount >= getPaperResultMinSelection(accessor.field, actionId);
+    }
+    return accessor.isValid();
+  };
+  const syncActionUi = () => {
+    const isSeparateSubmitMode =
+      buttonLayout.hasActionChooser && actionNeedsSeparateSubmit(activeActionId);
+    for (const accessor of fieldAccessors) {
+      accessor.container.hidden = !isFieldVisibleForAction(accessor.field, activeActionId);
+    }
+    const activeAction = getActionById(activeActionId);
+    if (actionChooser) {
+      actionChooser.hidden = isSeparateSubmitMode;
+    }
+    if (executeButton) {
+      executeButton.hidden =
+        !buttonLayout.showsFooterExecuteButton ||
+        (buttonLayout.hasActionChooser && !isSeparateSubmitMode);
+      executeButton.textContent = isSeparateSubmitMode
+        ? getSeparateSubmitLabel(activeActionId)
+        : activeAction?.label || pending.action.confirmLabel || "Apply";
+    }
+    if (backButton) {
+      backButton.hidden = !isSeparateSubmitMode;
+      backButton.textContent = getBackLabel(activeActionId);
+    }
     for (const button of buttons) {
-      if (button.dataset.kind === "save") {
-        button.disabled = !isValid;
+      if (button.dataset.actionChoice) {
+        const isActive = button.dataset.actionChoice === activeActionId;
+        button.className = isActive
+          ? "llm-agent-hitl-btn llm-agent-hitl-btn-active"
+          : button.dataset.primary === "true"
+            ? "llm-agent-hitl-btn"
+            : "llm-agent-hitl-btn llm-agent-hitl-btn-secondary";
       }
     }
+    syncConfirmButton();
   };
-  const handleSave = () => {
-    setButtonsDisabled(true);
-    const payload = Object.fromEntries(
-      fieldAccessors.map((accessor) => [accessor.id, accessor.getValue()]),
-    );
-    getAgentRuntime().resolveConfirmation(pending.requestId, true, payload);
+  const syncConfirmButton = () => {
+    const isValid = isActionValid(activeActionId);
+    if (executeButton) {
+      executeButton.disabled = !isValid;
+    }
   };
+  if (buttonLayout.showsFooterExecuteButton) {
+    executeButton = doc.createElement("button");
+    executeButton.type = "button";
+    executeButton.dataset.kind = "save";
+    executeButton.className = "llm-agent-hitl-btn";
+    executeButton.textContent = pending.action.confirmLabel || "Apply";
+    executeButton.addEventListener("click", () => {
+      handleExecute();
+    });
+    buttons.push(executeButton);
+    actionRow.appendChild(executeButton);
+  }
 
-  const saveButton = doc.createElement("button");
-  saveButton.type = "button";
-  saveButton.dataset.kind = "save";
-  saveButton.className = "llm-agent-hitl-btn";
-  saveButton.textContent = pending.action.confirmLabel || "Apply";
-  saveButton.addEventListener("click", () => {
-    handleSave();
-  });
-  buttons.push(saveButton);
-  actionRow.appendChild(saveButton);
+  if (buttonLayout.hasActionChooser) {
+    backButton = doc.createElement("button");
+    backButton.type = "button";
+    backButton.dataset.kind = "back";
+    backButton.className = "llm-agent-hitl-btn llm-agent-hitl-btn-secondary";
+    backButton.textContent = getBackLabel(activeActionId);
+    backButton.hidden = true;
+    backButton.addEventListener("click", () => {
+      activeActionId = lastChooserActionId;
+      syncActionUi();
+    });
+    buttons.push(backButton);
+    actionRow.appendChild(backButton);
+  }
 
-  const cancelButton = doc.createElement("button");
-  cancelButton.type = "button";
-  cancelButton.dataset.kind = "cancel";
-  cancelButton.className = "llm-agent-hitl-btn llm-agent-hitl-btn-secondary";
-  cancelButton.textContent = pending.action.cancelLabel || "Cancel";
-  cancelButton.addEventListener("click", () => {
-    setButtonsDisabled(true);
-    getAgentRuntime().resolveConfirmation(pending.requestId, false);
-  });
-  buttons.push(cancelButton);
-  actionRow.appendChild(cancelButton);
-  card.appendChild(actionRow);
-  syncConfirmButton();
+  if (normalizedActions.cancelAction) {
+    const cancelButton = doc.createElement("button");
+    cancelButton.type = "button";
+    cancelButton.dataset.kind = "cancel";
+    cancelButton.className = "llm-agent-hitl-btn llm-agent-hitl-btn-secondary";
+    cancelButton.textContent =
+      normalizedActions.cancelAction.label || pending.action.cancelLabel || "Cancel";
+    cancelButton.addEventListener("click", () => {
+      setButtonsDisabled(true);
+      getAgentRuntime().resolveConfirmation(pending.requestId, {
+        approved: false,
+        actionId: normalizedActions.cancelActionId,
+      });
+    });
+    buttons.push(cancelButton);
+    actionRow.appendChild(cancelButton);
+  }
+  if (actionRow.childElementCount > 0) {
+    card.appendChild(actionRow);
+  }
+  syncActionUi();
   for (const accessor of fieldAccessors) {
-    accessor.bindValidity?.(syncConfirmButton);
+    accessor.bindValidity?.(syncActionUi);
   }
 
   return card;
@@ -1311,15 +1711,19 @@ function summarizeAgentTraceToolCall(
 }
 
 function summarizeAgentTraceConfirmationRequest(
-  toolName: string,
+  action: AgentPendingAction,
   request?: AgentTraceRequestSummary,
 ): AgentTraceSummaryRow {
+  const toolName = action.toolName;
   const label = toolLabelFromName(toolName);
   const text =
     resolveToolPresentationSummary(
       getToolDefinition(toolName)?.presentation?.summaries?.onPending,
       { label, request },
-    ) || `Waiting for your approval to continue with ${label}`;
+    ) ||
+    (action.mode === "review"
+      ? `Waiting for your review of ${label}`
+      : `Waiting for your approval to continue with ${label}`);
   return {
     kind: "plan",
     icon: "...",
@@ -1328,11 +1732,16 @@ function summarizeAgentTraceConfirmationRequest(
 }
 
 function summarizeAgentTraceConfirmationResolved(
-  toolName: string,
+  action: AgentPendingAction,
   approved: boolean,
+  actionId: string | undefined,
   request?: AgentTraceRequestSummary,
 ): AgentTraceSummaryRow {
+  const toolName = action.toolName;
   const label = toolLabelFromName(toolName);
+  const selectedActionLabel =
+    action.actions?.find((entry) => entry.id === actionId)?.label ||
+    (approved ? action.confirmLabel : action.cancelLabel);
   const text =
     resolveToolPresentationSummary(
       approved
@@ -1341,8 +1750,12 @@ function summarizeAgentTraceConfirmationResolved(
       { label, request },
     ) ||
     (approved
-      ? `Approval received - continuing with ${label}`
-      : `Cancelled ${label}`);
+      ? action.mode === "review"
+        ? `Review received - selected "${selectedActionLabel}" for ${label}`
+        : `Approval received - continuing with ${label}`
+      : action.mode === "review"
+        ? `Stopped ${label} after review`
+        : `Cancelled ${label}`);
   return {
     kind: approved ? "ok" : "skip",
     icon: approved ? "✓" : "-",
@@ -1448,7 +1861,9 @@ function buildToolFollowUpMessage(
     )} next.`;
   }
   if (nextPayload.type === "confirmation_required") {
-    return "I'm ready for the next action. Review it below and approve if you want me to continue.";
+    return nextPayload.action.mode === "review"
+      ? "I have the result ready. Review it below and choose the next step when you're ready."
+      : "I'm ready for the next action. Review it below and approve if you want me to continue.";
   }
   if (nextPayload.type === "message_delta") {
     return "I have enough grounded information now, so I'm drafting the answer next.";
@@ -1507,7 +1922,7 @@ export function buildAgentTraceDisplayItems(
   const compactedEvents = compactAgentTraceEvents(events);
   const requestChips = buildAgentTraceRequestChips(userMessage);
   const requestSummary = buildAgentTraceRequestSummary(userMessage);
-  const confirmationToolNames = new Map<string, string>();
+  const pendingActions = new Map<string, AgentPendingAction>();
   let announcedReadyToAnswer = false;
   let announcedWriting = false;
 
@@ -1604,41 +2019,49 @@ export function buildAgentTraceDisplayItems(
         break;
       }
       case "confirmation_required":
-        confirmationToolNames.set(
-          entry.payload.requestId,
-          entry.payload.action.toolName,
-        );
+        pendingActions.set(entry.payload.requestId, entry.payload.action);
         items.push({
           type: "message",
-          tone: "warning",
-          text: "I'm ready for the next action, but I need your approval before I continue.",
+          tone: entry.payload.action.mode === "review" ? "neutral" : "warning",
+          text:
+            entry.payload.action.mode === "review"
+              ? "I have the result ready. Review it below and choose what happens next."
+              : "I'm ready for the next action, but I need your approval before I continue.",
         });
         items.push({
           type: "action",
-          row: summarizeAgentTraceConfirmationRequest(
-            entry.payload.action.toolName,
-            requestSummary,
-          ),
+          row: summarizeAgentTraceConfirmationRequest(entry.payload.action, requestSummary),
         });
         break;
       case "confirmation_resolved": {
-        const toolName =
-          confirmationToolNames.get(entry.payload.requestId) || "action";
+        const action = pendingActions.get(entry.payload.requestId) || {
+          toolName: "action",
+          title: "Action",
+          confirmLabel: "Apply",
+          cancelLabel: "Cancel",
+          fields: [],
+        };
+        pendingActions.delete(entry.payload.requestId);
         items.push({
           type: "action",
           row: summarizeAgentTraceConfirmationResolved(
-            toolName,
+            action,
             entry.payload.approved,
+            entry.payload.actionId,
             requestSummary,
           ),
         });
-        items.push({
-          type: "message",
-          tone: entry.payload.approved ? "neutral" : "warning",
-          text: entry.payload.approved
-            ? "Thanks - I'm continuing with that action now."
-            : "No problem - I stopped there.",
-        });
+        if (action.mode !== "review" || entry.payload.approved) {
+          items.push({
+            type: "message",
+            tone: entry.payload.approved ? "neutral" : "warning",
+            text: entry.payload.approved
+              ? action.mode === "review"
+                ? "Thanks - I'm carrying out that reviewed action now."
+                : "Thanks - I'm continuing with that action now."
+              : "No problem - I stopped there.",
+          });
+        }
         break;
       }
       case "message_delta":
@@ -1715,7 +2138,7 @@ export function renderAgentTrace({
     return wrap;
   }
   const processItems = buildAgentTraceDisplayItems(events, userMessage);
-  const pending = getPendingWriteConfirmation(events);
+  const pending = getPendingConfirmation(events);
   const hasFinalResponse = events.some((entry) => entry.payload.type === "final");
   for (const itemEntry of processItems) {
     if (itemEntry.type === "message") {
@@ -1849,7 +2272,7 @@ export function renderAgentTrace({
   }
 
   if (pending) {
-    wrap.appendChild(renderPendingWriteActionCard(doc, pending));
+    wrap.appendChild(renderPendingActionCard(doc, pending));
   }
 
   return wrap;

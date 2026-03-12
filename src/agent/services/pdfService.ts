@@ -3,10 +3,8 @@ import {
 } from "../../modules/contextPanel/pdfContext";
 import { pdfTextCache } from "../../modules/contextPanel/state";
 import { resolvePaperContextRefFromAttachment } from "../../modules/contextPanel/paperAttribution";
-import type {
-  PaperContextRef,
-  PdfContext,
-} from "../../modules/contextPanel/types";
+import type { PaperContextRef } from "../../shared/types";
+import type { PdfContext } from "../../modules/contextPanel/types";
 
 function getFirstPdfChildAttachment(
   item: Zotero.Item | null | undefined,

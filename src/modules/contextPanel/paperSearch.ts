@@ -648,6 +648,44 @@ export function parsePaperSearchSlashToken(
   return null;
 }
 
+/**
+ * Detects an `@token` at or before the caret position.
+ * Mirrors parsePaperSearchSlashToken but uses `@` as the trigger character.
+ * The returned value reuses the PaperSearchSlashToken shape (slashStart refers
+ * to the `@` character position).
+ */
+export function parseAtSearchToken(
+  input: string,
+  caret: number,
+): PaperSearchSlashToken | null {
+  const safeInput = sanitizeText(typeof input === "string" ? input : "");
+  const normalizedCaret = Number.isFinite(caret)
+    ? Math.max(0, Math.min(safeInput.length, Math.floor(caret)))
+    : safeInput.length;
+
+  let atIndex = safeInput.lastIndexOf("@", normalizedCaret - 1);
+  while (atIndex >= 0) {
+    if (atIndex === 0 || /\s/u.test(safeInput[atIndex - 1] || "")) {
+      let tokenEnd = atIndex + 1;
+      while (tokenEnd < safeInput.length && !/\s/u.test(safeInput[tokenEnd] || "")) {
+        tokenEnd += 1;
+      }
+      if (normalizedCaret > tokenEnd) {
+        return null;
+      }
+      return {
+        query: sanitizeText(
+          safeInput.slice(atIndex + 1, Math.min(normalizedCaret, tokenEnd)),
+        ),
+        slashStart: atIndex,
+        caretEnd: normalizedCaret,
+      };
+    }
+    atIndex = safeInput.lastIndexOf("@", atIndex - 1);
+  }
+  return null;
+}
+
 export async function browsePaperCollectionCandidates(
   libraryID: number,
   excludeContextItemId?: number | null,

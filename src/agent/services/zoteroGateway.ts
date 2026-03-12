@@ -16,7 +16,7 @@ import {
 } from "../../modules/contextPanel/contextResolution";
 import { resolvePaperContextRefFromAttachment } from "../../modules/contextPanel/paperAttribution";
 import type { AgentRuntimeRequest } from "../types";
-import type { PaperContextRef } from "../../modules/contextPanel/types";
+import type { PaperContextRef } from "../../shared/types";
 import {
   isGlobalPortalItem,
   isPaperPortalItem,
@@ -529,6 +529,41 @@ export class ZoteroGateway {
       );
   }
 
+  async listLibraryPaperTargets(params: {
+    libraryID: number;
+    limit?: number;
+  }): Promise<{
+    papers: LibraryPaperTarget[];
+    totalCount: number;
+  }> {
+    const libraryID = Number.isFinite(params.libraryID)
+      ? Math.floor(params.libraryID)
+      : 0;
+    if (!libraryID) {
+      throw new Error("No active library available for listing papers");
+    }
+    const candidates = await listLibraryPaperCandidates(libraryID);
+    const papers: LibraryPaperTarget[] = [];
+    for (const candidate of candidates) {
+      const item = this.resolveBibliographicItem(this.getItem(candidate.itemId));
+      if (!item) continue;
+      const target = buildPaperTargetFromItem(item);
+      if (target) {
+        papers.push(target);
+      }
+    }
+    const normalizedLimit = Number.isFinite(params.limit)
+      ? Math.max(1, Math.floor(params.limit as number))
+      : undefined;
+    return {
+      papers:
+        normalizedLimit && papers.length > normalizedLimit
+          ? papers.slice(0, normalizedLimit)
+          : papers,
+      totalCount: papers.length,
+    };
+  }
+
   getPaperTargetsByItemIds(itemIds: number[]): LibraryPaperTarget[] {
     const out: LibraryPaperTarget[] = [];
     const seen = new Set<number>();
@@ -893,7 +928,7 @@ export class ZoteroGateway {
     });
   }
 
-  async moveUnfiledItemsToCollections(params: {
+  async addItemsToCollections(params: {
     assignments: BatchMoveAssignment[];
   }): Promise<{
     selectedCount: number;
@@ -903,14 +938,15 @@ export class ZoteroGateway {
     items: BatchMoveItemResult[];
   }> {
     const normalizedAssignments: BatchMoveAssignment[] = [];
-    const seen = new Set<number>();
+    const seen = new Set<string>();
     for (const entry of params.assignments) {
       const itemId = Number.isFinite(entry.itemId) ? Math.floor(entry.itemId) : 0;
       const targetCollectionId = Number.isFinite(entry.targetCollectionId)
         ? Math.floor(entry.targetCollectionId)
         : 0;
-      if (!itemId || !targetCollectionId || seen.has(itemId)) continue;
-      seen.add(itemId);
+      const key = `${itemId}:${targetCollectionId}`;
+      if (!itemId || !targetCollectionId || seen.has(key)) continue;
+      seen.add(key);
       normalizedAssignments.push({
         itemId,
         targetCollectionId,
@@ -955,15 +991,18 @@ export class ZoteroGateway {
         continue;
       }
       const target = buildPaperTargetFromItem(item);
-      const title = target?.title || normalizeText(item.getDisplayTitle?.()) || `Item ${item.id}`;
-      if (getCollectionIDs(item).length > 0) {
+      const title =
+        target?.title ||
+        normalizeText(item.getDisplayTitle?.()) ||
+        `Item ${item.id}`;
+      if (item.inCollection?.(collection.collectionId)) {
         results.push({
           itemId: item.id,
           title,
           status: "skipped",
           targetCollectionId: collection.collectionId,
           targetCollectionName: collection.path || collection.name,
-          reason: "Paper is no longer unfiled",
+          reason: "Paper is already in this collection",
         });
         continue;
       }
@@ -998,7 +1037,7 @@ export class ZoteroGateway {
     };
   }
 
-  async moveUnfiledItemsToCollection(params: {
+  async addItemsToCollection(params: {
     itemIds: number[];
     targetCollectionId: number;
   }): Promise<{
@@ -1012,7 +1051,7 @@ export class ZoteroGateway {
     if (!collection) {
       throw new Error("Collection not found");
     }
-    const result = await this.moveUnfiledItemsToCollections({
+    const result = await this.addItemsToCollections({
       assignments: params.itemIds.map((itemId) => ({
         itemId,
         targetCollectionId: params.targetCollectionId,
@@ -1439,6 +1478,71 @@ export class ZoteroGateway {
       title: snapshot?.title || `Item ${item.id}`,
       changedFields,
     };
+  }
+
+  async trashItems(params: {
+    itemIds: number[];
+  }): Promise<{
+    trashedCount: number;
+    items: Array<{
+      itemId: number;
+      title: string;
+      status: "trashed" | "skipped" | "error";
+      reason?: string;
+    }>;
+  }> {
+    const items: Array<{
+      itemId: number;
+      title: string;
+      status: "trashed" | "skipped" | "error";
+      reason?: string;
+    }> = [];
+    let trashedCount = 0;
+    const touchedLibraryIDs = new Set<number>();
+    for (const itemId of params.itemIds) {
+      const item = this.getItem(itemId);
+      if (!item) {
+        items.push({ itemId, title: `Item ${itemId}`, status: "skipped", reason: "Item not found" });
+        continue;
+      }
+      const title = String(item.getField?.("title") || `Item ${itemId}`);
+      if (item.deleted) {
+        items.push({ itemId, title, status: "skipped", reason: "Already in trash" });
+        continue;
+      }
+      try {
+        item.deleted = true;
+        await item.saveTx();
+        trashedCount++;
+        touchedLibraryIDs.add(Number(item.libraryID));
+        items.push({ itemId, title, status: "trashed" });
+      } catch (error) {
+        items.push({
+          itemId,
+          title,
+          status: "error",
+          reason: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    for (const libraryID of touchedLibraryIDs) {
+      invalidatePaperSearchCache(libraryID);
+    }
+    return { trashedCount, items };
+  }
+
+  async restoreItems(params: { itemIds: number[] }): Promise<void> {
+    const touchedLibraryIDs = new Set<number>();
+    for (const itemId of params.itemIds) {
+      const item = this.getItem(itemId);
+      if (!item || !item.deleted) continue;
+      item.deleted = false;
+      await item.saveTx();
+      touchedLibraryIDs.add(Number(item.libraryID));
+    }
+    for (const libraryID of touchedLibraryIDs) {
+      invalidatePaperSearchCache(libraryID);
+    }
   }
 
   /**

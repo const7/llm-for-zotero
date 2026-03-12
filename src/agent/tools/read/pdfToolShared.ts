@@ -1,4 +1,4 @@
-import type { PaperContextRef } from "../../../modules/contextPanel/types";
+import type { PaperContextRef } from "../../../shared/types";
 import {
   formatPageSelectionValue,
   parsePageSelectionValue,

@@ -19,7 +19,7 @@ describe("GeminiNativeAgentAdapter", function () {
     .ztoolkit;
   const tools: ToolSpec[] = [
     {
-      name: "search_library_items",
+      name: "query_library",
       description: "search",
       inputSchema: { type: "object" },
       mutability: "read",
@@ -75,7 +75,7 @@ describe("GeminiNativeAgentAdapter", function () {
                     parts: [
                       {
                         functionCall: {
-                          name: "search_library_items",
+                          name: "query_library",
                           args: { query: "graph attention" },
                         },
                       },
@@ -126,7 +126,7 @@ describe("GeminiNativeAgentAdapter", function () {
     assert.equal(parameters.type, "object");
     assert.equal(step.kind, "tool_calls");
     if (step.kind !== "tool_calls") return;
-    assert.equal(step.calls[0].name, "search_library_items");
+    assert.equal(step.calls[0].name, "query_library");
     assert.deepEqual(step.calls[0].arguments, { query: "graph attention" });
   });
 
@@ -390,7 +390,7 @@ describe("GeminiNativeAgentAdapter", function () {
                       parts: [
                         {
                           functionCall: {
-                            name: "read_paper_front_matter",
+                            name: "inspect_pdf",
                             args: { itemId: 1 },
                             thoughtSignature: "sig-123",
                           },
@@ -432,7 +432,7 @@ describe("GeminiNativeAgentAdapter", function () {
       messages: [{ role: "user", content: "Inspect this paper" }],
       tools: [
         {
-          name: "read_paper_front_matter",
+          name: "inspect_pdf",
           description: "read",
           inputSchema: { type: "object" },
           mutability: "read",
@@ -458,7 +458,7 @@ describe("GeminiNativeAgentAdapter", function () {
       ],
       tools: [
         {
-          name: "read_paper_front_matter",
+          name: "inspect_pdf",
           description: "read",
           inputSchema: { type: "object" },
           mutability: "read",

@@ -64,10 +64,15 @@
  *
  * ## Tool mutability
  *
- * - `"read"` — the tool only reads data; no confirmation card is shown.
+ * - `"read"` — the tool only reads data. Read tools may still open a HITL card
+ *   when the user needs to review or approve a sensitive step.
  * - `"write"` — the tool modifies Zotero data. Set `requiresConfirmation: true`
  *   and implement `createPendingAction` to show a HITL confirmation card before
  *   executing.
+ *
+ * Read tools can also pause after execution by implementing
+ * `createResultReviewAction` and `resolveResultReview`. This lets the tool
+ * deliver results inside a review card before the model sees them.
  *
  * ## Guidance (optional)
  *
@@ -91,6 +96,7 @@
 export type {
   AgentToolDefinition,
   AgentToolContext,
+  AgentInheritedApproval,
   AgentToolInputValidation,
   AgentToolGuidance,
   AgentRuntimeRequest,
@@ -123,3 +129,14 @@ export type {
   RelatedPaperResult,
   DuplicateGroup,
 } from "./services/zoteroGateway";
+
+// ── Action API ─────────────────────────────────────────────────────────────────
+// Third-party plugins can register custom actions via `addon.api.agent.runAction()`.
+// Use these types to implement and annotate your own actions.
+export type {
+  AgentAction,
+  ActionExecutionContext,
+  ActionConfirmationMode,
+  ActionProgressEvent,
+  ActionResult,
+} from "./actions/types";

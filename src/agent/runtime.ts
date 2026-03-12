@@ -2,13 +2,16 @@ import { AgentToolRegistry } from "./tools/registry";
 import { readAttachmentBytes } from "../modules/contextPanel/attachmentStorage";
 import { recordAgentTurn } from "./store/conversationMemory";
 import type {
+  AgentInheritedApproval,
   AgentModelContentPart,
   AgentConfirmationResolution,
   AgentEvent,
   AgentModelMessage,
   AgentModelStep,
+  AgentPendingAction,
   AgentRuntimeOutcome,
   AgentRuntimeRequest,
+  AgentToolCall,
   AgentToolArtifact,
   AgentToolContext,
   AgentToolResult,
@@ -38,8 +41,8 @@ function createRunId(): string {
   return `agent-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-function stringifyToolResult(result: AgentToolResult): string {
-  return JSON.stringify(result.content ?? {}, null, 2);
+function createConfirmationRequestId(): string {
+  return `confirm-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 function encodeBytesBase64(bytes: Uint8Array): string {
@@ -144,6 +147,49 @@ async function buildArtifactFollowupMessage(
     : null;
 }
 
+type ToolWorkflowDelivery = {
+  callId: string;
+  name: string;
+  content: unknown;
+  followupMessages: AgentModelMessage[];
+};
+
+type ToolWorkflowOutcome = {
+  toolResult: AgentToolResult;
+  delivery?: ToolWorkflowDelivery;
+  stopRun?: boolean;
+  finalText?: string;
+};
+
+type ExecutedToolCall = {
+  toolResult: AgentToolResult;
+  toolDefinition?: import("./types").AgentToolDefinition<any, any>;
+  input?: unknown;
+};
+
+function buildSyntheticToolCall(
+  name: string,
+  args: unknown,
+): AgentToolCall {
+  return {
+    id: `synthetic-${name}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    name,
+    arguments: args,
+  };
+}
+
+function readToolError(result: AgentToolResult): string {
+  return result.content &&
+    typeof result.content === "object" &&
+    "error" in result.content
+    ? String((result.content as { error: unknown }).error || "")
+    : "";
+}
+
+function isUserDeniedToolResult(result: AgentToolResult): boolean {
+  return readToolError(result).toLowerCase() === "user denied action";
+}
+
 export class AgentRuntime {
   private readonly registry: AgentToolRegistry;
   private readonly adapterFactory: AgentRuntimeDeps["adapterFactory"];
@@ -178,6 +224,18 @@ export class AgentRuntime {
     return this.adapterFactory(request).getCapabilities(request);
   }
 
+  /**
+   * Registers an external pending confirmation so that `resolveConfirmation`
+   * can settle it.  Used by the action-picker UI to wire action HITL cards
+   * into the same resolution path as agent-turn confirmations.
+   */
+  registerPendingConfirmation(
+    requestId: string,
+    resolve: (resolution: AgentConfirmationResolution) => void,
+  ): void {
+    this.pendingConfirmations.set(requestId, { resolve });
+  }
+
   resolveConfirmation(
     requestId: string,
     approvedOrResolution: boolean | AgentConfirmationResolution,
@@ -190,10 +248,12 @@ export class AgentRuntime {
       typeof approvedOrResolution === "boolean"
         ? {
             approved: approvedOrResolution,
+            actionId: approvedOrResolution ? undefined : "cancel",
             data,
           }
         : {
             approved: Boolean(approvedOrResolution.approved),
+            actionId: approvedOrResolution.actionId,
             data: approvedOrResolution.data,
           };
     pending.resolve(resolution);
@@ -255,10 +315,10 @@ export class AgentRuntime {
       modelProviderLabel: request.modelProviderLabel,
     };
     const toolsUsedThisTurn: string[] = [];
-    const messages = buildAgentInitialMessages(
+    const messages = (await buildAgentInitialMessages(
       request,
       this.registry.listToolDefinitionsForRequest(request),
-    ) as AgentModelMessage[];
+    )) as AgentModelMessage[];
 
     let consecutiveToolErrors = 0;
     const intent = classifyRequest(request);
@@ -269,6 +329,33 @@ export class AgentRuntime {
       if (!value) return false;
       if (value.length >= 48) return true;
       return /(?:\n|[.!?]\s)$/u.test(value);
+    };
+    const completeRun = async (
+      finalText: string,
+      status: "completed" | "failed" = "completed",
+      options: { emitFinalEvent?: boolean } = {},
+    ): Promise<AgentRuntimeOutcome> => {
+      if (options.emitFinalEvent !== false) {
+        await emit({
+          type: "final",
+          text: finalText,
+        });
+      }
+      await finishAgentRun(runId, status, finalText);
+      if (status === "completed" && finalText) {
+        await recordAgentTurn(
+          request.conversationKey,
+          request.userText,
+          toolsUsedThisTurn,
+          finalText,
+        );
+      }
+      return {
+        kind: "completed",
+        runId,
+        text: finalText,
+        usedFallback: false,
+      };
     };
     const emitFinalStep = async (
       step: Extract<AgentModelStep, { kind: "final" }>,
@@ -295,23 +382,7 @@ export class AgentRuntime {
           currentAnswerText = finalText;
         }
       }
-      await emit({
-        type: "final",
-        text: finalText,
-      });
-      await finishAgentRun(runId, "completed", finalText);
-      recordAgentTurn(
-        request.conversationKey,
-        request.userText,
-        toolsUsedThisTurn,
-        finalText,
-      );
-      return {
-        kind: "completed",
-        runId,
-        text: finalText,
-        usedFallback: false,
-      };
+      return completeRun(finalText, "completed");
     };
     const runModelStep = async (
       round: number,
@@ -366,6 +437,239 @@ export class AgentRuntime {
         stepStreamedText,
       };
     };
+    const requestActionResolution = async (
+      action: AgentPendingAction,
+    ): Promise<{ requestId: string; resolution: AgentConfirmationResolution }> => {
+      const requestId = createConfirmationRequestId();
+      const resolution = new Promise<AgentConfirmationResolution>((resolve) => {
+        this.pendingConfirmations.set(requestId, { resolve });
+      });
+      await emit({
+        type: "confirmation_required",
+        requestId,
+        action,
+      });
+      const settled = await resolution;
+      await emit({
+        type: "confirmation_resolved",
+        requestId,
+        approved: settled.approved,
+        actionId: settled.actionId,
+        data: settled.data,
+      });
+      return {
+        requestId,
+        resolution: settled,
+      };
+    };
+    const executePreparedToolCall = async (
+      call: AgentToolCall,
+      round: number,
+      options: {
+        inheritedApproval?: AgentInheritedApproval;
+      } = {},
+    ): Promise<ExecutedToolCall> => {
+      await emit({
+        type: "tool_call",
+        callId: call.id,
+        name: call.name,
+        args: call.arguments,
+      });
+      toolsUsedThisTurn.push(call.name);
+      const execution = await this.registry.prepareExecution(call, {
+        ...context,
+        currentAnswerText,
+      }, {
+        inheritedApproval: options.inheritedApproval,
+      });
+      let executedCall: {
+        toolResult: AgentToolResult;
+        toolDefinition?: import("./types").AgentToolDefinition<any, any>;
+        input?: unknown;
+      };
+      if (execution.kind === "confirmation") {
+        const { resolution } = await requestActionResolution(execution.action);
+        const confirmedExecution = resolution.approved
+          ? await execution.execute(resolution.data)
+          : execution.deny(resolution.data);
+        executedCall = {
+          toolResult: confirmedExecution.result,
+          toolDefinition: confirmedExecution.tool,
+          input: confirmedExecution.input,
+        };
+      } else {
+        executedCall = {
+          toolResult: execution.execution.result,
+          toolDefinition: execution.execution.tool,
+          input: execution.execution.input,
+        };
+      }
+      const { toolResult } = executedCall;
+      if (toolResult.ok) {
+        consecutiveToolErrors = 0;
+      } else {
+        consecutiveToolErrors += 1;
+        const rawError = readToolError(toolResult);
+        if (rawError && rawError.toLowerCase() !== "user denied action") {
+          await emit({
+            type: "tool_error",
+            callId: toolResult.callId,
+            name: toolResult.name,
+            error: rawError,
+            round,
+          });
+        }
+      }
+      await emit({
+        type: "tool_result",
+        callId: toolResult.callId,
+        name: toolResult.name,
+        ok: toolResult.ok,
+        content: toolResult.content,
+        artifacts: toolResult.artifacts,
+      });
+      return executedCall;
+    };
+    const buildToolDelivery = async (
+      toolResult: AgentToolResult,
+      callId: string,
+      toolDefinition?: import("./types").AgentToolDefinition<any, any>,
+      contentOverride?: unknown,
+      extraFollowupMessages: AgentModelMessage[] = [],
+    ): Promise<ToolWorkflowDelivery> => {
+      const followupMessage = toolDefinition?.buildFollowupMessage
+        ? await toolDefinition.buildFollowupMessage(toolResult, {
+            ...context,
+            currentAnswerText,
+          })
+        : await buildArtifactFollowupMessage(toolResult);
+      const followupMessages = [...extraFollowupMessages];
+      if (followupMessage) {
+        followupMessages.push(followupMessage);
+      }
+      return {
+        callId,
+        name: toolResult.name,
+        content: contentOverride ?? toolResult.content,
+        followupMessages,
+      };
+    };
+    const executeToolWorkflow = async (
+      call: AgentToolCall,
+      round: number,
+      options: {
+        modelCallId?: string;
+        suppressModelDelivery?: boolean;
+        inheritedApproval?: AgentInheritedApproval;
+      } = {},
+    ): Promise<ToolWorkflowOutcome> => {
+      const executedCall = await executePreparedToolCall(call, round, {
+        inheritedApproval: options.inheritedApproval,
+      });
+      const { toolResult, toolDefinition, input } = executedCall;
+      const deliveryCallId = options.modelCallId || call.id;
+
+      if (
+        toolResult.ok &&
+        toolDefinition?.createResultReviewAction &&
+        toolDefinition.resolveResultReview
+      ) {
+        let currentResult = toolResult;
+        const currentInput = input;
+        while (true) {
+          const reviewAction = await toolDefinition.createResultReviewAction(
+            currentInput as never,
+            currentResult,
+            {
+              ...context,
+              currentAnswerText,
+            },
+          );
+          if (!reviewAction) {
+            if (options.suppressModelDelivery) {
+              return { toolResult: currentResult };
+            }
+            return {
+              toolResult: currentResult,
+              delivery: await buildToolDelivery(
+                currentResult,
+                deliveryCallId,
+                toolDefinition,
+              ),
+            };
+          }
+
+          const { resolution } = await requestActionResolution(reviewAction);
+          const reviewOutcome = await toolDefinition.resolveResultReview(
+            currentInput as never,
+            currentResult,
+            resolution,
+            {
+              ...context,
+              currentAnswerText,
+            },
+          );
+
+          if (reviewOutcome.kind === "deliver") {
+            return options.suppressModelDelivery
+              ? { toolResult: currentResult }
+              : {
+                  toolResult: currentResult,
+                  delivery: await buildToolDelivery(
+                    currentResult,
+                    deliveryCallId,
+                    toolDefinition,
+                    reviewOutcome.toolMessageContent,
+                    reviewOutcome.followupMessages || [],
+                  ),
+                };
+          }
+
+          if (reviewOutcome.kind === "stop") {
+            return {
+              toolResult: currentResult,
+              stopRun: true,
+              finalText: reviewOutcome.finalText,
+            };
+          }
+
+          const chainedCall = buildSyntheticToolCall(
+            reviewOutcome.call.name,
+            reviewOutcome.call.arguments,
+          );
+          const chainedOutcome = await executeToolWorkflow(chainedCall, round, {
+            modelCallId: deliveryCallId,
+            suppressModelDelivery: Boolean(reviewOutcome.terminalText),
+            inheritedApproval: reviewOutcome.call.inheritedApproval,
+          });
+          if (reviewOutcome.terminalText) {
+            const finalText = chainedOutcome.toolResult.ok
+              ? reviewOutcome.terminalText.onSuccess
+              : isUserDeniedToolResult(chainedOutcome.toolResult)
+                ? reviewOutcome.terminalText.onDenied
+                : reviewOutcome.terminalText.onError;
+            return {
+              toolResult: chainedOutcome.toolResult,
+              stopRun: true,
+              finalText,
+            };
+          }
+          return chainedOutcome;
+        }
+      }
+
+      if (options.suppressModelDelivery) {
+        return { toolResult };
+      }
+      return {
+        toolResult,
+        delivery: await buildToolDelivery(
+          toolResult,
+          deliveryCallId,
+          toolDefinition,
+        ),
+      };
+    };
     for (let round = 1; round <= maxRounds; round += 1) {
       const { step, stepStreamedText } = await runModelStep(
         round,
@@ -384,99 +688,28 @@ export class AgentRuntime {
       });
       if (!calls.length) break;
       for (const call of calls) {
-        await emit({
-          type: "tool_call",
-          callId: call.id,
-          name: call.name,
-          args: call.arguments,
+        const outcome = await executeToolWorkflow(call, round, {
+          modelCallId: call.id,
         });
-        toolsUsedThisTurn.push(call.name);
-        const execution = await this.registry.prepareExecution(call, {
-          ...context,
-          currentAnswerText,
-        });
-        let toolResult: AgentToolResult;
-        if (execution.kind === "confirmation") {
-          const approval = new Promise<AgentConfirmationResolution>((resolve) => {
-            this.pendingConfirmations.set(execution.requestId, { resolve });
+        if (outcome.delivery) {
+          messages.push({
+            role: "tool",
+            tool_call_id: outcome.delivery.callId,
+            name: outcome.delivery.name,
+            content: JSON.stringify(outcome.delivery.content ?? {}, null, 2),
           });
-          await emit({
-            type: "confirmation_required",
-            requestId: execution.requestId,
-            action: execution.action,
-          });
-          const resolution = await approval;
-          await emit({
-            type: "confirmation_resolved",
-            requestId: execution.requestId,
-            approved: resolution.approved,
-            data: resolution.data,
-          });
-          toolResult = resolution.approved
-            ? await execution.execute(resolution.data)
-            : execution.deny(resolution.data);
-        } else {
-          toolResult = execution.result;
-        }
-        if (toolResult.ok) {
-          consecutiveToolErrors = 0;
-        } else {
-          consecutiveToolErrors += 1;
-          const rawError =
-            toolResult.content &&
-            typeof toolResult.content === "object" &&
-            "error" in toolResult.content
-              ? String((toolResult.content as { error: unknown }).error || "")
-              : "";
-          if (rawError && rawError.toLowerCase() !== "user denied action") {
-            await emit({
-              type: "tool_error",
-              callId: toolResult.callId,
-              name: toolResult.name,
-              error: rawError,
-              round,
-            });
+          for (const followupMessage of outcome.delivery.followupMessages) {
+            messages.push(followupMessage);
           }
         }
-        await emit({
-          type: "tool_result",
-          callId: toolResult.callId,
-          name: toolResult.name,
-          ok: toolResult.ok,
-          content: toolResult.content,
-          artifacts: toolResult.artifacts,
-        });
-        messages.push({
-          role: "tool",
-          tool_call_id: toolResult.callId,
-          name: toolResult.name,
-          content: stringifyToolResult(toolResult),
-        });
-        const toolDefinition = this.registry.getTool(toolResult.name);
-        const followupMessage = toolDefinition?.buildFollowupMessage
-          ? await toolDefinition.buildFollowupMessage(toolResult, {
-              ...context,
-              currentAnswerText,
-            })
-          : await buildArtifactFollowupMessage(toolResult);
-        if (followupMessage) {
-          messages.push(followupMessage);
+        if (outcome.stopRun) {
+          return completeRun(outcome.finalText || currentAnswerText, "completed");
         }
         if (consecutiveToolErrors >= 2) {
           const finalText =
             currentAnswerText ||
             "Agent stopped after repeated tool errors. Please adjust the request and try again.";
-          await emit({
-            type: "final",
-            text: finalText,
-          });
-          await finishAgentRun(runId, "failed", finalText);
-          return {
-            kind: "completed",
-            runId,
-            text: finalText,
-            usedFallback: false,
-          };
+          return completeRun(finalText, "failed");
         }
       }
     }
@@ -484,24 +717,6 @@ export class AgentRuntime {
     const finalText =
       currentAnswerText ||
       "Agent stopped before reaching a final answer. Try narrowing the request.";
-    await emit({
-      type: "final",
-      text: finalText,
-    });
-    await finishAgentRun(runId, "failed", finalText);
-    if (currentAnswerText) {
-      recordAgentTurn(
-        request.conversationKey,
-        request.userText,
-        toolsUsedThisTurn,
-        finalText,
-      );
-    }
-    return {
-      kind: "completed",
-      runId,
-      text: finalText,
-      usedFallback: false,
-    };
+    return completeRun(finalText, "failed");
   }
 }

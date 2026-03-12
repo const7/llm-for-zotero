@@ -139,15 +139,15 @@ describe("AgentRuntime", function () {
       const registry = new AgentToolRegistry();
       registry.register({
         spec: {
-          name: "save_answer_to_note",
-          description: "save",
+          name: "mutate_library",
+          description: "mutate",
           inputSchema: { type: "object" },
           mutability: "write",
           requiresConfirmation: true,
         },
         validate: () => ({ ok: true, value: { content: "hello" } }),
         createPendingAction: () => ({
-          toolName: "save_answer_to_note",
+          toolName: "mutate_library",
           title: "Save hello",
           confirmLabel: "Approve",
           cancelLabel: "Cancel",
@@ -209,7 +209,7 @@ describe("AgentRuntime", function () {
                 calls: [
                   {
                     id: "call-1",
-                    name: "save_answer_to_note",
+                    name: "mutate_library",
                     arguments: { content: "hello" },
                   },
                 ],
@@ -219,7 +219,7 @@ describe("AgentRuntime", function () {
                   tool_calls: [
                     {
                       id: "call-1",
-                      name: "save_answer_to_note",
+                      name: "mutate_library",
                       arguments: { content: "hello" },
                     },
                   ],
@@ -324,8 +324,8 @@ describe("AgentRuntime", function () {
       const registry = new AgentToolRegistry();
       registry.register({
         spec: {
-          name: "prepare_pdf_pages_for_model",
-          description: "prepare pages",
+          name: "inspect_pdf",
+          description: "inspect pdf",
           inputSchema: { type: "object" },
           mutability: "read",
           requiresConfirmation: false,
@@ -375,7 +375,7 @@ describe("AgentRuntime", function () {
                   calls: [
                     {
                       id: "call-1",
-                      name: "prepare_pdf_pages_for_model",
+                      name: "inspect_pdf",
                       arguments: {},
                     },
                   ],
@@ -385,7 +385,7 @@ describe("AgentRuntime", function () {
                     tool_calls: [
                       {
                         id: "call-1",
-                        name: "prepare_pdf_pages_for_model",
+                        name: "inspect_pdf",
                         arguments: {},
                       },
                     ],
@@ -514,7 +514,7 @@ describe("AgentRuntime", function () {
       assert.equal(outcome.text, "Summary ready.");
       assert.isTrue(
         events.some(
-          (event) => event.type === "status" && event.text === "Continuing agent (5/6)",
+          (event) => event.type === "status" && event.text === "Continuing agent (5/8)",
         ),
       );
       assert.equal(
@@ -573,7 +573,7 @@ describe("AgentRuntime", function () {
               if (!priorAssistant || !Array.isArray(priorAssistant.tool_calls)) {
                 return {
                   kind: "tool_calls",
-                  calls: [1, 2, 3, 4, 5].map((index) => ({
+                  calls: [1, 2, 3, 4, 5, 6, 7].map((index) => ({
                     id: `call-${index}`,
                     name: "read_context",
                     arguments: {},
@@ -581,7 +581,7 @@ describe("AgentRuntime", function () {
                   assistantMessage: {
                     role: "assistant",
                     content: "",
-                    tool_calls: [1, 2, 3, 4, 5].map((index) => ({
+                    tool_calls: [1, 2, 3, 4, 5, 6, 7].map((index) => ({
                       id: `call-${index}`,
                       name: "read_context",
                       arguments: {},
@@ -593,8 +593,8 @@ describe("AgentRuntime", function () {
                 (message) => message.role === "tool",
               );
               sawConsistentFollowup =
-                priorAssistant.tool_calls.length === 4 &&
-                toolMessages.length === 4 &&
+                priorAssistant.tool_calls.length === 6 &&
+                toolMessages.length === 6 &&
                 toolMessages.every(
                   (message, index) => message.tool_call_id === `call-${index + 1}`,
                 );

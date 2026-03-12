@@ -1,15 +1,12 @@
 import type {
   AgentToolArtifact,
   AgentToolExecutionOutput,
-  AgentPromptDefinition,
-  AgentResourceDefinition,
+  PreparedToolExecutionOptions,
   AgentRuntimeRequest,
   AgentToolCall,
   AgentToolContext,
   AgentToolDefinition,
   PreparedToolExecution,
-  PromptSpec,
-  ResourceSpec,
   ToolSpec,
 } from "../types";
 
@@ -17,13 +14,28 @@ function createSyntheticErrorResult(
   call: AgentToolCall,
   message: string,
 ): PreparedToolExecution {
+  const syntheticTool: AgentToolDefinition<any, any> = {
+    spec: {
+      name: call.name,
+      description: message,
+      inputSchema: { type: "object" },
+      mutability: "read",
+      requiresConfirmation: false,
+    },
+    validate: () => ({ ok: true, value: {} }),
+    execute: async () => ({ error: message }),
+  };
   return {
     kind: "result",
-    result: {
-      callId: call.id,
-      name: call.name,
-      ok: false,
-      content: { error: message },
+    execution: {
+      tool: syntheticTool,
+      input: call.arguments,
+      result: {
+        callId: call.id,
+        name: call.name,
+        ok: false,
+        content: { error: message },
+      },
     },
   };
 }
@@ -56,8 +68,6 @@ function normalizeExecutionOutput(
 
 export class AgentToolRegistry {
   private readonly tools = new Map<string, AgentToolDefinition<any, any>>();
-  private readonly resources = new Map<string, AgentResourceDefinition<any>>();
-  private readonly prompts = new Map<string, AgentPromptDefinition<any>>();
 
   register<TInput, TResult>(tool: AgentToolDefinition<TInput, TResult>): void {
     this.tools.set(tool.spec.name, tool);
@@ -65,14 +75,6 @@ export class AgentToolRegistry {
 
   unregister(name: string): boolean {
     return this.tools.delete(name);
-  }
-
-  registerResource<TValue>(resource: AgentResourceDefinition<TValue>): void {
-    this.resources.set(resource.spec.name, resource);
-  }
-
-  registerPrompt<TArgs>(prompt: AgentPromptDefinition<TArgs>): void {
-    this.prompts.set(prompt.spec.name, prompt);
   }
 
   listTools(): ToolSpec[] {
@@ -83,45 +85,24 @@ export class AgentToolRegistry {
     return Array.from(this.tools.values());
   }
 
-  /** Return only tools whose `condition` (if any) passes for this request. */
-  listToolsForRequest(request: AgentRuntimeRequest): ToolSpec[] {
-    return Array.from(this.tools.values())
-      .filter((tool) => !tool.condition || tool.condition(request))
-      .map((tool) => tool.spec);
+  listToolsForRequest(_request: AgentRuntimeRequest): ToolSpec[] {
+    return this.listTools();
   }
 
-  /** Return full definitions for tools whose `condition` passes. */
   listToolDefinitionsForRequest(
-    request: AgentRuntimeRequest,
+    _request: AgentRuntimeRequest,
   ): AgentToolDefinition<any, any>[] {
-    return Array.from(this.tools.values()).filter(
-      (tool) => !tool.condition || tool.condition(request),
-    );
-  }
-
-  listResources(): ResourceSpec[] {
-    return Array.from(this.resources.values()).map((resource) => resource.spec);
-  }
-
-  listPrompts(): PromptSpec[] {
-    return Array.from(this.prompts.values()).map((prompt) => prompt.spec);
+    return this.listToolDefinitions();
   }
 
   getTool(name: string): AgentToolDefinition<any, any> | undefined {
     return this.tools.get(name);
   }
 
-  getResource(name: string): AgentResourceDefinition<any> | undefined {
-    return this.resources.get(name);
-  }
-
-  getPrompt(name: string): AgentPromptDefinition<any> | undefined {
-    return this.prompts.get(name);
-  }
-
   async prepareExecution(
     call: AgentToolCall,
     context: AgentToolContext,
+    options: PreparedToolExecutionOptions = {},
   ): Promise<PreparedToolExecution> {
     const tool = this.tools.get(call.name);
     if (!tool) {
@@ -135,31 +116,36 @@ export class AgentToolRegistry {
       );
     }
 
-    const runExecution = async () => {
-      const runWithInput = async (resolvedInput: typeof validation.value) => {
-        try {
-          const executionOutput = normalizeExecutionOutput(
-            await tool.execute(resolvedInput, context),
-          );
-          return {
+    const runWithInput = async (resolvedInput: typeof validation.value) => {
+      try {
+        const executionOutput = normalizeExecutionOutput(
+          await tool.execute(resolvedInput, context),
+        );
+        return {
+          tool,
+          input: resolvedInput,
+          result: {
             callId: call.id,
             name: call.name,
             ok: true,
             content: executionOutput.content,
             artifacts: executionOutput.artifacts,
-          };
-        } catch (error) {
-          return {
+          },
+        };
+      } catch (error) {
+        return {
+          tool,
+          input: resolvedInput,
+          result: {
             callId: call.id,
             name: call.name,
             ok: false,
             content: {
               error: error instanceof Error ? error.message : String(error),
             },
-          };
-        }
-      };
-      return runWithInput(validation.value);
+          },
+        };
+      }
     };
 
     const runConfirmedExecution = async (resolutionData?: unknown) => {
@@ -171,62 +157,42 @@ export class AgentToolRegistry {
         );
         if (!resolved.ok) {
           return {
-            callId: call.id,
-            name: call.name,
-            ok: false,
-            content: {
-              error: `Invalid confirmation input for ${call.name}: ${resolved.error}`,
+            tool,
+            input: validation.value,
+            result: {
+              callId: call.id,
+              name: call.name,
+              ok: false,
+              content: {
+                error: `Invalid confirmation input for ${call.name}: ${resolved.error}`,
+              },
             },
           };
         }
-        try {
-          const executionOutput = normalizeExecutionOutput(
-            await tool.execute(resolved.value, context),
-          );
-          return {
-            callId: call.id,
-            name: call.name,
-            ok: true,
-            content: executionOutput.content,
-            artifacts: executionOutput.artifacts,
-          };
-        } catch (error) {
-          return {
-            callId: call.id,
-            name: call.name,
-            ok: false,
-            content: {
-              error: error instanceof Error ? error.message : String(error),
-            },
-          };
-        }
+        return runWithInput(resolved.value);
       }
-      try {
-        const executionOutput = normalizeExecutionOutput(
-          await tool.execute(validation.value, context),
-        );
-        return {
-          callId: call.id,
-          name: call.name,
-          ok: true,
-          content: executionOutput.content,
-          artifacts: executionOutput.artifacts,
-        };
-      } catch (error) {
-        return {
-          callId: call.id,
-          name: call.name,
-          ok: false,
-          content: {
-            error: error instanceof Error ? error.message : String(error),
-          },
-        };
-      }
+      return runWithInput(validation.value);
     };
 
     const shouldRequireConfirmation =
       (await tool.shouldRequireConfirmation?.(validation.value, context)) ??
       tool.spec.requiresConfirmation;
+    const acceptsInheritedApproval =
+      shouldRequireConfirmation &&
+      options.inheritedApproval &&
+      Boolean(
+        await tool.acceptInheritedApproval?.(
+          validation.value,
+          options.inheritedApproval,
+          context,
+        ),
+      );
+    if (acceptsInheritedApproval) {
+      return {
+        kind: "result",
+        execution: await runWithInput(validation.value),
+      };
+    }
     if (shouldRequireConfirmation && tool.createPendingAction) {
       const requestId = createRequestId();
       return {
@@ -235,17 +201,21 @@ export class AgentToolRegistry {
         action: await tool.createPendingAction(validation.value, context),
         execute: runConfirmedExecution,
         deny: () => ({
-          callId: call.id,
-          name: call.name,
-          ok: false,
-          content: { error: "User denied action" },
+          tool,
+          input: validation.value,
+          result: {
+            callId: call.id,
+            name: call.name,
+            ok: false,
+            content: { error: "User denied action" },
+          },
         }),
       };
     }
 
     return {
       kind: "result",
-      result: await runExecution(),
+      execution: await runWithInput(validation.value),
     };
   }
 }

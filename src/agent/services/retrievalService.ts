@@ -2,7 +2,7 @@ import {
   buildPaperRetrievalCandidates,
 } from "../../modules/contextPanel/pdfContext";
 import { formatPaperSourceLabel } from "../../modules/contextPanel/paperAttribution";
-import type { PaperContextRef } from "../../modules/contextPanel/types";
+import type { PaperContextRef } from "../../shared/types";
 import { PdfService } from "./pdfService";
 
 type RetrievalResult = {

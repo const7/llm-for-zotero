@@ -610,12 +610,29 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
   paperPicker.appendChild(paperPickerList);
   composeArea.appendChild(paperPicker);
 
+  const actionPicker = createElement(doc, "div", "llm-action-picker", {
+    id: "llm-action-picker",
+  });
+  actionPicker.style.display = "none";
+  const actionPickerList = createElement(doc, "div", "llm-action-picker-list", {
+    id: "llm-action-picker-list",
+  });
+  actionPickerList.setAttribute("role", "listbox");
+  actionPicker.appendChild(actionPickerList);
+  composeArea.appendChild(actionPicker);
+
+  const actionHitlPanel = createElement(doc, "div", "llm-action-hitl-panel", {
+    id: "llm-action-hitl-panel",
+  });
+  actionHitlPanel.style.display = "none";
+  composeArea.appendChild(actionHitlPanel);
+
   const inputBox = createElement(doc, "textarea", "llm-input", {
     id: "llm-input",
     placeholder: hasItem
       ? isGlobalMode
-        ? "Ask anything... Type / to add papers"
-        : "Ask about this paper... Type / for adding other papers as context"
+        ? "Ask anything... Type / for actions, @ to add papers"
+        : "Ask about this paper... Type / for actions, @ to add papers"
       : "Open a PDF first",
     disabled: !hasItem,
   });

@@ -204,18 +204,17 @@ You can always check the connections by clicking the "Test Connection" button.
 
 When you enable the agent mode in the preferences settings, you will see the `Agent (beta)` toggle in the context bar. Click it to switch to agent mode.
 
-Currently, the agent mode supports the following tools:
-- `search_related_papers_online`: Search for related or similar papers online.
-- `read_paper_evidence`: Read the paper evidence.
-- `read_paper_excerpt`: Read the paper excerpt.
-- `prepare_pdf_pages_for_model`: Prepare the PDF pages for the model.
-- `write_note`: Write a note.
-- `apply_tags`: Apply tags to the paper.
-- ... And more!
+Currently, the agent mode exposes a compact primitive tool surface:
+- `query_library`: Search and list Zotero items or collections, find related library papers, and detect duplicates.
+- `read_library`: Read structured library state such as metadata, notes, annotations, attachments, and collections.
+- `inspect_pdf`: Read front matter, retrieve evidence, read chunks, search or render pages, inspect the active reader view, or attach a local file.
+- `search_literature_online`: Search live scholarly sources or fetch external metadata.
+- `mutate_library`: Apply batched write operations such as metadata edits, tagging, collection changes, note writes, and imports.
+- `undo_last_action`: Revert the last approved write batch.
 
-I only show some of the tools in the demos below. You can always check the tools by asking the agent what it can do. 
+The demos below only show a few of those compositions. You can always ask the agent what it can do.
 
-**More tools will be supported in the future.** And I also welcome you to contribute your own tools to the agent!!
+The direction here is fewer, more general tools rather than a long list of task-specific ones.
 
 #### Multi-steps workflow with agent mode:
 

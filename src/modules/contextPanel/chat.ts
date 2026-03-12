@@ -72,9 +72,11 @@ import {
   setInlineEditInputSection,
   setInlineEditSavedDraft,
   selectedRuntimeModeCache,
+} from "./state";
+import {
   agentRunTraceCache,
   agentRunTraceLoadingTasks,
-} from "./state";
+} from "./agentState";
 import {
   sanitizeText,
   formatTime,
@@ -130,10 +132,14 @@ import {
   clearConversationSummary,
 } from "./conversationSummaryCache";
 import type {
-  AgentEvent,
   AgentRunEventRecord,
   AgentRuntimeRequest,
 } from "../../agent/types";
+import {
+  sendAgentTurn,
+  retryAgentTurn,
+  type AgentEngineDeps,
+} from "./agentMode/agentEngine";
 
 /** Get AbortController constructor from global scope */
 function getAbortController(): new () => AbortController {
@@ -945,7 +951,7 @@ export function getSelectedReasoningForItem(
   return { provider, level: selectedLevel as LLMReasoningLevel };
 }
 
-type PanelRequestUI = {
+export type PanelRequestUI = {
   inputBox: HTMLTextAreaElement | null;
   chatBox: HTMLDivElement | null;
   sendBtn: HTMLButtonElement | null;
@@ -1034,7 +1040,7 @@ function createPanelUpdateHelpers(
   };
 }
 
-type EffectiveRequestConfig = {
+export type EffectiveRequestConfig = {
   model: string;
   apiBase: string;
   apiKey: string;
@@ -2203,6 +2209,88 @@ export async function editUserTurnAndRetry(
   }
 }
 
+export type BuildAgentRuntimeRequestParams = {
+  conversationKey: number;
+  item: Zotero.Item;
+  userText: string;
+  selectedTexts: string[];
+  paperContexts: PaperContextRef[];
+  pinnedPaperContexts: PaperContextRef[];
+  attachments: ChatAttachment[] | undefined;
+  screenshots: string[] | undefined;
+  effectiveRequestConfig: EffectiveRequestConfig;
+  history: ChatMessage[];
+};
+
+function buildAgentRuntimeRequest(
+  params: BuildAgentRuntimeRequestParams,
+): AgentRuntimeRequest {
+  return {
+    conversationKey: params.conversationKey,
+    mode: "agent",
+    userText: params.userText,
+    activeItemId: params.item.id,
+    selectedTexts: params.selectedTexts,
+    selectedPaperContexts: params.paperContexts,
+    pinnedPaperContexts: params.pinnedPaperContexts,
+    attachments: params.attachments,
+    screenshots: params.screenshots,
+    model: params.effectiveRequestConfig.model,
+    apiBase: params.effectiveRequestConfig.apiBase,
+    apiKey: params.effectiveRequestConfig.apiKey,
+    authMode: params.effectiveRequestConfig.authMode,
+    providerProtocol: params.effectiveRequestConfig.providerProtocol,
+    reasoning: params.effectiveRequestConfig.reasoning,
+    advanced: params.effectiveRequestConfig.advanced,
+    history: params.history,
+    item: params.item,
+    systemPrompt: getStringPref("systemPrompt") || undefined,
+    modelProviderLabel: params.effectiveRequestConfig.modelProviderLabel,
+    libraryID: params.item.libraryID,
+  };
+}
+
+function buildAgentEngineDeps(): AgentEngineDeps {
+  return {
+    chatHistory,
+    agentRunTraceCache,
+    cancelledRequestId: () => cancelledRequestId,
+    currentAbortController: () => currentAbortController,
+    setCurrentAbortController,
+    getAbortController,
+    nextRequestId,
+    setPendingRequestId,
+    getPanelRequestUI,
+    setRequestUIBusy,
+    restoreRequestUIIdle,
+    setHistoryControlsDisabled,
+    createPanelUpdateHelpers,
+    ensureConversationLoaded,
+    getConversationKey,
+    buildLLMHistoryMessages,
+    buildAgentRuntimeRequest,
+    resolveEffectiveRequestConfig,
+    normalizeSelectedTexts,
+    normalizeSelectedTextSources,
+    normalizeSelectedTextPaperContextsByIndex,
+    normalizePaperContexts,
+    includeAutoLoadedPaperContext,
+    findLatestRetryPair,
+    reconstructRetryPayload,
+    isReasoningExpandedByDefault,
+    createQueuedRefresh,
+    waitForUiStep,
+    finalizeCancelledAssistantMessage,
+    sanitizeText,
+    persistConversationMessage,
+    updateStoredLatestUserMessage: updateStoredLatestUserMessage as AgentEngineDeps["updateStoredLatestUserMessage"],
+    updateStoredLatestAssistantMessage: updateStoredLatestAssistantMessage as AgentEngineDeps["updateStoredLatestAssistantMessage"],
+    sendChatFallback: sendQuestion,
+    getAgentRuntime,
+    maxSelectedImages: MAX_SELECTED_IMAGES,
+  };
+}
+
 /**
  * Re-runs the latest user→assistant pair in agent mode.
  * Unlike `retryLatestAssistantResponse` (chat mode only), this function calls
@@ -2219,230 +2307,7 @@ async function retryLatestAgentResponse(
   reasoning?: LLMReasoningConfig,
   advanced?: AdvancedModelParams,
 ): Promise<void> {
-  const ui = getPanelRequestUI(body);
-  await ensureConversationLoaded(item);
-  const conversationKey = getConversationKey(item);
-  const history = chatHistory.get(conversationKey) || [];
-  const retryPair = findLatestRetryPair(history);
-  if (!retryPair) {
-    if (ui.status) setStatus(ui.status, "No retryable response found", "error");
-    return;
-  }
-
-  const thisRequestId = nextRequestId();
-  setPendingRequestId(thisRequestId);
-  setRequestUIBusy(body, ui, conversationKey, "Preparing agent retry...");
-
-  const assistantMessage = retryPair.assistantMessage;
-
-  // Clear the previous agent run so the trace and text reset immediately.
-  assistantMessage.text = "";
-  assistantMessage.agentRunId = undefined;
-  assistantMessage.streaming = true;
-  assistantMessage.reasoningSummary = undefined;
-  assistantMessage.reasoningDetails = undefined;
-  assistantMessage.reasoningOpen = isReasoningExpandedByDefault();
-
-  const effectiveRequestConfig = resolveEffectiveRequestConfig({
-    item,
-    model,
-    apiBase,
-    apiKey,
-    reasoning,
-    advanced,
-  });
-  assistantMessage.modelName = effectiveRequestConfig.model;
-  assistantMessage.modelEntryId = effectiveRequestConfig.modelEntryId;
-  assistantMessage.modelProviderLabel = effectiveRequestConfig.modelProviderLabel;
-
-  const { refreshChatSafely, setStatusSafely } = createPanelUpdateHelpers(
-    body,
-    item,
-    conversationKey,
-    ui,
-  );
-  refreshChatSafely(); // Immediately clear the old trace from view
-
-  const { question, screenshotImages, paperContexts, pinnedPaperContexts } =
-    reconstructRetryPayload(retryPair.userMessage);
-  if (!question.trim()) {
-    setStatusSafely("Nothing to retry for latest turn", "error");
-    restoreRequestUIIdle(body, conversationKey, thisRequestId);
-    setHistoryControlsDisabled(body, false);
-    return;
-  }
-
-  const selectedTextsRaw = Array.isArray(retryPair.userMessage.selectedTexts)
-    ? (retryPair.userMessage.selectedTexts.filter(Boolean) as string[])
-    : retryPair.userMessage.selectedText
-      ? [retryPair.userMessage.selectedText]
-      : [];
-
-  const historyForLLM = buildLLMHistoryMessages(
-    history.slice(0, retryPair.userIndex),
-  );
-
-  const runtimeRequest: AgentRuntimeRequest = {
-    conversationKey,
-    mode: "agent",
-    userText: question,
-    activeItemId: item.id,
-    selectedTexts: selectedTextsRaw,
-    selectedPaperContexts: paperContexts,
-    pinnedPaperContexts,
-    attachments: retryPair.userMessage.attachments?.filter(
-      (a) => a.category !== "image",
-    ),
-    screenshots: screenshotImages,
-    model: effectiveRequestConfig.model,
-    apiBase: effectiveRequestConfig.apiBase,
-    apiKey: effectiveRequestConfig.apiKey,
-    authMode: effectiveRequestConfig.authMode,
-    providerProtocol: effectiveRequestConfig.providerProtocol,
-    reasoning: effectiveRequestConfig.reasoning,
-    advanced: effectiveRequestConfig.advanced,
-    history: historyForLLM,
-    item,
-    systemPrompt: getStringPref("systemPrompt") || undefined,
-    modelProviderLabel: effectiveRequestConfig.modelProviderLabel,
-    libraryID: item.libraryID,
-  };
-
-  let assistantPersisted = false;
-  const persistAssistantOnce = async () => {
-    if (assistantPersisted) return;
-    assistantPersisted = true;
-    await updateStoredLatestAssistantMessage(conversationKey, {
-      text: assistantMessage.text,
-      timestamp: assistantMessage.timestamp,
-      runMode: "agent",
-      agentRunId: assistantMessage.agentRunId,
-      modelName: assistantMessage.modelName,
-      modelEntryId: assistantMessage.modelEntryId,
-      modelProviderLabel: assistantMessage.modelProviderLabel,
-    });
-  };
-  const markCancelled = async () => {
-    finalizeCancelledAssistantMessage(assistantMessage);
-    refreshChatSafely();
-    await persistAssistantOnce();
-    setStatusSafely("Cancelled", "ready");
-  };
-
-  const agentRuntime = getAgentRuntime();
-  try {
-    const AbortControllerCtor = getAbortController();
-    setCurrentAbortController(
-      AbortControllerCtor ? new AbortControllerCtor() : null,
-    );
-    const queueRefresh = createQueuedRefresh(refreshChatSafely);
-
-    const pushTraceEvent = (runId: string, event: AgentEvent) => {
-      const list = agentRunTraceCache.get(runId) || [];
-      list.push({
-        runId,
-        seq: list.length + 1,
-        eventType: event.type,
-        payload: event,
-        createdAt: Date.now(),
-      });
-      agentRunTraceCache.set(runId, list);
-    };
-
-    const outcome = await agentRuntime.runTurn({
-      request: runtimeRequest,
-      signal: currentAbortController?.signal,
-      onStart: async (runId) => {
-        assistantMessage.agentRunId = runId;
-        retryPair.userMessage.agentRunId = runId;
-        agentRunTraceCache.set(runId, []);
-        refreshChatSafely();
-        await updateStoredLatestUserMessage(conversationKey, {
-          text: retryPair.userMessage.text,
-          timestamp: retryPair.userMessage.timestamp,
-          runMode: "agent",
-          agentRunId: runId,
-          selectedText: retryPair.userMessage.selectedText,
-          selectedTexts: retryPair.userMessage.selectedTexts,
-          selectedTextSources: retryPair.userMessage.selectedTextSources,
-          selectedTextPaperContexts:
-            retryPair.userMessage.selectedTextPaperContexts,
-          screenshotImages: retryPair.userMessage.screenshotImages,
-          paperContexts: retryPair.userMessage.paperContexts,
-          attachments: retryPair.userMessage.attachments,
-        });
-      },
-      onEvent: async (event) => {
-        if (assistantMessage.agentRunId) {
-          pushTraceEvent(assistantMessage.agentRunId, event);
-        }
-        switch (event.type) {
-          case "status":
-            setStatusSafely(event.text, "sending");
-            break;
-          case "fallback":
-            setStatusSafely(event.reason, "sending");
-            break;
-          case "message_delta":
-            assistantMessage.text += sanitizeText(event.text);
-            break;
-          case "final":
-            if (!assistantMessage.text.trim()) {
-              assistantMessage.text = sanitizeText(event.text);
-            }
-            assistantMessage.streaming = false;
-            break;
-          default:
-            break;
-        }
-        if (event.type === "message_delta") {
-          queueRefresh();
-          return;
-        }
-        refreshChatSafely();
-        await waitForUiStep();
-      },
-    });
-
-    if (
-      cancelledRequestId >= thisRequestId ||
-      Boolean(currentAbortController?.signal.aborted)
-    ) {
-      await markCancelled();
-      return;
-    }
-
-    assistantMessage.agentRunId = outcome.runId;
-    assistantMessage.runMode = "agent";
-    const finalOutcomeText =
-      outcome.kind === "completed" ? outcome.text : assistantMessage.text;
-    assistantMessage.text =
-      sanitizeText(finalOutcomeText) || assistantMessage.text || "No response.";
-    assistantMessage.streaming = false;
-    refreshChatSafely();
-    await persistAssistantOnce();
-    setStatusSafely("Ready", "ready");
-  } catch (err) {
-    const isCancelled =
-      cancelledRequestId >= thisRequestId ||
-      Boolean(currentAbortController?.signal.aborted) ||
-      (err as { name?: string }).name === "AbortError";
-    if (isCancelled) {
-      await markCancelled();
-      return;
-    }
-    const errMsg = (err as Error).message || "Error";
-    assistantMessage.text = `Error: ${errMsg}`;
-    assistantMessage.streaming = false;
-    refreshChatSafely();
-    await persistAssistantOnce();
-    setStatusSafely(`Error: ${errMsg.slice(0, 40)}`, "error");
-  } finally {
-    setHistoryControlsDisabled(body, false);
-    restoreRequestUIIdle(body, conversationKey, thisRequestId);
-    setCurrentAbortController(null);
-    setPendingRequestId(0);
-  }
+  await retryAgentTurn(body, item, model, apiBase, apiKey, reasoning, advanced, buildAgentEngineDeps());
 }
 
 async function sendAgentQuestion(
@@ -2463,311 +2328,12 @@ async function sendAgentQuestion(
   pinnedPaperContexts?: PaperContextRef[],
   attachments?: ChatAttachment[],
 ): Promise<void> {
-  await ensureConversationLoaded(item);
-  const conversationKey = getConversationKey(item);
-  const history = chatHistory.get(conversationKey) || [];
-  const llmHistory = buildLLMHistoryMessages(history.slice());
-  const effectiveRequestConfig = resolveEffectiveRequestConfig({
-    item,
-    model,
-    apiBase,
-    apiKey,
-    reasoning,
-    advanced,
-  });
-  const selectedTextsForMessage = normalizeSelectedTexts(selectedTexts);
-  const normalizedPaperContexts = normalizePaperContexts(paperContexts);
-  const normalizedPinnedPaperContexts =
-    normalizePaperContexts(pinnedPaperContexts);
-  const {
-    paperContexts: paperContextsForMessage,
-    pinnedPaperContexts: pinnedPaperContextsForMessage,
-  } = includeAutoLoadedPaperContext(
-    item,
-    normalizedPaperContexts,
-    normalizedPinnedPaperContexts,
+  await sendAgentTurn(
+    body, item, question, images, model, apiBase, apiKey, reasoning, advanced,
+    displayQuestion, selectedTexts, selectedTextSources, selectedTextPaperContexts,
+    paperContexts, pinnedPaperContexts, attachments,
+    buildAgentEngineDeps(),
   );
-  const runtimeRequest: AgentRuntimeRequest = {
-    conversationKey,
-    mode: "agent",
-    userText: question,
-    activeItemId: item.id,
-    selectedTexts: selectedTextsForMessage,
-    selectedPaperContexts: paperContextsForMessage,
-    pinnedPaperContexts: pinnedPaperContextsForMessage,
-    attachments,
-    screenshots: images,
-    model: effectiveRequestConfig.model,
-    apiBase: effectiveRequestConfig.apiBase,
-    apiKey: effectiveRequestConfig.apiKey,
-    authMode: effectiveRequestConfig.authMode,
-    providerProtocol: effectiveRequestConfig.providerProtocol,
-    reasoning: effectiveRequestConfig.reasoning,
-    advanced: effectiveRequestConfig.advanced,
-    history: llmHistory,
-    item,
-    systemPrompt: getStringPref("systemPrompt") || undefined,
-    modelProviderLabel: effectiveRequestConfig.modelProviderLabel,
-    libraryID: item.libraryID,
-  };
-  const agentRuntime = getAgentRuntime();
-  const capabilities = agentRuntime.getCapabilities(runtimeRequest);
-  if (!capabilities.toolCalls) {
-    const fallback = await agentRuntime.runTurn({
-      request: runtimeRequest,
-    });
-    if (fallback.kind === "fallback") {
-      await sendQuestion(
-        body,
-        item,
-        question,
-        images,
-        model,
-        apiBase,
-        apiKey,
-        reasoning,
-        advanced,
-        displayQuestion,
-        selectedTexts,
-        selectedTextSources,
-        selectedTextPaperContexts,
-        paperContexts,
-        pinnedPaperContexts,
-        attachments,
-        "agent",
-        fallback.runId,
-        true,
-      );
-      return;
-    }
-  }
-
-  const ui = getPanelRequestUI(body);
-  const thisRequestId = nextRequestId();
-  setPendingRequestId(thisRequestId);
-  const initialConversationKey = getConversationKey(item);
-  setRequestUIBusy(body, ui, initialConversationKey, "Preparing agent...");
-
-  const historyForRun = chatHistory.get(conversationKey) || [];
-  const shownQuestion = displayQuestion || question;
-  const selectedTextSourcesForMessage = normalizeSelectedTextSources(
-    selectedTextSources,
-    selectedTextsForMessage.length,
-  );
-  const selectedTextPaperContextsForMessage =
-    normalizeSelectedTextPaperContextsByIndex(
-      selectedTextPaperContexts,
-      selectedTextsForMessage.length,
-    );
-  const screenshotImagesForMessage = Array.isArray(images)
-    ? images
-        .filter((entry): entry is string => typeof entry === "string")
-        .map((entry) => entry.trim())
-        .filter(Boolean)
-        .slice(0, MAX_SELECTED_IMAGES)
-    : [];
-  const userMessage: Message = {
-    role: "user",
-    text: shownQuestion,
-    timestamp: Date.now(),
-    runMode: "agent",
-    selectedText: selectedTextsForMessage[0] || undefined,
-    selectedTextExpanded: false,
-    selectedTexts: selectedTextsForMessage.length
-      ? selectedTextsForMessage
-      : undefined,
-    selectedTextSources: selectedTextSourcesForMessage.length
-      ? selectedTextSourcesForMessage
-      : undefined,
-    selectedTextPaperContexts: selectedTextPaperContextsForMessage.some(
-      (entry) => Boolean(entry),
-    )
-      ? selectedTextPaperContextsForMessage
-      : undefined,
-    selectedTextExpandedIndex: -1,
-    paperContexts: paperContextsForMessage.length
-      ? paperContextsForMessage
-      : undefined,
-    pinnedPaperContexts: pinnedPaperContextsForMessage.length
-      ? pinnedPaperContextsForMessage
-      : undefined,
-    paperContextsExpanded: false,
-    screenshotImages: screenshotImagesForMessage.length
-      ? screenshotImagesForMessage
-      : undefined,
-    screenshotExpanded: false,
-    screenshotActiveIndex: 0,
-    attachments: attachments?.length ? attachments : undefined,
-  };
-  historyForRun.push(userMessage);
-  await persistConversationMessage(conversationKey, {
-    role: "user",
-    text: userMessage.text,
-    timestamp: userMessage.timestamp,
-    runMode: "agent",
-    selectedText: userMessage.selectedText,
-    selectedTexts: userMessage.selectedTexts,
-    selectedTextSources: userMessage.selectedTextSources,
-    selectedTextPaperContexts: userMessage.selectedTextPaperContexts,
-    paperContexts: userMessage.paperContexts,
-    screenshotImages: userMessage.screenshotImages,
-    attachments: userMessage.attachments,
-  });
-
-  const assistantMessage: Message = {
-    role: "assistant",
-    text: "",
-    timestamp: Date.now(),
-    runMode: "agent",
-    modelName: effectiveRequestConfig.model,
-    modelEntryId: effectiveRequestConfig.modelEntryId,
-    modelProviderLabel: effectiveRequestConfig.modelProviderLabel,
-    streaming: true,
-    reasoningOpen: false,
-  };
-  historyForRun.push(assistantMessage);
-  const { refreshChatSafely, setStatusSafely } = createPanelUpdateHelpers(
-    body,
-    item,
-    conversationKey,
-    ui,
-  );
-  refreshChatSafely();
-
-  let assistantPersisted = false;
-  const persistAssistantOnce = async () => {
-    if (assistantPersisted) return;
-    assistantPersisted = true;
-    await persistConversationMessage(conversationKey, {
-      role: "assistant",
-      text: assistantMessage.text,
-      timestamp: assistantMessage.timestamp,
-      runMode: "agent",
-      agentRunId: assistantMessage.agentRunId,
-      modelName: assistantMessage.modelName,
-      modelEntryId: assistantMessage.modelEntryId,
-      modelProviderLabel: assistantMessage.modelProviderLabel,
-    });
-  };
-  const markCancelled = async () => {
-    finalizeCancelledAssistantMessage(assistantMessage);
-    refreshChatSafely();
-    await persistAssistantOnce();
-    setStatusSafely("Cancelled", "ready");
-  };
-
-  try {
-    const AbortControllerCtor = getAbortController();
-    setCurrentAbortController(
-      AbortControllerCtor ? new AbortControllerCtor() : null,
-    );
-    const queueRefresh = createQueuedRefresh(refreshChatSafely);
-
-    const pushTraceEvent = (runId: string, event: AgentEvent) => {
-      const list = agentRunTraceCache.get(runId) || [];
-      list.push({
-        runId,
-        seq: list.length + 1,
-        eventType: event.type,
-        payload: event,
-        createdAt: Date.now(),
-      });
-      agentRunTraceCache.set(runId, list);
-    };
-
-    const outcome = await agentRuntime.runTurn({
-      request: runtimeRequest,
-      signal: currentAbortController?.signal,
-      onStart: async (runId) => {
-        assistantMessage.agentRunId = runId;
-        userMessage.agentRunId = runId;
-        agentRunTraceCache.set(runId, []);
-        refreshChatSafely();
-        await updateStoredLatestUserMessage(conversationKey, {
-          text: userMessage.text,
-          timestamp: userMessage.timestamp,
-          runMode: "agent",
-          agentRunId: runId,
-          selectedText: userMessage.selectedText,
-          selectedTexts: userMessage.selectedTexts,
-          selectedTextSources: userMessage.selectedTextSources,
-          selectedTextPaperContexts: userMessage.selectedTextPaperContexts,
-          screenshotImages: userMessage.screenshotImages,
-          paperContexts: userMessage.paperContexts,
-          attachments: userMessage.attachments,
-        });
-      },
-      onEvent: async (event) => {
-        if (assistantMessage.agentRunId) {
-          pushTraceEvent(assistantMessage.agentRunId, event);
-        }
-        switch (event.type) {
-          case "status":
-            setStatusSafely(event.text, "sending");
-            break;
-          case "fallback":
-            setStatusSafely(event.reason, "sending");
-            break;
-          case "message_delta":
-            assistantMessage.text += sanitizeText(event.text);
-            break;
-          case "final":
-            if (!assistantMessage.text.trim()) {
-              assistantMessage.text = sanitizeText(event.text);
-            }
-            assistantMessage.streaming = false;
-            break;
-          default:
-            break;
-        }
-        if (event.type === "message_delta") {
-          queueRefresh();
-          return;
-        }
-        refreshChatSafely();
-        await waitForUiStep();
-      },
-    });
-
-    if (
-      cancelledRequestId >= thisRequestId ||
-      Boolean(currentAbortController?.signal.aborted)
-    ) {
-      await markCancelled();
-      return;
-    }
-
-    assistantMessage.agentRunId = outcome.runId;
-    assistantMessage.runMode = "agent";
-    const finalOutcomeText =
-      outcome.kind === "completed" ? outcome.text : assistantMessage.text;
-    assistantMessage.text =
-      sanitizeText(finalOutcomeText) || assistantMessage.text || "No response.";
-    assistantMessage.streaming = false;
-    refreshChatSafely();
-    await persistAssistantOnce();
-    setStatusSafely("Ready", "ready");
-  } catch (err) {
-    const isCancelled =
-      cancelledRequestId >= thisRequestId ||
-      Boolean(currentAbortController?.signal.aborted) ||
-      (err as { name?: string }).name === "AbortError";
-    if (isCancelled) {
-      await markCancelled();
-      return;
-    }
-    const errMsg = (err as Error).message || "Error";
-    assistantMessage.text = `Error: ${errMsg}`;
-    assistantMessage.streaming = false;
-    refreshChatSafely();
-    await persistAssistantOnce();
-    setStatusSafely(`Error: ${errMsg.slice(0, 40)}`, "error");
-  } finally {
-    setHistoryControlsDisabled(body, false);
-    restoreRequestUIIdle(body, conversationKey, thisRequestId);
-    setCurrentAbortController(null);
-    setPendingRequestId(0);
-  }
 }
 
 export async function sendQuestion(

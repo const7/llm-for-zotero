@@ -45,8 +45,9 @@ describe("CodexResponsesAgentAdapter", function () {
           id: "fc_123",
           type: "function_call",
           call_id: "call_123",
-          name: "retrieve_paper_evidence",
+          name: "inspect_pdf",
           arguments: JSON.stringify({
+            operation: "retrieve_evidence",
             question: "What does the paper conclude?",
             topK: 3,
           }),
@@ -57,8 +58,9 @@ describe("CodexResponsesAgentAdapter", function () {
     assert.equal(step.responseId, "resp_123");
     assert.equal(step.toolCalls.length, 1);
     assert.equal(step.toolCalls[0].id, "call_123");
-    assert.equal(step.toolCalls[0].name, "retrieve_paper_evidence");
+    assert.equal(step.toolCalls[0].name, "inspect_pdf");
     assert.deepEqual(step.toolCalls[0].arguments, {
+      operation: "retrieve_evidence",
       question: "What does the paper conclude?",
       topK: 3,
     });

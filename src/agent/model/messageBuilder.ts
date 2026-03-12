@@ -173,17 +173,17 @@ function buildAutoReadInstruction(request: AgentRuntimeRequest): string {
   if (!hasPapers) return "";
   return (
     "FIRST-TURN RULE: Because this is the start of the conversation and paper(s) are attached, " +
-    "your very first action MUST be to call `read_paper_front_matter` to load the title, abstract, " +
+    "your very first action MUST be to call `inspect_pdf` with operation:`front_matter` to load the title, abstract, " +
     "and authors. Do this before answering, even if the answer seems obvious. " +
     "This grounds your response in the actual paper content."
   );
 }
 
-export function buildAgentInitialMessages(
+export async function buildAgentInitialMessages(
   request: AgentRuntimeRequest,
   tools: AgentToolDefinition<any, any>[],
-): AgentModelMessage[] {
-  const memoryBlock = buildAgentMemoryBlock(request.conversationKey);
+): Promise<AgentModelMessage[]> {
+  const memoryBlock = await buildAgentMemoryBlock(request.conversationKey);
   const autoReadInstruction = buildAutoReadInstruction(request);
 
   const sections: PromptSection[] = [

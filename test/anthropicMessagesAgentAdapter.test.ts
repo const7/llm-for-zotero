@@ -20,7 +20,7 @@ describe("AnthropicMessagesAgentAdapter", function () {
   ).ztoolkit;
   const tools: ToolSpec[] = [
     {
-      name: "search_pdf_pages",
+      name: "inspect_pdf",
       description: "search",
       inputSchema: { type: "object" },
       mutability: "read",
@@ -74,7 +74,7 @@ describe("AnthropicMessagesAgentAdapter", function () {
                 {
                   type: "tool_use",
                   id: "toolu_123",
-                  name: "search_pdf_pages",
+                  name: "inspect_pdf",
                   input: { query: "methods" },
                 },
               ],
@@ -96,7 +96,7 @@ describe("AnthropicMessagesAgentAdapter", function () {
 
     assert.equal(
       (capturedBody?.tools as Array<Record<string, unknown>>)[0]?.name,
-      "search_pdf_pages",
+      "inspect_pdf",
     );
     assert.equal(step.kind, "tool_calls");
     if (step.kind !== "tool_calls") return;
@@ -211,7 +211,7 @@ describe("AnthropicMessagesAgentAdapter", function () {
                 'data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}\n\n',
                 'data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Plan first"}}\n\n',
                 'data: {"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig-123"}}\n\n',
-                'data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_456","name":"search_pdf_pages","input":{}}}\n\n',
+                'data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_456","name":"inspect_pdf","input":{}}}\n\n',
                 'data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\\"query\\":\\"methods\\"}"}}\n\n',
               ]),
               json: async () => ({}),
@@ -248,7 +248,7 @@ describe("AnthropicMessagesAgentAdapter", function () {
         {
           role: "tool",
           tool_call_id: "toolu_456",
-          name: "search_pdf_pages",
+          name: "inspect_pdf",
           content: '{"matches":["methods"]}',
         },
       ],
@@ -268,7 +268,7 @@ describe("AnthropicMessagesAgentAdapter", function () {
     assert.deepEqual(secondRequestMessages[1]?.content?.[1], {
       type: "tool_use",
       id: "toolu_456",
-      name: "search_pdf_pages",
+      name: "inspect_pdf",
       input: { query: "methods" },
     });
   });

@@ -3,7 +3,7 @@ import type {
   PaperContextRef,
   GlobalConversationSummary,
   PaperConversationSummary,
-} from "../modules/contextPanel/types";
+} from "../shared/types";
 import {
   GLOBAL_CONVERSATION_KEY_BASE,
   PAPER_CONVERSATION_KEY_BASE,

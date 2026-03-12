@@ -27,45 +27,54 @@ describe("AgentToolRegistry", function () {
 
     assert.equal(result.kind, "result");
     if (result.kind !== "result") return;
-    assert.equal(result.result.ok, false);
-    assert.include(String((result.result.content as { error?: string }).error), "Unknown tool");
+    assert.equal(result.execution.result.ok, false);
+    assert.include(
+      String((result.execution.result.content as { error?: string }).error),
+      "Unknown tool",
+    );
   });
 
   it("gates write tools behind confirmation", async function () {
     const registry = new AgentToolRegistry();
     registry.register({
       spec: {
-        name: "save_answer_to_note",
-        description: "save note",
+        name: "mutate_library",
+        description: "apply changes",
         inputSchema: { type: "object" },
         mutability: "write",
         requiresConfirmation: true,
       },
       validate: (args) =>
-        typeof (args as { content?: unknown })?.content === "string"
-          ? { ok: true, value: { content: (args as { content: string }).content } }
-          : { ok: false, error: "content required" },
+        Array.isArray((args as { operations?: unknown })?.operations)
+          ? {
+              ok: true,
+              value: {
+                operations: (args as { operations: Array<Record<string, unknown>> })
+                  .operations,
+              },
+            }
+          : { ok: false, error: "operations required" },
       createPendingAction: (input) => ({
-        toolName: "save_answer_to_note",
-        title: "Save note?",
+        toolName: "mutate_library",
+        title: "Apply changes?",
         confirmLabel: "Approve",
         cancelLabel: "Cancel",
         fields: [
           {
-            type: "textarea",
-            id: "content",
-            label: "Note content",
-            value: input.content,
+            type: "checklist",
+            id: "selectedOperations",
+            label: "Operations",
+            items: input.operations.map((operation: { id: string; type: string }) => ({
+              id: operation.id,
+              label: operation.type,
+              checked: true,
+            })),
           },
           {
-            type: "select",
-            id: "target",
-            label: "Save target",
-            value: "item",
-            options: [
-              { id: "item", label: "Save as item note" },
-              { id: "standalone", label: "Save as standalone note" },
-            ],
+            type: "textarea",
+            id: "operationsJson",
+            label: "Operations JSON",
+            value: JSON.stringify(input.operations, null, 2),
           },
         ],
       }),
@@ -74,81 +83,110 @@ describe("AgentToolRegistry", function () {
           return { ok: true, value: input };
         }
         const data = resolutionData as {
-          content?: unknown;
-          target?: unknown;
+          selectedOperations?: Array<{ id?: string; checked?: boolean }>;
+          operationsJson?: unknown;
         };
+        const selectedIds = new Set(
+          Array.isArray(data.selectedOperations)
+            ? data.selectedOperations
+                .filter((entry) => entry.checked !== false && typeof entry.id === "string")
+                .map((entry) => entry.id as string)
+            : input.operations.map((operation: { id: string }) => operation.id),
+        );
         return {
           ok: true,
           value: {
-            content:
-              typeof data.content === "string" && data.content.trim()
-                ? data.content.trim()
-                : input.content,
-            target:
-              data.target === "item" || data.target === "standalone"
-                ? data.target
-                : "item",
+            operations: JSON.parse(
+              typeof data.operationsJson === "string"
+                ? data.operationsJson
+                : JSON.stringify(input.operations),
+            ).filter((operation: { id: string }) => selectedIds.has(operation.id)),
           },
         };
       },
-      execute: async (input) => ({ saved: input.content, target: input.target }),
+      execute: async (input) => ({ applied: input.operations.length }),
     });
 
     const result = await registry.prepareExecution(
       {
         id: "call-1",
-        name: "save_answer_to_note",
-        arguments: { content: "hello" },
+        name: "mutate_library",
+        arguments: {
+          operations: [
+            { id: "op-1", type: "apply_tags" },
+            { id: "op-2", type: "create_collection" },
+          ],
+        },
       },
       baseContext,
     );
 
     assert.equal(result.kind, "confirmation");
     if (result.kind !== "confirmation") return;
-    assert.equal(result.action.toolName, "save_answer_to_note");
+    assert.equal(result.action.toolName, "mutate_library");
     assert.deepEqual(result.action.fields.map((field) => field.id), [
-      "content",
-      "target",
+      "selectedOperations",
+      "operationsJson",
     ]);
-    assert.equal(result.deny().ok, false);
+    assert.equal(result.deny().result.ok, false);
     const approved = await result.execute({
-      content: "edited hello",
-      target: "standalone",
+      selectedOperations: [{ id: "op-1", checked: true }],
+      operationsJson: JSON.stringify([{ id: "op-1", type: "apply_tags" }]),
     });
-    assert.equal(approved.ok, true);
-    assert.deepEqual(approved.content, {
-      saved: "edited hello",
-      target: "standalone",
+    assert.equal(approved.result.ok, true);
+    assert.deepEqual(approved.result.content, {
+      applied: 1,
     });
   });
 
-  it("tracks MCP-style resources and prompts separately from tools", function () {
+  it("lets tools opt into explicit inherited approval", async function () {
     const registry = new AgentToolRegistry();
-    registry.registerResource({
+    registry.register({
       spec: {
-        name: "active_context",
-        description: "Current Zotero context",
-        uri: "zotero://active-context",
+        name: "mutate_library",
+        description: "apply changes",
+        inputSchema: { type: "object" },
+        mutability: "write",
+        requiresConfirmation: true,
       },
-      read: async () => ({ ok: true }),
-    });
-    registry.registerPrompt({
-      spec: {
-        name: "paper_summary",
-        description: "Summarize a paper",
-        arguments: [{ name: "question", description: "User request", required: true }],
-      },
-      render: async () => "Summarize the paper",
+      validate: () => ({
+        ok: true,
+        value: {
+          operations: [{ type: "import_identifiers", identifiers: ["10.1000/a"] }],
+        },
+      }),
+      acceptInheritedApproval: (_input, approval) =>
+        approval.sourceToolName === "search_literature_online" &&
+        approval.sourceActionId === "import",
+      createPendingAction: () => ({
+        toolName: "mutate_library",
+        title: "Apply changes?",
+        confirmLabel: "Approve",
+        cancelLabel: "Cancel",
+        fields: [],
+      }),
+      execute: async () => ({ applied: 1 }),
     });
 
-    assert.deepEqual(registry.listTools(), []);
-    assert.deepEqual(registry.listResources().map((entry) => entry.name), [
-      "active_context",
-    ]);
-    assert.deepEqual(registry.listPrompts().map((entry) => entry.name), [
-      "paper_summary",
-    ]);
-    assert.equal(registry.getResource("active_context")?.spec.uri, "zotero://active-context");
-    assert.equal(registry.getPrompt("paper_summary")?.spec.name, "paper_summary");
+    const result = await registry.prepareExecution(
+      {
+        id: "call-2",
+        name: "mutate_library",
+        arguments: {},
+      },
+      baseContext,
+      {
+        inheritedApproval: {
+          sourceToolName: "search_literature_online",
+          sourceActionId: "import",
+          sourceMode: "review",
+        },
+      },
+    );
+
+    assert.equal(result.kind, "result");
+    if (result.kind !== "result") return;
+    assert.equal(result.execution.result.ok, true);
+    assert.deepEqual(result.execution.result.content, { applied: 1 });
   });
 });

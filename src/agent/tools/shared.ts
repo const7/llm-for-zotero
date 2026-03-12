@@ -4,7 +4,7 @@ import type {
 import type {
   ChatAttachment,
   PaperContextRef,
-} from "../../modules/contextPanel/types";
+} from "../../shared/types";
 
 export type NoteSaveTarget = "item" | "standalone";
 
