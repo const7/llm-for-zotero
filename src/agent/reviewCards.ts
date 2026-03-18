@@ -9,9 +9,17 @@ import type {
   AgentToolResult,
 } from "./types";
 import { normalizeNoteSourceText } from "../modules/contextPanel/notes";
-import type { EditableArticleMetadataPatch } from "./services/zoteroGateway";
+import type {
+  EditableArticleMetadataPatch,
+  EditableArticleMetadataField,
+} from "./services/zoteroGateway";
+import { EDITABLE_ARTICLE_METADATA_FIELDS } from "./services/zoteroGateway";
 import type { PaperContextRef } from "../shared/types";
 import { normalizeToolPaperContext } from "./tools/shared";
+import {
+  METADATA_FIELD_DISPLAY_LABELS,
+  formatCreatorsDisplay,
+} from "./tools/write/mutateLibraryShared";
 
 type SearchLiteratureOnlineMode =
   | "recommendations"
@@ -63,6 +71,8 @@ type SearchReviewPrepared =
       rows: SearchReviewMetadataRow[];
       choices: SearchReviewMetadataChoice[];
       noteContent: string;
+      /** Whether the best result has high-confidence match (translator or DOI). */
+      highConfidence: boolean;
     };
 
 type SearchReviewArgs = {
@@ -150,22 +160,13 @@ function buildPaperBadges(result: Record<string, unknown>): string[] | undefined
 }
 
 function describeMetadataResult(result: Record<string, unknown>): string {
-  const title = readString(result.title) || "Untitled result";
-  const authors = Array.isArray(result.authors)
-    ? result.authors
-        .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
-        .slice(0, 4)
-        .join(", ")
-    : "";
-  const year =
-    typeof result.year === "number"
-      ? String(result.year)
-      : readString(result.year) || "";
-  const venue = readString(result.venue) || "";
-  const abstract = readString(result.abstract) || "";
+  const patch = result.patch as Record<string, unknown> | undefined;
+  const title = readString(result.displayTitle) || readString(patch?.title) || "Untitled result";
+  const subtitle = readString(result.displaySubtitle) || "";
+  const abstract = readString(patch?.abstractNote) || "";
   const abstractSnippet =
     abstract.length > 220 ? `${abstract.slice(0, 220).trimEnd()}...` : abstract;
-  return [title, [authors, year, venue].filter(Boolean).join(" · "), abstractSnippet]
+  return [title, subtitle, abstractSnippet]
     .filter(Boolean)
     .join("\n");
 }
@@ -205,12 +206,13 @@ function scoreMetadataChoice(
   context: AgentToolContext,
 ): number {
   let score = 0;
-  const candidateDoi = bareDoi(record.doi);
+  const patch = record.patch as Record<string, unknown> | undefined;
+  const candidateDoi = bareDoi(patch?.DOI);
   const targetDoi = bareDoi(args.doi);
   if (candidateDoi && targetDoi && candidateDoi.toLowerCase() === targetDoi.toLowerCase()) {
     score += 100;
   }
-  const candidateTitle = readString(record.title);
+  const candidateTitle = readString(record.displayTitle) || readString(patch?.title);
   const targetTitle = args.title || args.query || getReferencePaperTitle(context);
   if (candidateTitle && targetTitle) {
     const candidateKey = normalizeTitleKey(candidateTitle);
@@ -224,7 +226,9 @@ function scoreMetadataChoice(
     }
   }
   const source = readString(record.source)?.toLowerCase();
-  if (source === "crossref" || source === "crossref") {
+  if (source === "zotero translator") {
+    score += 10;
+  } else if (source === "crossref") {
     score += 5;
   }
   return score;
@@ -233,13 +237,12 @@ function scoreMetadataChoice(
 function describeMetadataChoice(
   record: Record<string, unknown>,
 ): { title: string; subtitle?: string; badge?: string } {
+  const patch = record.patch as Record<string, unknown> | undefined;
   const source = readString(record.source) || "Metadata result";
-  const title = readString(record.title) || source;
-  const year =
-    typeof record.year === "number" ? String(record.year) : readString(record.year);
-  const venue = readString(record.venue);
-  const subtitle = [source, year, venue].filter(Boolean).join(" · ") || undefined;
-  const doi = bareDoi(record.doi);
+  const title = readString(record.displayTitle) || readString(patch?.title) || source;
+  const subtitle = readString(record.displaySubtitle) ||
+    [source].filter(Boolean).join(" · ") || undefined;
+  const doi = bareDoi(patch?.DOI);
   return {
     title,
     subtitle,
@@ -250,33 +253,9 @@ function describeMetadataChoice(
 function buildMetadataUpdatePatch(
   record: Record<string, unknown>,
 ): EditableArticleMetadataPatch | null {
-  const metadata: EditableArticleMetadataPatch = {};
-  const title = readString(record.title);
-  if (title) metadata.title = title;
-  const abstract = readString(record.abstract);
-  if (abstract) metadata.abstractNote = abstract;
-  const doi = bareDoi(record.doi);
-  if (doi) metadata.DOI = doi;
-  const url = readString(record.url);
-  if (url) metadata.url = url;
-  const date =
-    typeof record.year === "number"
-      ? String(record.year)
-      : readString(record.publicationDate) || readString(record.year);
-  if (date) metadata.date = date;
-  const venue = readString(record.venue);
-  if (venue) metadata.publicationTitle = venue;
-  const authors = Array.isArray(record.authors)
-    ? record.authors
-        .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
-        .map((name) => ({
-          creatorType: "author",
-          name: name.trim(),
-          fieldMode: 1 as const,
-        }))
-    : [];
-  if (authors.length) metadata.creators = authors;
-  return Object.keys(metadata).length ? metadata : null;
+  // The patch is built at the source (literatureSearchService) — just read it
+  const patch = record.patch as EditableArticleMetadataPatch | undefined;
+  return patch && Object.keys(patch).length > 0 ? patch : null;
 }
 
 function resolveMetadataChoice(
@@ -399,7 +378,8 @@ function prepareSearchReview(
       rows.push({
         key: rowId,
         label: readString(record.source) || `Result ${index + 1}`,
-        before: readString(record.url) || bareDoi(record.doi),
+        before: readString((record.patch as Record<string, unknown> | undefined)?.url) ||
+          bareDoi((record.patch as Record<string, unknown> | undefined)?.DOI),
         after: describeMetadataResult(record),
         multiline: true,
       });
@@ -413,12 +393,18 @@ function prepareSearchReview(
       });
     }
     if (!rows.length) return null;
+    // Detect high confidence: translator source or DOI match confidence
+    const firstRecord = results[0] as Record<string, unknown> | undefined;
+    const source = readString(firstRecord?.source)?.toLowerCase();
+    const matchConf = readString(firstRecord?.matchConfidence);
+    const highConfidence = source === "zotero translator" || matchConf === "doi";
     return {
       kind: "metadata",
       mode,
       rows,
       choices,
       noteContent: "",
+      highConfidence,
     };
   }
 
@@ -537,6 +523,77 @@ function normalizeSearchReviewArgs(args: unknown): SearchReviewArgs {
   };
 }
 
+/**
+ * Build before/after diff rows by comparing a metadata patch against
+ * the current Zotero item's fields. Only includes rows where the value
+ * would actually change (new value for empty field, or different value).
+ */
+function buildMetadataDiffRows(
+  patch: EditableArticleMetadataPatch,
+  context: AgentToolContext,
+  args: SearchReviewArgs,
+): SearchReviewMetadataRow[] {
+  const rows: SearchReviewMetadataRow[] = [];
+  // Try to get current item snapshot for before values
+  let currentFields: Partial<Record<string, string>> = {};
+  let currentCreatorsDisplay = "";
+  const paperContext = args.paperContext || getReferencePaperContext(context);
+  const itemId = args.itemId || paperContext?.itemId ||
+    readPositiveInt(context.request.activeItemId);
+
+  // We'll try to read from the context item if available
+  if (context.item) {
+    try {
+      for (const fieldName of EDITABLE_ARTICLE_METADATA_FIELDS) {
+        const val = context.item.getField?.(fieldName);
+        if (typeof val === "string" && val.trim()) {
+          currentFields[fieldName] = val.trim();
+        }
+      }
+      const creators = context.item.getCreatorsJSON?.() || [];
+      currentCreatorsDisplay = creators
+        .map((c) => {
+          const rec = c as unknown as Record<string, unknown>;
+          return rec.name ? String(rec.name) : [rec.firstName, rec.lastName].filter(Boolean).join(" ");
+        })
+        .filter(Boolean)
+        .join("; ");
+    } catch {
+      // Best effort — proceed with empty before values
+    }
+  }
+
+  for (const fieldName of EDITABLE_ARTICLE_METADATA_FIELDS) {
+    if (!Object.prototype.hasOwnProperty.call(patch, fieldName)) continue;
+    const newValue = patch[fieldName as EditableArticleMetadataField] ?? "";
+    const before = currentFields[fieldName] ?? "";
+    // Skip fields where value is identical
+    if (before === newValue) continue;
+    const label = METADATA_FIELD_DISPLAY_LABELS[fieldName] || fieldName;
+    rows.push({
+      key: fieldName,
+      label,
+      before,
+      after: newValue,
+      multiline: fieldName === "abstractNote",
+    });
+  }
+
+  if (patch.creators?.length) {
+    const after = formatCreatorsDisplay(patch.creators);
+    if (currentCreatorsDisplay !== after) {
+      rows.push({
+        key: "creators",
+        label: "Authors",
+        before: currentCreatorsDisplay,
+        after,
+      });
+    }
+  }
+
+  return rows;
+}
+
 function validateMetadataPaperContext(value: unknown): PaperContextRef | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
     ? normalizeToolPaperContext(value as Record<string, unknown>) || undefined
@@ -554,6 +611,49 @@ export function createSearchLiteratureReviewAction(
     const noteContent = buildMetadataNoteTemplate(context, prepared.rows);
     const normalizedArgs = normalizeSearchReviewArgs(args);
     const selectedChoice = resolveMetadataChoice(prepared, undefined, normalizedArgs, context);
+
+    // High-confidence match (translator result or DOI match): skip source selection
+    // and show a single "Review & Apply" card instead of the two-step flow.
+    if (prepared.highConfidence && selectedChoice) {
+      const metadata = buildMetadataUpdatePatch(selectedChoice.raw);
+      if (metadata) {
+        // Build before/after diff rows for the fields that would change
+        const diffRows = buildMetadataDiffRows(metadata, context, normalizedArgs);
+        return {
+          toolName: "search_literature_online",
+          mode: "review",
+          title: "Review metadata changes",
+          description:
+            "These field changes will be applied to your Zotero item. Review the before/after values below.",
+          confirmLabel: "Apply changes",
+          cancelLabel: "Cancel",
+          actions: [
+            { id: "apply_direct", label: "Apply changes", style: "primary" as const },
+            {
+              id: "save_note",
+              label: "Save metadata as note",
+              style: "secondary" as const,
+              executionMode: "edit" as const,
+              submitLabel: "Save metadata as note",
+            },
+            { id: "cancel", label: "Cancel", style: "secondary" as const },
+          ],
+          defaultActionId: "apply_direct",
+          cancelActionId: "cancel",
+          fields: [
+            {
+              type: "review_table",
+              id: "metadataDiff",
+              label: "Field changes",
+              rows: diffRows,
+            },
+            ...buildNoteDraftReviewFields(noteContent),
+          ],
+        };
+      }
+    }
+
+    // Low-confidence: show the original source-selection card
     return {
       toolName: "search_literature_online",
       mode: "review",
@@ -698,6 +798,48 @@ export function resolveSearchLiteratureReview(
         },
       };
     }
+    if (actionId === "apply_direct") {
+      // High-confidence path: user already reviewed the diff, apply directly
+      const bestChoice = resolveMetadataChoice(prepared, undefined, normalizedArgs, context);
+      const metadata = bestChoice ? buildMetadataUpdatePatch(bestChoice.raw) : null;
+      const paperContext = normalizedArgs.paperContext || getReferencePaperContext(context);
+      const itemId =
+        normalizedArgs.itemId ||
+        paperContext?.itemId ||
+        readPositiveInt(context.request.activeItemId);
+      if (!metadata || (!paperContext && !itemId)) {
+        return {
+          kind: "stop",
+          finalText: "Could not prepare metadata changes from the selected result.",
+        };
+      }
+      return {
+        kind: "invoke_tool",
+        call: {
+          name: "mutate_library",
+          arguments: {
+            operations: [
+              {
+                type: "update_metadata",
+                ...(paperContext ? { paperContext } : { itemId }),
+                metadata,
+              },
+            ],
+          },
+          // Skip the second confirmation card — the user already reviewed the diff
+          inheritedApproval: {
+            sourceToolName: "search_literature_online",
+            sourceActionId: "apply_direct",
+            sourceMode: "review",
+          } satisfies AgentInheritedApproval,
+        },
+        terminalText: {
+          onSuccess: "Applied the metadata changes to the paper.",
+          onDenied: "Applying the metadata changes was cancelled.",
+          onError: "Could not apply the metadata changes.",
+        },
+      };
+    }
     if (actionId === "review_changes") {
       const selectedChoice = resolveMetadataChoice(
         prepared,
@@ -730,6 +872,12 @@ export function resolveSearchLiteratureReview(
               },
             ],
           },
+          // User already reviewed the source selection — skip mutate_library's card
+          inheritedApproval: {
+            sourceToolName: "search_literature_online",
+            sourceActionId: "review_changes",
+            sourceMode: "review",
+          } satisfies AgentInheritedApproval,
         },
         terminalText: {
           onSuccess: "Applied the selected metadata to the paper.",

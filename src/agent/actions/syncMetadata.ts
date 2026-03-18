@@ -1,8 +1,13 @@
 import type { AgentAction, ActionExecutionContext, ActionResult } from "./types";
-import type { EditableArticleMetadataPatch } from "../services/zoteroGateway";
+import type {
+  EditableArticleMetadataPatch,
+  EditableArticleMetadataField,
+} from "../services/zoteroGateway";
+import { EDITABLE_ARTICLE_METADATA_FIELDS } from "../services/zoteroGateway";
 import { callTool } from "./executor";
 import {
   getMetadataField,
+  getMetadataTitle,
   hasMetadataCreators,
 } from "./metadataSnapshot";
 
@@ -13,22 +18,25 @@ type SyncMetadataInput = {
 
 type SyncMetadataOutput = {
   scanned: number;
-  withDoi: number;
+  withIdentifier: number;
   updated: number;
   skipped: number;
   errors: number;
 };
 
 /**
- * Fetches canonical metadata from CrossRef/Semantic Scholar for each library item
- * that has a DOI, then fills in missing fields (abstract, year, venue, authors)
- * and presents a before/after diff for user review before applying changes.
+ * Fetches canonical metadata for library items using Zotero's translator engine
+ * (via DOI, arXiv ID, or title-based lookup), then fills in missing fields and
+ * presents a before/after diff for user review before applying changes.
+ *
+ * Supports items with DOI, arXiv ID, or just a title — not limited to DOI-only items.
  */
 export const syncMetadataAction: AgentAction<SyncMetadataInput, SyncMetadataOutput> = {
   name: "sync_metadata",
   description:
-    "Fetch canonical metadata from CrossRef and Semantic Scholar for library items that have a DOI. " +
-    "Shows a before/after diff and applies missing fields (abstract, year, venue) after user approval.",
+    "Fetch canonical metadata from Zotero translators, CrossRef, and Semantic Scholar for library items. " +
+    "Supports items with DOI, arXiv ID, or title. " +
+    "Shows a before/after diff and applies missing fields after user approval.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -52,10 +60,10 @@ export const syncMetadataAction: AgentAction<SyncMetadataInput, SyncMetadataOutp
     const STEPS = 3;
     let step = 0;
 
-    // Step 1: query items that have a DOI
+    // Step 1: query items with metadata
     ctx.onProgress({
       type: "step_start",
-      step: "Querying items with DOI",
+      step: "Querying library items",
       index: ++step,
       total: STEPS,
     });
@@ -77,34 +85,40 @@ export const syncMetadataAction: AgentAction<SyncMetadataInput, SyncMetadataOutp
     const content = queryResult.content as Record<string, unknown>;
     const allItems = Array.isArray(content.results) ? content.results : [];
 
-    type ItemWithDoi = { itemId: number; doi: string; currentMeta: unknown };
-    const itemsWithDoi: ItemWithDoi[] = [];
+    type ItemCandidate = {
+      itemId: number;
+      doi?: string;
+      title?: string;
+      currentMeta: unknown;
+    };
+    const candidates: ItemCandidate[] = [];
     for (const item of allItems) {
       if (!item || typeof item !== "object") continue;
       const record = item as Record<string, unknown>;
       const itemId = typeof record.itemId === "number" ? record.itemId : null;
       if (!itemId) continue;
       const meta = record.metadata;
-      const doi = getMetadataField(meta, "DOI")?.replace(/^https?:\/\/doi\.org\//i, "") || null;
-      if (doi) {
-        itemsWithDoi.push({ itemId, doi, currentMeta: meta });
+      const doi = getMetadataField(meta, "DOI")?.replace(/^https?:\/\/doi\.org\//i, "") || undefined;
+      const title = getMetadataTitle(meta) || undefined;
+      if (doi || title) {
+        candidates.push({ itemId, doi, title, currentMeta: meta });
       }
     }
 
     ctx.onProgress({
       type: "step_done",
-      step: "Querying items with DOI",
-      summary: `${itemsWithDoi.length} of ${allItems.length} items have a DOI`,
+      step: "Querying library items",
+      summary: `${candidates.length} of ${allItems.length} items have a DOI or title`,
     });
 
-    if (!itemsWithDoi.length) {
+    if (!candidates.length) {
       return {
         ok: true,
-        output: { scanned: allItems.length, withDoi: 0, updated: 0, skipped: 0, errors: 0 },
+        output: { scanned: allItems.length, withIdentifier: 0, updated: 0, skipped: 0, errors: 0 },
       };
     }
 
-    // Step 2: fetch canonical metadata for each DOI
+    // Step 2: fetch canonical metadata for each item
     ctx.onProgress({
       type: "step_start",
       step: "Fetching canonical metadata",
@@ -114,7 +128,6 @@ export const syncMetadataAction: AgentAction<SyncMetadataInput, SyncMetadataOutp
 
     type UpdateCandidate = {
       itemId: number;
-      doi: string;
       patch: EditableArticleMetadataPatch;
       currentMeta: unknown;
       externalTitle: string;
@@ -122,17 +135,28 @@ export const syncMetadataAction: AgentAction<SyncMetadataInput, SyncMetadataOutp
     const updateCandidates: UpdateCandidate[] = [];
     let errorCount = 0;
 
-    for (const { itemId, doi, currentMeta } of itemsWithDoi) {
+    for (const { itemId, doi, title, currentMeta } of candidates) {
+      const label = doi ? `DOI: ${doi}` : `title: ${(title || "").slice(0, 50)}`;
       ctx.onProgress({
         type: "status",
-        message: `Fetching metadata for DOI: ${doi}`,
+        message: `Fetching metadata for ${label}`,
       });
+
+      const searchArgs: Record<string, unknown> = {
+        mode: "metadata",
+        libraryID: ctx.libraryID,
+      };
+      if (doi) {
+        searchArgs.doi = doi;
+      } else if (title) {
+        searchArgs.title = title;
+      }
 
       const metaResult = await callTool(
         "search_literature_online",
-        { mode: "metadata", doi, libraryID: ctx.libraryID },
+        searchArgs,
         ctx,
-        `Fetching metadata for ${doi}`,
+        `Fetching metadata for ${label}`,
       );
 
       if (!metaResult.ok) {
@@ -145,46 +169,29 @@ export const syncMetadataAction: AgentAction<SyncMetadataInput, SyncMetadataOutp
       const externalMeta = results[0] as Record<string, unknown> | undefined;
       if (!externalMeta) continue;
 
-      // Build patch: only fill in fields that are currently empty in Zotero
-      const patch: EditableArticleMetadataPatch = {};
+      // The patch is built at the source (literatureSearchService) — just read it.
+      // Only fill in fields that are currently empty in Zotero.
+      const sourcePatch = externalMeta.patch as EditableArticleMetadataPatch | undefined;
+      if (!sourcePatch || Object.keys(sourcePatch).length === 0) continue;
 
-      if (
-        !getMetadataField(currentMeta, "abstractNote") &&
-        typeof externalMeta.abstract === "string" &&
-        externalMeta.abstract.trim()
-      ) {
-        patch.abstractNote = externalMeta.abstract.trim();
-      }
-      if (!getMetadataField(currentMeta, "date") && (externalMeta.year || externalMeta.publicationDate)) {
-        const yearStr = String(externalMeta.year || externalMeta.publicationDate || "").trim();
-        if (yearStr) patch.date = yearStr;
-      }
-      if (
-        !getMetadataField(currentMeta, "publicationTitle") &&
-        typeof externalMeta.venue === "string" &&
-        externalMeta.venue.trim()
-      ) {
-        patch.publicationTitle = externalMeta.venue.trim();
-      }
-      if (!hasMetadataCreators(currentMeta) && Array.isArray(externalMeta.authors)) {
-        const creators = externalMeta.authors
-          .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
-          .map((name) => ({
-            creatorType: "author",
-            name: name.trim(),
-          }));
-        if (creators.length) {
-          patch.creators = creators;
+      const patch: EditableArticleMetadataPatch = {};
+      for (const fieldName of EDITABLE_ARTICLE_METADATA_FIELDS) {
+        const currentValue = getMetadataField(currentMeta, fieldName);
+        const newValue = sourcePatch[fieldName as EditableArticleMetadataField];
+        if (!currentValue && newValue) {
+          patch[fieldName as EditableArticleMetadataField] = newValue;
         }
+      }
+      if (!hasMetadataCreators(currentMeta) && sourcePatch.creators?.length) {
+        patch.creators = sourcePatch.creators;
       }
 
       if (Object.keys(patch).length > 0) {
         updateCandidates.push({
           itemId,
-          doi,
           patch,
           currentMeta,
-          externalTitle: typeof externalMeta.title === "string" ? externalMeta.title : String(itemId),
+          externalTitle: typeof externalMeta.displayTitle === "string" ? externalMeta.displayTitle : (sourcePatch.title || String(itemId)),
         });
       }
     }
@@ -200,9 +207,9 @@ export const syncMetadataAction: AgentAction<SyncMetadataInput, SyncMetadataOutp
         ok: true,
         output: {
           scanned: allItems.length,
-          withDoi: itemsWithDoi.length,
+          withIdentifier: candidates.length,
           updated: 0,
-          skipped: itemsWithDoi.length,
+          skipped: candidates.length,
           errors: errorCount,
         },
       };
@@ -247,9 +254,9 @@ export const syncMetadataAction: AgentAction<SyncMetadataInput, SyncMetadataOutp
       ok: true,
       output: {
         scanned: allItems.length,
-        withDoi: itemsWithDoi.length,
+        withIdentifier: candidates.length,
         updated: succeeded,
-        skipped: itemsWithDoi.length - updateCandidates.length + denied,
+        skipped: candidates.length - updateCandidates.length + denied,
         errors: errorCount,
       },
     };

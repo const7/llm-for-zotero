@@ -18,7 +18,6 @@ import {
 import type {
   EditableArticleCreator,
   EditableArticleMetadataPatch,
-  EditableArticleMetadataField,
   ZoteroGateway,
 } from "../../services/zoteroGateway";
 import { EDITABLE_ARTICLE_METADATA_FIELDS } from "../../services/zoteroGateway";
@@ -32,6 +31,12 @@ import {
   ok,
   validateObject,
 } from "../shared";
+import {
+  normalizeStringValue,
+  normalizeCreator,
+  normalizeCreatorsList,
+  normalizeMetadataPatch,
+} from "./mutateLibraryShared";
 
 type MutateLibraryInput = {
   operations: LibraryMutationOperation[];
@@ -48,94 +53,6 @@ function normalizeOperationListValue(args: Record<string, unknown>): unknown {
     return [args];
   }
   return args.operations;
-}
-
-function normalizeStringValue(value: unknown): string | null {
-  if (typeof value === "string") return value.trim();
-  if (typeof value === "number" || typeof value === "boolean") {
-    return `${value}`.trim();
-  }
-  return null;
-}
-
-function normalizeCreator(value: unknown): EditableArticleCreator | null {
-  if (!validateObject<Record<string, unknown>>(value)) return null;
-  const creatorType =
-    typeof value.creatorType === "string" && value.creatorType.trim()
-      ? value.creatorType.trim()
-      : "author";
-  const name =
-    typeof value.name === "string" && value.name.trim()
-      ? value.name.trim()
-      : undefined;
-  const firstName =
-    typeof value.firstName === "string" && value.firstName.trim()
-      ? value.firstName.trim()
-      : undefined;
-  const lastName =
-    typeof value.lastName === "string" && value.lastName.trim()
-      ? value.lastName.trim()
-      : undefined;
-  if (!name && !firstName && !lastName) return null;
-  return {
-    creatorType,
-    name,
-    firstName,
-    lastName,
-    fieldMode: name ? 1 : 0,
-  };
-}
-
-function normalizeCreatorsList(raw: unknown): EditableArticleCreator[] | null {
-  if (Array.isArray(raw)) {
-    const list = raw
-      .map((entry) => normalizeCreator(entry))
-      .filter((entry): entry is EditableArticleCreator => Boolean(entry));
-    return list;
-  }
-  // Model may send a comma/semicolon-separated string like "Stefan Leutgeb, Jill K. Leutgeb"
-  if (typeof raw === "string" && raw.trim()) {
-    return raw
-      .split(/;|,(?![^(]*\))/)
-      .map((name) => name.trim())
-      .filter(Boolean)
-      .map((name) => ({ creatorType: "author", name, fieldMode: 1 as const }));
-  }
-  return null;
-}
-
-function normalizeMetadataPatch(value: unknown): EditableArticleMetadataPatch | null {
-  if (!validateObject<Record<string, unknown>>(value)) return null;
-  const normalizedValue = validateObject<Record<string, unknown>>(value.fields)
-    ? {
-        ...(value.fields as Record<string, unknown>),
-        ...value,
-      }
-    : value;
-  const metadata: EditableArticleMetadataPatch = {};
-  for (const fieldName of EDITABLE_ARTICLE_METADATA_FIELDS) {
-    if (!Object.prototype.hasOwnProperty.call(normalizedValue, fieldName)) continue;
-    const normalized = normalizeStringValue(normalizedValue[fieldName]);
-    if (normalized === null) return null;
-    metadata[fieldName as EditableArticleMetadataField] = normalized;
-  }
-  // Accept "creators" or "authors" (common model alias). Handle arrays and
-  // comma/semicolon-separated strings. Non-parseable values are silently skipped
-  // so they do not abort the entire patch.
-  const rawCreators =
-    Object.prototype.hasOwnProperty.call(normalizedValue, "creators")
-      ? normalizedValue.creators
-      : Object.prototype.hasOwnProperty.call(normalizedValue, "authors")
-        ? normalizedValue.authors
-        : undefined;
-  if (rawCreators !== undefined) {
-    const creators = normalizeCreatorsList(rawCreators);
-    if (creators !== null) {
-      metadata.creators = creators;
-    }
-    // If unparseable, skip rather than aborting the whole patch
-  }
-  return Object.keys(metadata).length ? metadata : null;
 }
 
 function normalizePaperContext(value: unknown): PaperContextRef | undefined {
@@ -1059,17 +976,20 @@ export function createMutateLibraryTool(
       return input.operations.length > 0;
     },
     acceptInheritedApproval: async (input, approval) => {
-      if (approval.sourceToolName !== "search_literature_online") {
-        return false;
-      }
-      if (approval.sourceActionId !== "import" && approval.sourceActionId !== "save_note") {
-        return false;
-      }
+      // Accept any tool that showed a review card (sourceMode === "review")
+      // and whose operations match the approval context.
+      // This is pattern-based rather than enumerating specific action IDs.
+      if (approval.sourceMode !== "review") return false;
       return input.operations.every((operation) => {
         if (approval.sourceActionId === "import") {
           return operation.type === "import_identifiers";
         }
-        return operation.type === "save_note";
+        if (approval.sourceActionId === "save_note") {
+          return operation.type === "save_note";
+        }
+        // For review-mode approvals (apply_direct, review_changes, etc.),
+        // accept update_metadata operations — user already reviewed the diff.
+        return operation.type === "update_metadata";
       });
     },
     createPendingAction: async (input, context) => {

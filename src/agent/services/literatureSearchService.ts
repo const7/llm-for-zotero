@@ -1,5 +1,6 @@
 import type { PaperContextRef } from "../../shared/types";
 import type { AgentToolContext } from "../types";
+import type { EditableArticleMetadataPatch } from "./zoteroGateway";
 import type { ZoteroGateway } from "./zoteroGateway";
 
 type SearchMode =
@@ -37,15 +38,15 @@ type OnlinePaperResult = {
 
 type ExternalMetadataResult = {
   source: string;
-  doi?: string;
-  title?: string;
-  authors?: string[];
-  year?: string | number;
-  abstract?: string;
-  venue?: string;
+  /** Ready-to-apply Zotero metadata patch — built at the source, not downstream. */
+  patch: import("./zoteroGateway").EditableArticleMetadataPatch;
+  /** How the result was matched: 'doi' (identifier match), 'title' (title search). */
+  matchConfidence?: "doi" | "title";
+  /** Supplementary data not in Zotero fields. */
   citationCount?: number;
-  url?: string;
-  type?: string;
+  /** Display-only fields for review cards. */
+  displayTitle?: string;
+  displaySubtitle?: string;
 };
 
 type LiteratureSearchResult =
@@ -548,23 +549,41 @@ async function lookupCrossRefByDoi(
     const published = (
       message["published-print"] ||
       message["published-online"] ||
-      message.published
+      message.published ||
+      message.issued ||
+      message.created
     ) as { "date-parts"?: number[][] } | undefined;
     const year = published?.["date-parts"]?.[0]?.[0];
     const containerTitle = Array.isArray(message["container-title"])
       ? (message["container-title"] as string[])
       : [];
     const abstractText = normalizeString(message.abstract);
+    const title = titleList[0] ? stripHtmlTags(titleList[0]) : undefined;
+    const abstract = abstractText ? stripHtmlTags(abstractText).slice(0, 600) : undefined;
+    const venue = containerTitle[0] ? stripHtmlTags(containerTitle[0]) : undefined;
+    const resolvedDoi = normalizeString(message.DOI) || doi;
+    const url = normalizeString(message.URL) || undefined;
+    const patch: EditableArticleMetadataPatch = {};
+    if (title) patch.title = title;
+    if (resolvedDoi) patch.DOI = resolvedDoi;
+    if (abstract) patch.abstractNote = abstract;
+    if (year) patch.date = String(year);
+    if (venue) patch.publicationTitle = venue;
+    if (url) patch.url = url;
+    if (authors.length) {
+      patch.creators = authors.map((name) => ({
+        creatorType: "author",
+        name,
+        fieldMode: 1 as 0 | 1,
+      }));
+    }
+    const yearStr = year ? String(year) : undefined;
+    const authorLabel = authors.slice(0, 3).join(", ") + (authors.length > 3 ? " et al." : "");
     return {
       source: "CrossRef",
-      doi: normalizeString(message.DOI) || doi,
-      title: titleList[0] ? stripHtmlTags(titleList[0]) : undefined,
-      authors,
-      year: year ?? undefined,
-      abstract: abstractText ? stripHtmlTags(abstractText).slice(0, 600) : undefined,
-      venue: containerTitle[0] ? stripHtmlTags(containerTitle[0]) : undefined,
-      type: normalizeString(message.type) || undefined,
-      url: normalizeString(message.URL) || undefined,
+      patch,
+      displayTitle: title,
+      displaySubtitle: [yearStr, authorLabel, venue].filter(Boolean).join(" · ") || undefined,
     };
   } catch {
     return null;
@@ -598,7 +617,9 @@ async function searchCrossRef(query: string): Promise<ExternalMetadataResult[]> 
         const published = (
           message["published-print"] ||
           message["published-online"] ||
-          message.published
+          message.published ||
+          message.issued ||
+          message.created
         ) as { "date-parts"?: number[][] } | undefined;
         const year = published?.["date-parts"]?.[0]?.[0];
         const containerTitle = Array.isArray(message["container-title"])
@@ -606,19 +627,34 @@ async function searchCrossRef(query: string): Promise<ExternalMetadataResult[]> 
           : [];
         const abstractText = normalizeString(message.abstract);
         const doi = normalizeString(message.DOI);
+        const title = titleList[0] ? stripHtmlTags(titleList[0]) : undefined;
+        const abstract = abstractText ? stripHtmlTags(abstractText).slice(0, 600) : undefined;
+        const venue = containerTitle[0] ? stripHtmlTags(containerTitle[0]) : undefined;
+        const url = normalizeString(message.URL) || undefined;
+        const patch: EditableArticleMetadataPatch = {};
+        if (title) patch.title = title;
+        if (doi) patch.DOI = doi;
+        if (abstract) patch.abstractNote = abstract;
+        if (year) patch.date = String(year);
+        if (venue) patch.publicationTitle = venue;
+        if (url) patch.url = url;
+        if (authors.length) {
+          patch.creators = authors.map((name) => ({
+            creatorType: "author",
+            name,
+            fieldMode: 1 as 0 | 1,
+          }));
+        }
+        const yearStr = year ? String(year) : undefined;
+        const authorLabel = authors.slice(0, 3).join(", ") + (authors.length > 3 ? " et al." : "");
         return {
           source: "CrossRef",
-          doi: doi || undefined,
-          title: titleList[0] ? stripHtmlTags(titleList[0]) : undefined,
-          authors,
-          year: year ?? undefined,
-          abstract: abstractText ? stripHtmlTags(abstractText).slice(0, 600) : undefined,
-          venue: containerTitle[0] ? stripHtmlTags(containerTitle[0]) : undefined,
-          type: normalizeString(message.type) || undefined,
-          url: normalizeString(message.URL) || undefined,
+          patch,
+          displayTitle: title,
+          displaySubtitle: [yearStr, authorLabel, venue].filter(Boolean).join(" · ") || undefined,
         } satisfies ExternalMetadataResult;
       })
-      .filter((result) => result.title || result.doi);
+      .filter((result) => result.displayTitle || result.patch.DOI);
   } catch {
     return [];
   }
@@ -664,17 +700,32 @@ async function lookupSemanticScholar(params: {
       ? (result.publicationTypes as string[]).join(", ")
       : undefined;
 
+    const title = normalizeString(result.title) || undefined;
+    const doi = externalIds.DOI || externalIds.doi || params.doi || undefined;
+    const year = typeof result.year === "number" ? result.year : undefined;
+    const abstract = normalizeString(result.abstract).slice(0, 600) || undefined;
+    const venue = normalizeString(result.venue) || undefined;
+    const patch: EditableArticleMetadataPatch = {};
+    if (title) patch.title = title;
+    if (doi) patch.DOI = doi;
+    if (abstract) patch.abstractNote = abstract;
+    if (year) patch.date = String(year);
+    if (venue) patch.publicationTitle = venue;
+    if (authors.length) {
+      patch.creators = authors.map((name) => ({
+        creatorType: "author",
+        name,
+        fieldMode: 1 as 0 | 1,
+      }));
+    }
+    const yearStr = year ? String(year) : undefined;
+    const authorLabel = authors.slice(0, 3).join(", ") + (authors.length > 3 ? " et al." : "");
     return {
       source: "Semantic Scholar",
-      doi: externalIds.DOI || externalIds.doi || params.doi || undefined,
-      title: normalizeString(result.title) || undefined,
-      authors,
-      year: typeof result.year === "number" ? result.year : undefined,
-      abstract: normalizeString(result.abstract).slice(0, 600) || undefined,
-      venue: normalizeString(result.venue) || undefined,
-      citationCount:
-        typeof result.citationCount === "number" ? result.citationCount : undefined,
-      type: publicationTypes || undefined,
+      patch,
+      citationCount: typeof result.citationCount === "number" ? result.citationCount : undefined,
+      displayTitle: title,
+      displaySubtitle: [yearStr, authorLabel, venue].filter(Boolean).join(" · ") || undefined,
     };
   } catch {
     return null;
@@ -727,25 +778,119 @@ export class LiteratureSearchService {
     return this.search(input, context);
   }
 
+  /**
+   * Resolve a canonical identifier for a paper.
+   * If we already have DOI/arXiv, return it immediately.
+   * Otherwise, search CrossRef/Semantic Scholar by title to find one.
+   */
+  private async resolveIdentifier(params: {
+    doi?: string;
+    title?: string;
+    arxivId?: string;
+  }): Promise<{
+    identifier?: string;
+    confidence: "doi" | "title" | "none";
+    resolvedDoi?: string;
+  }> {
+    if (params.doi) {
+      const doi = params.doi.replace(/^https?:\/\/doi\.org\//i, "");
+      return { identifier: doi, confidence: "doi", resolvedDoi: doi };
+    }
+    if (params.arxivId) {
+      const id = params.arxivId.replace(/^arxiv:/i, "");
+      return { identifier: `arxiv:${id}`, confidence: "doi" };
+    }
+    if (!params.title) {
+      return { confidence: "none" };
+    }
+    // Search CrossRef by title to find a DOI
+    const crossRefResults = await searchCrossRef(params.title);
+    if (crossRefResults.length > 0 && crossRefResults[0].patch.DOI) {
+      const candidateTitle = crossRefResults[0].displayTitle || "";
+      const queryKey = normalizeTitleKey(params.title);
+      const candidateKey = normalizeTitleKey(candidateTitle);
+      if (queryKey && candidateKey && (queryKey === candidateKey ||
+          queryKey.includes(candidateKey) || candidateKey.includes(queryKey))) {
+        return {
+          identifier: crossRefResults[0].patch.DOI,
+          confidence: "title",
+          resolvedDoi: crossRefResults[0].patch.DOI,
+        };
+      }
+    }
+    // Try Semantic Scholar by title
+    const s2 = await lookupSemanticScholar({ title: params.title });
+    if (s2?.patch.DOI) {
+      return { identifier: s2.patch.DOI, confidence: "title", resolvedDoi: s2.patch.DOI };
+    }
+    return { confidence: "none" };
+  }
+
   private async lookupMetadata(params: {
     doi?: string;
     title?: string;
     arxivId?: string;
   }): Promise<LiteratureSearchResult> {
-    const results: ExternalMetadataResult[] = [];
-    if (params.doi) {
-      const crossRef = await lookupCrossRefByDoi(params.doi);
-      if (crossRef) {
-        results.push(crossRef);
+    // Phase 1: resolve identifier
+    const resolved = await this.resolveIdentifier(params);
+
+    // Phase 2: fetch via Zotero Translate.Search (primary source)
+    let translatorResult: ExternalMetadataResult | null = null;
+    if (resolved.identifier) {
+      const patch = await this.zoteroGateway.fetchMetadataByIdentifier(
+        resolved.identifier,
+      );
+      if (patch) {
+        const authors = patch.creators
+          ?.map((c) =>
+            c.name
+              ? c.name
+              : [c.firstName, c.lastName].filter(Boolean).join(" "),
+          )
+          .filter(Boolean) || [];
+        const yearStr = patch.date || undefined;
+        const authorLabel = authors.slice(0, 3).join(", ") + (authors.length > 3 ? " et al." : "");
+        const venue = patch.publicationTitle || patch.proceedingsTitle;
+        translatorResult = {
+          source: "Zotero Translator",
+          patch,
+          matchConfidence: resolved.confidence === "none" ? undefined : resolved.confidence,
+          displayTitle: patch.title,
+          displaySubtitle: [yearStr, authorLabel, venue].filter(Boolean).join(" · ") || undefined,
+        };
       }
-    } else if (params.title) {
+    }
+
+    // Phase 3: supplement with CrossRef/Semantic Scholar for additional data
+    const results: ExternalMetadataResult[] = [];
+    if (translatorResult) {
+      results.push(translatorResult);
+    }
+
+    // Get supplementary data (citation count, etc.) from existing APIs
+    const doi = resolved.resolvedDoi || params.doi;
+    if (doi) {
+      const crossRef = await lookupCrossRefByDoi(doi);
+      if (crossRef) {
+        if (!translatorResult) {
+          results.push(crossRef);
+        }
+      }
+    } else if (params.title && !translatorResult) {
       const crossRefResults = await searchCrossRef(params.title);
       results.push(...crossRefResults.slice(0, 2));
     }
 
-    const semanticScholar = await lookupSemanticScholar(params);
-    if (semanticScholar) {
-      results.push(semanticScholar);
+    const s2 = await lookupSemanticScholar(
+      doi ? { doi } : { title: params.title },
+    );
+    if (s2) {
+      if (translatorResult && s2.citationCount !== undefined) {
+        translatorResult.citationCount = s2.citationCount;
+      }
+      if (!translatorResult) {
+        results.push(s2);
+      }
     }
 
     if (!results.length) {

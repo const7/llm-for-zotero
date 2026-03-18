@@ -2250,6 +2250,158 @@ export class ZoteroGateway {
   }
 
   /**
+   * Fetch canonical metadata for a paper by identifier (DOI, arXiv ID, or ISBN)
+   * using Zotero's built-in Translate.Search engine — the same engine that powers
+   * "Add Item by Identifier". Returns a complete metadata patch with ALL fields
+   * without creating any item in the library.
+   *
+   * Falls back to creating a temporary item and reading its fields if the
+   * translator does not support libraryID: false.
+   */
+  async fetchMetadataByIdentifier(
+    rawIdentifier: string,
+  ): Promise<EditableArticleMetadataPatch | null> {
+    try {
+      const isArXiv = /^arxiv:/i.test(rawIdentifier);
+      const isIsbn = /^(isbn[:\s]?)?[\d-]{10,}$/i.test(
+        rawIdentifier.replace(/^isbn[:\s]?/i, ""),
+      );
+      const identifier: Record<string, string> = isArXiv
+        ? { arXiv: rawIdentifier.replace(/^arxiv:/i, "") }
+        : isIsbn
+          ? { ISBN: rawIdentifier.replace(/^isbn[:\s]?/i, "").trim() }
+          : { DOI: rawIdentifier.replace(/^https?:\/\/doi\.org\//i, "") };
+
+      const translate = new (
+        Zotero as unknown as {
+          Translate: {
+            Search: new () => {
+              setIdentifier(id: Record<string, string>): void;
+              getTranslators(): Promise<unknown[]>;
+              setTranslator(t: unknown): void;
+              translate(opts?: {
+                libraryID?: number | false;
+                saveAttachments?: boolean;
+              }): Promise<unknown[]>;
+            };
+          };
+        }
+      ).Translate.Search();
+
+      translate.setIdentifier(identifier);
+      const translators = await translate.getTranslators();
+      if (!translators || translators.length === 0) return null;
+      translate.setTranslator(translators);
+
+      // Try libraryID: false first — returns raw JSON without saving to DB
+      let rawItems: unknown[];
+      let tempItemId: number | null = null;
+      try {
+        rawItems = await translate.translate({
+          libraryID: false as unknown as number,
+          saveAttachments: false,
+        });
+      } catch {
+        // Fallback: create a temporary item, read its metadata, then delete it
+        const targetLibraryID =
+          (Zotero as unknown as { Libraries?: { userLibraryID?: number } })
+            .Libraries?.userLibraryID ?? 1;
+        rawItems = await translate.translate({ libraryID: targetLibraryID });
+        if (rawItems?.[0] && typeof rawItems[0] === "object") {
+          const id = Number((rawItems[0] as { id?: unknown }).id);
+          if (Number.isFinite(id) && id > 0) tempItemId = Math.floor(id);
+        }
+      }
+
+      if (!rawItems || rawItems.length === 0) return null;
+      const raw = rawItems[0] as Record<string, unknown>;
+
+      // If we got a real Zotero item (fallback path), read fields from it
+      if (tempItemId) {
+        const item = this.getItem(tempItemId);
+        if (item) {
+          const snapshot = this.getEditableArticleMetadata(item);
+          // Clean up the temporary item
+          try {
+            item.deleted = true;
+            await item.saveTx();
+            await item.eraseTx();
+          } catch {
+            // Best-effort cleanup
+          }
+          if (snapshot) {
+            const patch: EditableArticleMetadataPatch = {};
+            for (const [key, value] of Object.entries(snapshot.fields)) {
+              if (value) {
+                patch[key as EditableArticleMetadataField] = value;
+              }
+            }
+            if (snapshot.creators.length) patch.creators = snapshot.creators;
+            return Object.keys(patch).length ? patch : null;
+          }
+        }
+        return null;
+      }
+
+      // libraryID: false path — raw is a translator JSON object
+      return this.translatorJsonToPatch(raw);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Convert a raw Zotero translator JSON result (from libraryID: false) into
+   * an EditableArticleMetadataPatch.
+   */
+  private translatorJsonToPatch(
+    raw: Record<string, unknown>,
+  ): EditableArticleMetadataPatch | null {
+    const patch: EditableArticleMetadataPatch = {};
+    for (const fieldName of EDITABLE_ARTICLE_METADATA_FIELDS) {
+      const value = raw[fieldName];
+      if (typeof value === "string" && value.trim()) {
+        patch[fieldName] = value.trim();
+      } else if (typeof value === "number") {
+        patch[fieldName] = String(value);
+      }
+    }
+    // Creators from translator JSON come as [{firstName, lastName, creatorType}]
+    const rawCreators = Array.isArray(raw.creators) ? raw.creators : [];
+    const creators: EditableArticleCreator[] = [];
+    for (const entry of rawCreators) {
+      if (!entry || typeof entry !== "object") continue;
+      const c = entry as Record<string, unknown>;
+      const creatorType =
+        typeof c.creatorType === "string" && c.creatorType.trim()
+          ? c.creatorType.trim()
+          : "author";
+      const firstName =
+        typeof c.firstName === "string" && c.firstName.trim()
+          ? c.firstName.trim()
+          : undefined;
+      const lastName =
+        typeof c.lastName === "string" && c.lastName.trim()
+          ? c.lastName.trim()
+          : undefined;
+      const name =
+        typeof c.name === "string" && c.name.trim()
+          ? c.name.trim()
+          : undefined;
+      if (!name && !firstName && !lastName) continue;
+      creators.push({
+        creatorType,
+        firstName,
+        lastName,
+        name,
+        fieldMode: (name && !firstName && !lastName ? 1 : 0) as 0 | 1,
+      });
+    }
+    if (creators.length) patch.creators = creators;
+    return Object.keys(patch).length ? patch : null;
+  }
+
+  /**
    * Import papers into the Zotero library by identifier (DOI or arXiv ID).
    *
    * - Plain DOI strings (starting with "10.") → `{ DOI: id }`

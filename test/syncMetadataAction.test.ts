@@ -69,11 +69,18 @@ describe("sync_metadata action", function () {
         async () => ({
           results: [
             {
-              title: "Existing Paper",
-              abstract: "Remote abstract",
-              year: 2024,
-              venue: "Journal of Tests",
-              authors: ["Alice Example", "Bob Example"],
+              source: "CrossRef",
+              displayTitle: "Existing Paper",
+              patch: {
+                title: "Existing Paper",
+                abstractNote: "Remote abstract",
+                date: "2024",
+                publicationTitle: "Journal of Tests",
+                creators: [
+                  { creatorType: "author", name: "Alice Example", fieldMode: 1 },
+                  { creatorType: "author", name: "Bob Example", fieldMode: 1 },
+                ],
+              },
             },
           ],
         }),
@@ -157,7 +164,7 @@ describe("sync_metadata action", function () {
     if (!result.ok) return;
     assert.deepEqual(result.output, {
       scanned: 1,
-      withDoi: 1,
+      withIdentifier: 1,
       updated: 1,
       skipped: 0,
       errors: 0,

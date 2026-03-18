@@ -21,46 +21,48 @@ describe("search_literature_online tool", function () {
   });
 
   it("supports metadata lookups through the unified online tool", async function () {
+    const crossRefItem = {
+      DOI: "10.1000/example",
+      title: ["Example Title"],
+      author: [{ given: "Alice", family: "Example" }],
+      "container-title": ["Journal"],
+      URL: "https://doi.org/10.1000/example",
+    };
+    const s2Item = {
+      title: "Example Title",
+      authors: [{ name: "Alice Example" }],
+      year: 2024,
+      abstract: "Abstract",
+      venue: "Journal",
+      citationCount: 12,
+      externalIds: { DOI: "10.1000/example" },
+    };
     (globalThis as typeof globalThis & { fetch?: typeof fetch }).fetch = (async (
       url: string | URL | Request,
     ) => {
       const href = String(url);
+      // Title search (used by resolveIdentifier)
       if (href.includes("api.crossref.org/works?query.bibliographic")) {
         return {
           ok: true,
           status: 200,
-          json: async () => ({
-            message: {
-              items: [
-                {
-                  DOI: "10.1000/example",
-                  title: ["Example Title"],
-                  author: [{ given: "Alice", family: "Example" }],
-                  "container-title": ["Journal"],
-                  URL: "https://doi.org/10.1000/example",
-                },
-              ],
-            },
-          }),
+          json: async () => ({ message: { items: [crossRefItem] } }),
         } as Response;
       }
-      if (href.includes("api.semanticscholar.org/graph/v1/paper/search")) {
+      // DOI lookup (used by supplement phase)
+      if (href.includes("api.crossref.org/works/10.1000")) {
         return {
           ok: true,
           status: 200,
-          json: async () => ({
-            data: [
-              {
-                title: "Example Title",
-                authors: [{ name: "Alice Example" }],
-                year: 2024,
-                abstract: "Abstract",
-                venue: "Journal",
-                citationCount: 12,
-                externalIds: { DOI: "10.1000/example" },
-              },
-            ],
-          }),
+          json: async () => ({ message: crossRefItem }),
+        } as Response;
+      }
+      // Semantic Scholar DOI or title search
+      if (href.includes("api.semanticscholar.org")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => (href.includes("/search") ? { data: [s2Item] } : s2Item),
         } as Response;
       }
       throw new Error(`Unexpected URL: ${href}`);
@@ -69,6 +71,7 @@ describe("search_literature_online tool", function () {
     const tool = createSearchLiteratureOnlineTool({
       resolveMetadataItem: () => null,
       getEditableArticleMetadata: () => null,
+      fetchMetadataByIdentifier: async () => null,
     } as never);
     const validated = tool.validate({
       mode: "metadata",
@@ -128,6 +131,7 @@ describe("search_literature_online tool", function () {
           title: "Existing Title",
           fields: { DOI: "10.1000/example" },
         }) as any,
+      fetchMetadataByIdentifier: async () => null,
     } as never);
     const validated = tool.validate({
       mode: "metadata",
