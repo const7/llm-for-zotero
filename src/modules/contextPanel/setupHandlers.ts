@@ -607,7 +607,9 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       modeCapsule.dataset.mode = mode || "";
     }
     if (modeChipBtn) {
-      const currentLabel = mode === "global" ? "Open chat" : "Paper chat";
+      const currentLabel = noteSession
+        ? (mode === "global" ? "Open note" : "Paper note")
+        : (mode === "global" ? "Open chat" : "Paper chat");
       modeChipBtn.textContent = currentLabel;
       modeChipBtn.title = noteSession
         ? currentLabel

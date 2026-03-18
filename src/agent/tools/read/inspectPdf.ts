@@ -515,9 +515,8 @@ export function createInspectPdfTool(
       if (operation === "read_chunks" && !input.chunkIndexes?.length) {
         return fail("chunkIndexes are required for read_chunks");
       }
-      if (operation === "search_pages" && !input.question && !input.pages?.length) {
-        return fail("question or pages is required for search_pages");
-      }
+      // search_pages: question is optional here because execute() falls back
+      // to context.request.userText when input.question is omitted.
       if (
         operation === "render_pages" &&
         !input.pages?.length &&

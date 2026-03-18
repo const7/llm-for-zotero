@@ -187,12 +187,14 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
   const modeChipBtn = createElement(doc, "button", "llm-mode-chip", {
     id: "llm-mode-chip",
     type: "button",
-    textContent: hasItem && isGlobalMode ? "Open chat" : "Paper chat",
+    textContent: hasItem && isGlobalMode
+      ? (activeNoteSession ? "Open note" : "Open chat")
+      : (activeNoteSession ? "Paper note" : "Paper chat"),
     title:
       activeNoteSession
         ? hasItem && isGlobalMode
-          ? "Open chat"
-          : "Paper chat"
+          ? "Open note"
+          : "Paper note"
         : hasItem && isGlobalMode
           ? "Switch to paper chat"
           : "Switch to open chat",
@@ -201,8 +203,8 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
     "aria-label",
     activeNoteSession
       ? hasItem && isGlobalMode
-        ? "Open chat"
-        : "Paper chat"
+        ? "Open note"
+        : "Paper note"
       : hasItem && isGlobalMode
         ? "Switch to paper chat"
         : "Switch to open chat",

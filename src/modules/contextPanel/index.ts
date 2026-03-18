@@ -50,6 +50,7 @@ import { renderShortcuts } from "./shortcuts";
 import { refreshChat } from "./chat";
 import {
   getActiveContextAttachmentFromTabs,
+  getActiveReaderForSelectedTab,
   getItemSelectionCacheKeys,
   appendSelectedTextContextForItem,
   applySelectedTextPreview,
@@ -114,6 +115,8 @@ export function registerReaderContextPanel() {
     onItemChange: ({ setEnabled, tabType }) => {
       setEnabled(true);
       ztoolkit.log(`LLM: panel itemChange tabType=${tabType}`);
+      // Refresh the cached tab ID (side effect of getActiveReaderForSelectedTab)
+      getActiveReaderForSelectedTab();
       return true;
     },
     onRender: ({ body }) => {

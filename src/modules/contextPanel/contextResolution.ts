@@ -64,10 +64,23 @@ type CreateNoteChipOptions = {
   noteChipKind: "active" | "selected";
 };
 
+/**
+ * Last known selected tab ID.  Updated every time we successfully read
+ * selectedID from Zotero.Tabs (which fails during nested Tabs.select
+ * transitions).  Used by restoreNonReaderTab as a fallback.
+ */
+let _lastKnownSelectedTabId: string | number | null = null;
+
+export function getLastKnownSelectedTabId(): string | number | null {
+  return _lastKnownSelectedTabId;
+}
+
 export function getActiveReaderForSelectedTab(): any | null {
   const tabs = getZoteroTabsState();
   const selectedTabId = tabs?.selectedID;
   if (selectedTabId === undefined || selectedTabId === null) return null;
+  // Cache whenever we see a valid ID
+  _lastKnownSelectedTabId = selectedTabId;
   return (
     (
       Zotero as unknown as {
@@ -175,6 +188,28 @@ function getZoteroTabsStateWithSource(): {
 
 function getZoteroTabsState(): ZoteroTabsState | null {
   return getZoteroTabsStateWithSource().tabs;
+}
+
+/**
+ * Select a Zotero tab by ID using the same fallback discovery as
+ * getZoteroTabsState.  Returns true if a select() call was made.
+ */
+export function selectZoteroTab(tabId: string | number): boolean {
+  const { tabs, source } = getZoteroTabsStateWithSource();
+  if (!tabs) return false;
+  const tabsAny = tabs as unknown as {
+    select?: (id: string | number) => void;
+  };
+  if (typeof tabsAny.select === "function") {
+    try {
+      tabsAny.select(tabId);
+      ztoolkit.log(`[LLM] selectZoteroTab: selected "${tabId}" via ${source}`);
+      return true;
+    } catch (err) {
+      ztoolkit.log(`[LLM] selectZoteroTab: error selecting "${tabId}" via ${source} — ${err}`);
+    }
+  }
+  return false;
 }
 
 function collectCandidateItemIDsFromObject(source: any): number[] {

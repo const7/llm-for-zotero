@@ -861,10 +861,33 @@ async function openReaderForItem(
   location?: ReaderPageLocation,
 ): Promise<any | null> {
   const normalizedTargetItemId = Math.floor(targetItemId);
+
+  // Guard: only attempt to open items that Zotero's Reader can handle (PDFs).
+  // Non-PDF attachments (EPUB, HTML snapshot, etc.) cause "Unsupported
+  // attachment type" errors from the Reader API.
+  // When the target is a regular (non-attachment) item, resolve to its first
+  // PDF child attachment so Zotero.Reader.open() doesn't pick a non-PDF.
+  let effectiveTargetItemId = normalizedTargetItemId;
+  const targetItem = Zotero.Items.get(normalizedTargetItemId) || null;
+  if (targetItem) {
+    if (
+      targetItem.isAttachment?.() &&
+      targetItem.attachmentContentType &&
+      targetItem.attachmentContentType !== "application/pdf"
+    ) {
+      return null;
+    }
+    if (targetItem.isRegularItem?.() && !targetItem.isAttachment?.()) {
+      const pdfAttachment = getFirstPdfAttachment(targetItem);
+      if (!pdfAttachment) return null;
+      effectiveTargetItemId = Math.floor(pdfAttachment.id);
+    }
+  }
+
   const normalizedLocation = normalizeReaderPageLocation(location);
   const zoteroLocation = toZoteroReaderLocation(normalizedLocation);
   const activeReader = getActiveReaderForSelectedTab();
-  if (getReaderItemId(activeReader) === normalizedTargetItemId) {
+  if (getReaderItemId(activeReader) === effectiveTargetItemId) {
     if (normalizedLocation) {
       await navigateReaderToPage(
         activeReader,
@@ -885,10 +908,10 @@ async function openReaderForItem(
     | undefined;
   if (typeof readerApi?.open === "function") {
     const openedReader = await readerApi.open(
-      normalizedTargetItemId,
+      effectiveTargetItemId,
       zoteroLocation,
     );
-    if (getReaderItemId(openedReader) === normalizedTargetItemId) {
+    if (getReaderItemId(openedReader) === effectiveTargetItemId) {
       if (normalizedLocation) {
         await navigateReaderToPage(
           openedReader,
@@ -908,11 +931,11 @@ async function openReaderForItem(
         }
       | undefined;
     if (typeof pane?.viewPDF === "function") {
-      await pane.viewPDF(normalizedTargetItemId, zoteroLocation || {});
+      await pane.viewPDF(effectiveTargetItemId, zoteroLocation || {});
     }
   }
 
-  const waitedReader = await waitForReaderForItem(normalizedTargetItemId);
+  const waitedReader = await waitForReaderForItem(effectiveTargetItemId);
   if (waitedReader && normalizedLocation) {
     await navigateReaderToPage(
       waitedReader,

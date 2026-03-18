@@ -2,7 +2,7 @@ import {
   ensureAttachmentBlobFromPath,
   persistAttachmentBlob,
 } from "../../modules/contextPanel/attachmentStorage";
-import { getActiveReaderForSelectedTab } from "../../modules/contextPanel/contextResolution";
+import { getActiveReaderForSelectedTab, getLastKnownSelectedTabId, selectZoteroTab } from "../../modules/contextPanel/contextResolution";
 import type {
   ChatAttachment,
   PaperContextRef,
@@ -407,6 +407,33 @@ async function openReaderForItem(
   return waited;
 }
 
+/**
+ * Switch back to the library/note tab after a PDF inspection.
+ *
+ * Uses selectZoteroTab from contextResolution which has robust fallback
+ * discovery for the Zotero.Tabs object (the same mechanism that powers
+ * getActiveReaderForSelectedTab).
+ *
+ * Zotero's reader lifecycle fires markAsLoaded → Tabs.select async after
+ * Reader.open() resolves. We schedule retries to win the race.
+ */
+function restoreNonReaderTab(savedTabId: string | number | null): void {
+  // savedTabId is captured before the PDF operation opens a reader tab.
+  // Falls back to "zotero-pane" (library tab) if no ID was available.
+  const targetTabId = savedTabId || "zotero-pane";
+  ztoolkit.log(`[LLM] restoreNonReaderTab: target="${targetTabId}" (saved=${savedTabId ?? "null"})`);
+  const doRestore = (label: string) => {
+    const ok = selectZoteroTab(targetTabId);
+    if (!ok) {
+      ztoolkit.log(`[LLM] restoreNonReaderTab(${label}): selectZoteroTab("${targetTabId}") failed`);
+    }
+  };
+  doRestore("immediate");
+  setTimeout(() => doRestore("deferred-500ms"), 500);
+  setTimeout(() => doRestore("deferred-1500ms"), 1500);
+  setTimeout(() => doRestore("deferred-3000ms"), 3000);
+}
+
 async function waitForPdfDocument(
   reader: any,
   timeoutMs = 2200,
@@ -587,32 +614,37 @@ export class PdfPageService {
   async getPageCountForTarget(params: ResolvePdfTargetInput & {
     request: AgentRuntimeRequest;
   }): Promise<number> {
-    const target = await this.resolveTarget(params);
-    if (target.source !== "library" || !target.contextItemId) {
-      throw new Error(
-        "Page-count inspection is currently supported for Zotero library PDFs.",
+    const savedTabId = getLastKnownSelectedTabId();
+    try {
+      const target = await this.resolveTarget(params);
+      if (target.source !== "library" || !target.contextItemId) {
+        throw new Error(
+          "Page-count inspection is currently supported for Zotero library PDFs.",
+        );
+      }
+      const reader = await openReaderForItem(target.contextItemId, {
+        pageIndex: 0,
+        pageLabel: "1",
+      });
+      if (!reader) {
+        throw new Error("Could not open the Zotero PDF reader for this attachment");
+      }
+      const app = await waitForPdfDocument(reader);
+      const pdfDocument = unwrapWrappedJsObject(
+        app?.pdfDocument as { numPages?: number } | null | undefined,
       );
+      const rawCount = Number(
+        (pdfDocument && (pdfDocument as { numPages?: number }).numPages) ??
+          (app as { pdfDocument?: { numPages?: number } })?.pdfDocument?.numPages ??
+          0,
+      );
+      if (!Number.isFinite(rawCount) || rawCount <= 0) {
+        throw new Error("Could not determine the total number of PDF pages");
+      }
+      return Math.floor(rawCount);
+    } finally {
+      restoreNonReaderTab(savedTabId);
     }
-    const reader = await openReaderForItem(target.contextItemId, {
-      pageIndex: 0,
-      pageLabel: "1",
-    });
-    if (!reader) {
-      throw new Error("Could not open the Zotero PDF reader for this attachment");
-    }
-    const app = await waitForPdfDocument(reader);
-    const pdfDocument = unwrapWrappedJsObject(
-      app?.pdfDocument as { numPages?: number } | null | undefined,
-    );
-    const rawCount = Number(
-      (pdfDocument && (pdfDocument as { numPages?: number }).numPages) ??
-        (app as { pdfDocument?: { numPages?: number } })?.pdfDocument?.numPages ??
-        0,
-    );
-    if (!Number.isFinite(rawCount) || rawCount <= 0) {
-      throw new Error("Could not determine the total number of PDF pages");
-    }
-    return Math.floor(rawCount);
   }
 
   getUserExplicitPageSelection(
@@ -781,82 +813,106 @@ export class PdfPageService {
     pages: PdfPageCandidate[];
     explicitSelection: boolean;
   }> {
-    const target = await this.resolveTarget(params);
-    const explicitPages =
-      Array.isArray(params.pages) && params.pages.length
-        ? Array.from(new Set(params.pages))
-            .filter((entry) => Number.isFinite(entry) && entry >= 0)
-            .map((entry) => Math.floor(entry))
-            .sort((left, right) => left - right)
-        : [];
-    if (explicitPages.length) {
+    const savedTabId = getLastKnownSelectedTabId();
+    try {
+      const target = await this.resolveTarget(params);
+      const explicitPages =
+        Array.isArray(params.pages) && params.pages.length
+          ? Array.from(new Set(params.pages))
+              .filter((entry) => Number.isFinite(entry) && entry >= 0)
+              .map((entry) => Math.floor(entry))
+              .sort((left, right) => left - right)
+          : [];
+      if (explicitPages.length) {
+        return {
+          target,
+          pages: explicitPages.map((pageIndex) => ({
+            pageIndex,
+            pageLabel: `${pageIndex + 1}`,
+            score: 1,
+            reason: "User requested this page explicitly.",
+          })),
+          explicitSelection: true,
+        };
+      }
+      if (target.source !== "library" || !target.contextItemId) {
+        throw new Error(
+          "Automatic page search currently works with Zotero library PDFs. For uploaded PDFs, use whole-document PDF input on a Responses-capable model or ask for explicit pages.",
+        );
+      }
+      const reader = await openReaderForItem(target.contextItemId);
+      if (!reader) {
+        throw new Error("Could not open the Zotero PDF reader for this attachment");
+      }
+      const cache = await warmPageTextCache(reader);
+      const pages = cache?.pages || [];
+      if (!pages.length) {
+        throw new Error("Could not read page text from this PDF");
+      }
+      const tokens = extractSearchTokens(params.question);
+      const mode = params.mode || "general";
+      const scored = pages
+        .map((page) => {
+          const text = sanitizeText(page.text).toLowerCase();
+          let score = 0;
+          for (const token of tokens) {
+            if (!token) continue;
+            if (text.includes(token)) score += 2;
+          }
+          if (mode === "figure" && /\b(fig|figure|panel|diagram|plot|chart)\b/.test(text)) {
+            score += 3;
+          }
+          if (mode === "equation" && /\b(eq|equation|theorem|proof|formula)\b/.test(text)) {
+            score += 3;
+          }
+          if (score <= 0 && page.pageIndex < 2) {
+            score += 0.5;
+          }
+          return {
+            pageIndex: page.pageIndex,
+            pageLabel: getPageLabel(page.pageIndex, page.pageLabel),
+            score,
+            reason:
+              score > 0
+                ? `Matched ${Math.max(1, Math.floor(score / 2))} relevant signal${
+                    score < 3 ? "" : "s"
+                  } from the question.`
+                : "Fallback page because no strong match was found.",
+            excerpt: sanitizeText(page.text).slice(0, 220),
+          };
+        })
+        .sort((left, right) => right.score - left.score || left.pageIndex - right.pageIndex);
+      const topK = Math.max(1, Math.min(6, Math.floor(params.topK || 3)));
       return {
         target,
-        pages: explicitPages.map((pageIndex) => ({
-          pageIndex,
-          pageLabel: `${pageIndex + 1}`,
-          score: 1,
-          reason: "User requested this page explicitly.",
-        })),
-        explicitSelection: true,
+        pages: scored.slice(0, topK),
+        explicitSelection: false,
       };
+    } finally {
+      restoreNonReaderTab(savedTabId);
     }
-    if (target.source !== "library" || !target.contextItemId) {
-      throw new Error(
-        "Automatic page search currently works with Zotero library PDFs. For uploaded PDFs, use whole-document PDF input on a Responses-capable model or ask for explicit pages.",
-      );
-    }
-    const reader = await openReaderForItem(target.contextItemId);
-    if (!reader) {
-      throw new Error("Could not open the Zotero PDF reader for this attachment");
-    }
-    const cache = await warmPageTextCache(reader);
-    const pages = cache?.pages || [];
-    if (!pages.length) {
-      throw new Error("Could not read page text from this PDF");
-    }
-    const tokens = extractSearchTokens(params.question);
-    const mode = params.mode || "general";
-    const scored = pages
-      .map((page) => {
-        const text = sanitizeText(page.text).toLowerCase();
-        let score = 0;
-        for (const token of tokens) {
-          if (!token) continue;
-          if (text.includes(token)) score += 2;
-        }
-        if (mode === "figure" && /\b(fig|figure|panel|diagram|plot|chart)\b/.test(text)) {
-          score += 3;
-        }
-        if (mode === "equation" && /\b(eq|equation|theorem|proof|formula)\b/.test(text)) {
-          score += 3;
-        }
-        if (score <= 0 && page.pageIndex < 2) {
-          score += 0.5;
-        }
-        return {
-          pageIndex: page.pageIndex,
-          pageLabel: getPageLabel(page.pageIndex, page.pageLabel),
-          score,
-          reason:
-            score > 0
-              ? `Matched ${Math.max(1, Math.floor(score / 2))} relevant signal${
-                  score < 3 ? "" : "s"
-                } from the question.`
-              : "Fallback page because no strong match was found.",
-          excerpt: sanitizeText(page.text).slice(0, 220),
-        };
-      })
-      .sort((left, right) => right.score - left.score || left.pageIndex - right.pageIndex);
-    const topK = Math.max(1, Math.min(6, Math.floor(params.topK || 3)));
-    return {
-      target,
-      pages: scored.slice(0, topK),
-      explicitSelection: false,
-    };
   }
 
   async preparePagesForModel(params: PreparePdfPagesParams): Promise<{
+    target: ResolvedPdfTarget;
+    pages: Array<{
+      pageIndex: number;
+      pageLabel: string;
+      imagePath: string;
+      contentHash: string;
+    }>;
+    artifacts: AgentToolArtifact[];
+    pageTexts: Record<number, string>;
+  }> {
+    const savedTabId = getLastKnownSelectedTabId();
+    try {
+      return await this._preparePagesForModelInner(params);
+    } finally {
+      restoreNonReaderTab(savedTabId);
+    }
+  }
+
+  private async _preparePagesForModelInner(params: PreparePdfPagesParams): Promise<{
     target: ResolvedPdfTarget;
     pages: Array<{
       pageIndex: number;
