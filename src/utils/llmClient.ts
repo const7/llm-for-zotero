@@ -1689,9 +1689,12 @@ export function buildReasoningPayload(
   }
 
   if (reasoning.provider === "kimi") {
-    // Kimi reasoning models generally expose reasoning by model choice;
-    // keep payload conservative to avoid provider-specific parameter errors.
-    return emptyReasoningPayload();
+    // Kimi k2/k2.5: "default" = thinking enabled, "minimal" = thinking disabled
+    const thinkingType = reasoning.level === "minimal" ? "disabled" : "enabled";
+    return {
+      extra: { thinking: { type: thinkingType } },
+      omitTemperature: false,
+    };
   }
 
   if (reasoning.provider === "anthropic") {

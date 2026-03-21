@@ -349,10 +349,20 @@ const DEEPSEEK_CHAT_PROFILE: ProviderProfile = {
   options: [],
 };
 
-const KIMI_THINKING_PROFILE: ProviderProfile = singleEnabledOptionProfile(
-  "default",
-  "enabled",
-);
+const KIMI_THINKING_PROFILE: ProviderProfile = {
+  supportsReasoning: true,
+  defaultLevel: "default",
+  options: [
+    option("default", "enabled"),
+    option("minimal", "disabled"),
+  ],
+};
+
+const KIMI_NON_THINKING_PROFILE: ProviderProfile = {
+  supportsReasoning: false,
+  defaultLevel: null,
+  options: [],
+};
 
 const QWEN_TOGGLE_PROFILE: ProviderProfile = {
   supportsReasoning: true,
@@ -496,15 +506,27 @@ const PROFILE_RULES: Record<
   kimi: {
     rules: [
       {
-        match: /^kimi-k2(?:\.5)?(?:-thinking(?:-turbo)?)?(?:\b|[.-])/,
+        // kimi-k2-thinking, kimi-k2.5-thinking — always-on thinking
+        match: /^kimi-k2(?:\.5)?-thinking(?:-turbo)?(?:\b|[.-])/,
         profile: KIMI_THINKING_PROFILE,
       },
       {
-        match: /^kimi(?:\b|[.-])/,
+        // kimi-k2.5 — supports toggling thinking on/off
+        match: /^kimi-k2\.5(?:\b|[.-])/,
         profile: KIMI_THINKING_PROFILE,
       },
+      {
+        // kimi-k2 (without .5) — supports toggling
+        match: /^kimi-k2(?:\b|[.-])/,
+        profile: KIMI_THINKING_PROFILE,
+      },
+      {
+        // Other kimi models — no thinking support
+        match: /^kimi(?:\b|[.-])/,
+        profile: KIMI_NON_THINKING_PROFILE,
+      },
     ],
-    fallback: KIMI_THINKING_PROFILE,
+    fallback: KIMI_NON_THINKING_PROFILE,
   },
   qwen: {
     rules: [

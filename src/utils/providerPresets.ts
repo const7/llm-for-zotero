@@ -205,10 +205,10 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
   {
     id: "kimi",
     label: "Kimi",
-    defaultApiBase: "https://api.moonshot.cn/v1",
+    defaultApiBase: "https://api.moonshot.ai/v1",
     defaultProtocol: "openai_chat_compat",
     supportedProtocols: ["openai_chat_compat"],
-    helperText: "Preset uses Moonshot's official API base (v1).",
+    helperText: "Preset uses Moonshot's international API. Use api.moonshot.cn for China.",
     matches: makeHostAndPathMatcher(
       ["api.moonshot.cn", "api.moonshot.ai"],
       KIMI_PATHS,
