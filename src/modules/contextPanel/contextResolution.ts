@@ -422,15 +422,19 @@ export function getItemSelectionCacheKeys(
   if (!item) return [];
   const keys = new Set<number>();
   keys.add(item.id);
-  if (item.isAttachment() && item.parentID) {
+  if (item.isAttachment?.() && item.parentID) {
     keys.add(item.parentID);
-  } else {
-    const attachments = item.getAttachments();
-    for (const attId of attachments) {
-      const att = Zotero.Items.get(attId);
-      if (att && att.attachmentContentType === "application/pdf") {
-        keys.add(att.id);
+  } else if (item.isRegularItem?.()) {
+    try {
+      const attachments = item.getAttachments();
+      for (const attId of attachments) {
+        const att = Zotero.Items.get(attId);
+        if (att && att.attachmentContentType === "application/pdf") {
+          keys.add(att.id);
+        }
       }
+    } catch {
+      /* getAttachments() not available for this item type */
     }
   }
   return Array.from(keys);
