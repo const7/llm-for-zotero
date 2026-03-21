@@ -654,7 +654,18 @@ function renderBlockquote(content: string): string {
     const trimmed = l.trim();
     return trimmed.startsWith(">") ? trimmed.slice(1).trim() : trimmed;
   });
-  return `<blockquote>${innerLines.map((l) => renderInline(l)).join("<br/>")}</blockquote>`;
+  // Rejoin and recursively parse through block pipeline so that multi-line
+  // constructs (display math, code blocks, etc.) inside blockquotes work.
+  const innerText = innerLines.join("\n");
+  const innerBlocks = splitTextBlocks(innerText);
+  const innerHtml = innerBlocks.map((block) => {
+    try {
+      return renderBlock(block);
+    } catch {
+      return `<div class="render-fallback">${escapeHtml(block.raw)}</div>`;
+    }
+  }).join("\n");
+  return `<blockquote>${innerHtml}</blockquote>`;
 }
 
 /** Render table */

@@ -13,7 +13,8 @@
 
 **llm-for-zotero** is a plugin for [Zotero](https://www.zotero.org/) that integrates Large Language Models directly into the Zotero PDF reader. Unlike tools that require uploading PDFs to a web portal, this plugin lets you chat with your papers without leaving Zotero. It sits quietly in the reader sidebar — your standby research assistant, ready whenever you need it.
 
-Documentation: 
+Documentation:
+
 - [English](https://yilewang.github.io/llm-for-zotero)
 - [Chinese](https://yilewang.github.io/llm-for-zotero/zh/)
 
@@ -75,16 +76,16 @@ The plugin natively supports multiple provider protocols: `responses_api`, `open
 
 ### Supported Models (examples)
 
-| API URL | Model | Reasoning Levels | Notes |
-| --- | --- | --- | --- |
-| `https://api.openai.com/v1/responses` | gpt-5.4 | default, low, medium, high, xhigh | PDF uploads supported |
-| `https://api.openai.com/v1/responses` | gpt-5.4-pro | medium, high, xhigh | PDF uploads supported |
-| `https://api.deepseek.com/v1` | deepseek-chat | default | |
-| `https://api.deepseek.com/v1` | deepseek-reasoner | default | |
-| `https://generativelanguage.googleapis.com` | gemini-3-pro-preview | low, high | |
-| `https://generativelanguage.googleapis.com` | gemini-2.5-flash | medium | |
-| `https://generativelanguage.googleapis.com` | gemini-2.5-pro | default, low, high | |
-| `https://api.moonshot.ai/v1` | kimi-k2.5 | default | |
+| API URL                                     | Model                | Reasoning Levels                  | Notes                 |
+| ------------------------------------------- | -------------------- | --------------------------------- | --------------------- |
+| `https://api.openai.com/v1/responses`       | gpt-5.4              | default, low, medium, high, xhigh | PDF uploads supported |
+| `https://api.openai.com/v1/responses`       | gpt-5.4-pro          | medium, high, xhigh               | PDF uploads supported |
+| `https://api.deepseek.com/v1`               | deepseek-chat        | default                           |                       |
+| `https://api.deepseek.com/v1`               | deepseek-reasoner    | default                           |                       |
+| `https://generativelanguage.googleapis.com` | gemini-3-pro-preview | low, high                         |                       |
+| `https://generativelanguage.googleapis.com` | gemini-2.5-flash     | medium                            |                       |
+| `https://generativelanguage.googleapis.com` | gemini-2.5-pro       | default, low, high                |                       |
+| `https://api.moonshot.ai/v1`                | kimi-k2.5            | default                           |                       |
 
 You can also set up **multiple providers**, each with multiple models for different tasks (e.g. a multimodal model for figures, a text model for summaries). Cross-check answers across models for more comprehensive understanding.
 
@@ -98,7 +99,7 @@ You can set different reasoning levels per model in the conversation panel (e.g.
 
 1. **Open any PDF** in the Zotero reader.
 2. **Click the LLM Assistant icon** in the right-hand toolbar to open the sidebar.
-3. **Type a question** such as *"What is the main conclusion of this paper?"*
+3. **Type a question** such as _"What is the main conclusion of this paper?"_
 
 On the first message, the model loads the full paper content as context. Follow-up questions use focused retrieval from the same paper, so the conversation stays fast and relevant.
 
@@ -154,7 +155,7 @@ Open multiple papers in different tabs and compare them side by side. Type `/` t
   <img src="./assets/upload_files.gif" alt="Animation showing external file upload for additional context" width="1024" />
 </p>
 
-Upload documents from your local drive as additional context — supports PDF, DOCX, PPTX, TXT, and Markdown files. *(Feature by [@jianghao-zhang](https://github.com/jianghao-zhang).)*
+Upload documents from your local drive as additional context — supports PDF, DOCX, PPTX, TXT, and Markdown files. _(Feature by [@jianghao-zhang](https://github.com/jianghao-zhang).)_
 
 ### Save to Notes
 
@@ -190,14 +191,14 @@ When enabled, the LLM becomes an autonomous agent that can read, search, and wri
 
 ### Available Tools
 
-| Tool | Description |
-| --- | --- |
-| `query_library` | Search/list Zotero items, collections, related papers, and duplicates |
-| `read_library` | Read metadata, notes, annotations, attachments, and collections |
-| `inspect_pdf` | Read front matter, search pages, retrieve evidence, inspect the active reader view |
-| `search_literature_online` | Search live scholarly sources or fetch external metadata |
-| `mutate_library` | Batch write operations — metadata edits, tagging, collection changes, note writes, imports |
-| `undo_last_action` | Revert the last approved write batch |
+| Tool                       | Description                                                                                |
+| -------------------------- | ------------------------------------------------------------------------------------------ |
+| `query_library`            | Search/list Zotero items, collections, related papers, and duplicates                      |
+| `read_library`             | Read metadata, notes, annotations, attachments, and collections                            |
+| `inspect_pdf`              | Read front matter, search pages, retrieve evidence, inspect the active reader view         |
+| `search_literature_online` | Search live scholarly sources or fetch external metadata                                   |
+| `mutate_library`           | Batch write operations — metadata edits, tagging, collection changes, note writes, imports |
+| `undo_last_action`         | Revert the last approved write batch                                                       |
 
 The design philosophy is **fewer, more general tools** rather than a long list of task-specific ones. Ask the agent what it can do — it will tell you.
 
@@ -236,7 +237,7 @@ The design philosophy is **fewer, more general tools** rather than a long list o
 #### Write a note
 
 <p align="center">
-  <img src="./assets/agent/write_note.gif" alt="Animation showing agent writing a note for a paper" width="1024" />
+  <img src="./assets/agent/write_note.png" alt="Animation showing agent writing a note for a paper" width="1024" />
 </p>
 
 This is the first step for Agent Mode. The goal is a versatile agent that masters all tasks in your Zotero library.
@@ -247,7 +248,7 @@ This is the first step for Agent Mode. The goal is a versatile agent that master
 
 If you have a ChatGPT Plus subscription, you can use **Codex auth** to access Codex models (e.g. `gpt-5.4`) without an API key. The plugin reuses your ChatGPT login via the Codex CLI — a great way to save on token costs.
 
-*Special thanks to [@jianghao-zhang](https://github.com/jianghao-zhang) for contributions to this feature.*
+_Special thanks to [@jianghao-zhang](https://github.com/jianghao-zhang) for contributions to this feature._
 
 ### Step-by-step setup
 
@@ -260,9 +261,11 @@ If you have a ChatGPT Plus subscription, you can use **Codex auth** to access Co
    - **Windows/Linux:** Install [Node.js 18+](https://nodejs.org/), then `npm install -g @openai/codex`.
 
 2. **Log in with your ChatGPT account:**
+
    ```bash
    codex login
    ```
+
    A browser window opens — sign in with your ChatGPT Plus account. Credentials are saved to `~/.codex/auth.json`.
 
 3. **Configure the plugin** (Zotero → Preferences → llm-for-zotero):
@@ -312,8 +315,6 @@ If you have a ChatGPT Plus subscription, you can use **Codex auth** to access Co
 ## Contributing
 
 Contributions are welcome! Whether it's bug reports, feature requests, or pull requests — feel free to [open an issue](https://github.com/yilewang/llm-for-zotero/issues) or submit a PR.
-
-If you'd like to support the project financially, you can [buy me a coffee ☕](https://buymeacoffee.com/yat.lok).
 
 ---
 
