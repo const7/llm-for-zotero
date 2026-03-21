@@ -290,16 +290,6 @@ export function createEditCurrentNoteTool(
           cancelLabel: "Cancel",
           fields: [
             {
-              type: "diff_preview",
-              id: "noteDiff",
-              label: "Note content",
-              before: "",
-              after: normalizedContent,
-              sourceFieldId: "content",
-              contextLines: 0,
-              emptyMessage: "No note content yet.",
-            },
-            {
               type: "textarea",
               id: "content",
               label: "Final note content",
