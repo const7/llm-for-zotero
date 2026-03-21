@@ -31,6 +31,7 @@ type SearchLiteratureOnlineInput = {
   title?: string;
   arxivId?: string;
   query?: string;
+  author?: string;
   limit?: number;
   libraryID?: number;
 };
@@ -71,6 +72,11 @@ export function createSearchLiteratureOnlineTool(
           title: { type: "string" },
           arxivId: { type: "string" },
           query: { type: "string" },
+          author: {
+            type: "string",
+            description:
+              "Author name to filter results by. When provided alone (without query), returns the author's papers sorted by citation count. When combined with query, narrows keyword results to this author.",
+          },
           limit: { type: "number" },
           libraryID: { type: "number" },
         },
@@ -80,24 +86,29 @@ export function createSearchLiteratureOnlineTool(
     },
     guidance: {
       matches: (request) =>
-        /\b(related papers?|similar papers?|find papers?|search (the )?(internet|literature)|citations?|references?)\b/i.test(
+        /\b(related papers?|similar papers?|find papers?|search (the )?(internet|literature)|citations?|references?|papers? (by|from)|publications? (by|from))\b/i.test(
           request.userText,
         ),
       instruction:
         "For live paper discovery requests, call search_literature_online and let the review card present the result. Do not stop with an empty chat answer before using the tool." +
         "\n\nSource selection:" +
         "\n• recommendations, references, citations modes → always use source:'openalex' (only OpenAlex supports these)." +
-        "\n• search mode → source:'openalex' (default, broadest coverage), source:'arxiv' (preprints, CS/ML/physics), or source:'europepmc' (biomedical/life sciences).",
+        "\n• search mode → source:'openalex' (default, broadest coverage), source:'arxiv' (preprints, CS/ML/physics), or source:'europepmc' (biomedical/life sciences)." +
+        "\n\nAuthor search:" +
+        "\n• When the user wants papers by a specific author, use the 'author' parameter (e.g. author:'Adrien Peyrache')." +
+        "\n• You can combine 'author' with 'query' to find an author's papers on a specific topic." +
+        "\n• Do NOT put author names in the 'query' parameter — use 'author' instead.",
     },
     presentation: {
       label: "Search Literature Online",
       summaries: {
         onCall: ({ args }) => {
-          const mode =
-            args && typeof args === "object"
-              ? String((args as { mode?: unknown }).mode || "search")
-              : "search";
-          return `Searching live literature (${mode})`;
+          const a = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
+          const mode = String(a.mode || "search");
+          const author = typeof a.author === "string" ? a.author : undefined;
+          const query = typeof a.query === "string" ? a.query : undefined;
+          const detail = author && query ? `${query} by ${author}` : author || query || mode;
+          return `Searching live literature (${detail})`;
         },
         onSuccess: ({ content }) => {
           const results =
@@ -153,8 +164,12 @@ export function createSearchLiteratureOnlineTool(
       if (mode === "metadata" && !doi && !title && !arxivId && !query && !itemId && !paperContext) {
         return fail("metadata mode requires doi, title, arxivId, query, itemId, or paperContext");
       }
-      if (mode === "search" && !query && !title) {
-        return fail("search mode requires query or title");
+      const author =
+        typeof args.author === "string" && args.author.trim()
+          ? args.author.trim()
+          : undefined;
+      if (mode === "search" && !query && !title && !author) {
+        return fail("search mode requires query, title, or author");
       }
       // Only OpenAlex supports recommendations, references, and citations.
       // Auto-correct source for these modes to prevent silent degradation.
@@ -177,6 +192,7 @@ export function createSearchLiteratureOnlineTool(
         title,
         arxivId,
         query,
+        author,
         limit: normalizePositiveInt(args.limit),
         libraryID: normalizePositiveInt(args.libraryID),
       });

@@ -19,6 +19,7 @@ type SearchInput = {
   title?: string;
   arxivId?: string;
   query?: string;
+  author?: string;
   mode: SearchMode;
   source?: SearchSource;
   limit?: number;
@@ -317,9 +318,24 @@ async function fetchCitations(
 async function fetchKeywordSearch(
   query: string,
   limit: number,
+  author?: string,
+): Promise<OnlinePaperResult[]> {
+  let url = `${OA_BASE}/works?search=${encodeURIComponent(query)}&select=${OA_SELECT}&per-page=${limit}`;
+  if (author) {
+    url += `&filter=raw_author_name.search:${encodeURIComponent(author)}`;
+  }
+  const raw = (await oaFetch(url)) as { results?: unknown[] };
+  return (raw.results ?? [])
+    .map(normalizeOpenAlexWork)
+    .filter((paper): paper is OnlinePaperResult => Boolean(paper));
+}
+
+async function fetchAuthorSearch(
+  author: string,
+  limit: number,
 ): Promise<OnlinePaperResult[]> {
   const raw = (await oaFetch(
-    `${OA_BASE}/works?search=${encodeURIComponent(query)}&select=${OA_SELECT}&per-page=${limit}`,
+    `${OA_BASE}/works?filter=raw_author_name.search:${encodeURIComponent(author)}&sort=cited_by_count:desc&select=${OA_SELECT}&per-page=${limit}`,
   )) as { results?: unknown[] };
   return (raw.results ?? [])
     .map(normalizeOpenAlexWork)
@@ -993,22 +1009,28 @@ export class LiteratureSearchService {
 
     if (mode === "search") {
       const query = input.query || titleFallback;
-      if (!query) {
+      const author = input.author;
+      if (!query && !author) {
         return { results: [], message: "No search query available." };
       }
       try {
-        const results = dedupe(await fetchKeywordSearch(query, limit));
+        let results: OnlinePaperResult[];
+        if (query) {
+          results = dedupe(await fetchKeywordSearch(query, limit, author));
+        } else {
+          results = dedupe(await fetchAuthorSearch(author!, limit));
+        }
         return {
           results,
           total: results.length,
           source: "OpenAlex",
-          query,
+          query: query || `author:${author}`,
         };
       } catch (error) {
         return {
           results: [],
           source: "OpenAlex",
-          query,
+          query: query || `author:${author}`,
           message: `OpenAlex search failed: ${error instanceof Error ? error.message : String(error)}`,
         };
       }
