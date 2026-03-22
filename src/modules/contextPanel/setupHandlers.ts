@@ -8483,15 +8483,42 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       if (!item) return;
       consumeActiveActionToken();
       closeSlashMenu();
-      const attachment = getActiveContextAttachmentFromTabs();
+      let attachment = getActiveContextAttachmentFromTabs();
+      // Fallback: resolve PDF from the selected item in the library view
+      if (!attachment && item) {
+        if (item.isAttachment?.() && item.attachmentContentType === "application/pdf") {
+          attachment = item;
+        } else if (item.isRegularItem?.()) {
+          const attIds: number[] = item.getAttachments?.() || [];
+          const pdfAtts = attIds
+            .map((id: number) => Zotero.Items.get(id))
+            .filter((att: Zotero.Item) =>
+              att?.isAttachment?.() && att.attachmentContentType === "application/pdf",
+            );
+          if (pdfAtts.length === 1) {
+            attachment = pdfAtts[0];
+          } else if (pdfAtts.length > 1) {
+            if (status) setStatus(status, "Multiple PDFs found — select a specific PDF attachment", "error");
+            return;
+          }
+        }
+      }
       if (!attachment) {
-        if (status) setStatus(status, "No PDF open — open a PDF in the reader first", "error");
+        if (status) setStatus(status, "No PDF found — open a PDF or select an item with a PDF attachment", "error");
         return;
       }
-      const filePath =
-        typeof (attachment as { getFilePath?: () => string | undefined }).getFilePath === "function"
-          ? (attachment as { getFilePath: () => string | undefined }).getFilePath()
-          : (attachment as unknown as { attachmentPath?: string }).attachmentPath;
+      const filePath = await (async () => {
+        // Try async method first (Zotero 7)
+        const asyncPath = await (
+          attachment as unknown as { getFilePathAsync?: () => Promise<string | false> }
+        ).getFilePathAsync?.();
+        if (asyncPath) return asyncPath as string;
+        // Sync fallback
+        if (typeof (attachment as { getFilePath?: () => string | undefined }).getFilePath === "function") {
+          return (attachment as { getFilePath: () => string | undefined }).getFilePath();
+        }
+        return (attachment as unknown as { attachmentPath?: string }).attachmentPath;
+      })();
       if (!filePath) {
         if (status) setStatus(status, "Could not locate the PDF file", "error");
         return;
