@@ -38,6 +38,7 @@ export class MineruRateLimitError extends Error {
 
 type IOUtilsLike = {
   read?: (path: string) => Promise<Uint8Array | ArrayBuffer>;
+  write?: (path: string, data: Uint8Array) => Promise<unknown>;
 };
 
 type OSFileLike = {
@@ -453,41 +454,87 @@ function getCurlPath(): string | null {
 async function uploadViaCurl(
   url: string,
   pdfPath: string,
+  pdfBytes: Uint8Array,
 ): Promise<{ status: number }> {
   // Use the system's curl binary to upload the PDF. This bypasses Zotero's
   // Firefox ESR network stack which cannot connect to Alibaba Cloud OSS.
+  //
+  // We copy the PDF to a temp file with an ASCII-only name to avoid
+  // curl read errors from unicode characters in the original path (exit 26).
+  const Cc = (globalThis as { Components?: { classes?: Record<string, { createInstance: (iface: unknown) => unknown }> } }).Components?.classes;
+  const Ci = (globalThis as { Components?: { interfaces?: Record<string, unknown> } }).Components?.interfaces;
+  if (!Cc || !Ci) {
+    ztoolkit.log("MinerU upload [curl]: Components unavailable");
+    return { status: 0 };
+  }
+
+  const curlPath = getCurlPath();
+  if (!curlPath) {
+    ztoolkit.log("MinerU upload [curl]: cannot determine curl path for this OS");
+    return { status: 0 };
+  }
+
+  const localFile = Cc["@mozilla.org/file/local;1"]?.createInstance(Ci.nsIFile as unknown) as {
+    initWithPath?: (path: string) => void;
+    exists?: () => boolean;
+  } | undefined;
+  if (!localFile?.initWithPath) {
+    ztoolkit.log("MinerU upload [curl]: nsIFile unavailable");
+    return { status: 0 };
+  }
+  localFile.initWithPath(curlPath);
+  if (localFile.exists && !localFile.exists()) {
+    ztoolkit.log(`MinerU upload [curl]: ${curlPath} not found`);
+    return { status: 0 };
+  }
+
+  // Write PDF to a temp file with an ASCII-safe name
+  let uploadPath = pdfPath;
+  let tempUploadPath: string | null = null;
+  try {
+    const dirService = (Cc["@mozilla.org/file/directory_service;1"] as unknown as {
+      getService?: (iface: unknown) => { get?: (prop: string, iface: unknown) => { path?: string } };
+    })?.getService?.(Ci.nsIProperties as unknown);
+    const tempDir = dirService?.get?.("TmpD", Ci.nsIFile as unknown);
+    if (tempDir?.path) {
+      const sep = tempDir.path.includes("\\") ? "\\" : "/";
+      tempUploadPath = `${tempDir.path}${sep}mineru_upload_${Date.now()}.pdf`;
+      const io = getIOUtils();
+      if (io?.write) {
+        await io.write(tempUploadPath, pdfBytes);
+        uploadPath = tempUploadPath;
+      } else {
+        const osFile = getOSFile();
+        if ((osFile as { writeAtomic?: (path: string, data: Uint8Array) => Promise<void> })?.writeAtomic) {
+          await (osFile as { writeAtomic: (path: string, data: Uint8Array) => Promise<void> }).writeAtomic(tempUploadPath, pdfBytes);
+          uploadPath = tempUploadPath;
+        }
+      }
+    }
+  } catch (e) {
+    ztoolkit.log(`MinerU upload [curl]: temp file write failed: ${(e as Error).message}, using original path`);
+  }
+
+  const cleanupTemp = () => {
+    if (tempUploadPath && uploadPath === tempUploadPath) {
+      try {
+        const ioFull = (globalThis as unknown as {
+          IOUtils?: { remove?: (path: string) => Promise<void> };
+        }).IOUtils;
+        ioFull?.remove?.(tempUploadPath);
+      } catch { /* ignore */ }
+    }
+  };
+
+  const args = [
+    "-s", "-f",
+    "-T", uploadPath,
+    "--max-time", "180",
+    "--url", url,
+  ];
+
   return new Promise((resolve) => {
     try {
-      const Cc = (globalThis as { Components?: { classes?: Record<string, { createInstance: (iface: unknown) => unknown }> } }).Components?.classes;
-      const Ci = (globalThis as { Components?: { interfaces?: Record<string, unknown> } }).Components?.interfaces;
-      if (!Cc || !Ci) {
-        ztoolkit.log("MinerU upload [curl]: Components unavailable");
-        resolve({ status: 0 });
-        return;
-      }
-
-      const localFile = Cc["@mozilla.org/file/local;1"]?.createInstance(Ci.nsIFile as unknown) as {
-        initWithPath?: (path: string) => void;
-        exists?: () => boolean;
-      } | undefined;
-      if (!localFile?.initWithPath) {
-        ztoolkit.log("MinerU upload [curl]: nsIFile unavailable");
-        resolve({ status: 0 });
-        return;
-      }
-      const curlPath = getCurlPath();
-      if (!curlPath) {
-        ztoolkit.log("MinerU upload [curl]: cannot determine curl path for this OS");
-        resolve({ status: 0 });
-        return;
-      }
-      localFile.initWithPath(curlPath);
-      if (localFile.exists && !localFile.exists()) {
-        ztoolkit.log(`MinerU upload [curl]: ${curlPath} not found`);
-        resolve({ status: 0 });
-        return;
-      }
-
       const process = Cc["@mozilla.org/process/util;1"]?.createInstance(Ci.nsIProcess as unknown) as {
         init?: (executable: unknown) => void;
         run?: (blocking: boolean, args: string[], count: number) => void;
@@ -496,28 +543,19 @@ async function uploadViaCurl(
       } | undefined;
       if (!process?.init) {
         ztoolkit.log("MinerU upload [curl]: nsIProcess unavailable");
+        cleanupTemp();
         resolve({ status: 0 });
         return;
       }
 
       process.init(localFile);
-      // -T: proper PUT file transfer (sets Content-Length, streams file)
-      // -f: fail with exit code 22 on HTTP 4xx/5xx
-      // -s: silent (no progress bar)
-      // No Content-Type header — presigned URL signature may not expect one
-      const args = [
-        "-s", "-f",
-        "-T", pdfPath,
-        "--max-time", "180",
-        "--url", url,
-      ];
 
       if (!process.runAsync) {
-        // Fallback: synchronous run (blocks main thread, but better than hanging)
         ztoolkit.log("MinerU upload [curl]: runAsync unavailable, using synchronous run");
         try {
           process.run?.(true, args, args.length);
           const exitCode = process.exitValue ?? -1;
+          cleanupTemp();
           if (exitCode === 0) {
             ztoolkit.log("MinerU upload [curl]: sync success (exit=0)");
             resolve({ status: 200 });
@@ -527,15 +565,16 @@ async function uploadViaCurl(
           }
         } catch (runErr) {
           ztoolkit.log(`MinerU upload [curl]: sync run threw: ${(runErr as Error).message}`);
+          cleanupTemp();
           resolve({ status: 0 });
         }
         return;
       }
 
-      // Use runAsync to avoid blocking the main thread
       const observer = {
         observe(_subject: unknown, topic: string) {
           const exitCode = (process as { exitValue?: number }).exitValue ?? -1;
+          cleanupTemp();
           if (topic === "process-finished" && exitCode === 0) {
             ztoolkit.log("MinerU upload [curl]: success (exit=0)");
             resolve({ status: 200 });
@@ -549,6 +588,7 @@ async function uploadViaCurl(
       process.runAsync(args, args.length, observer);
     } catch (e) {
       ztoolkit.log(`MinerU upload [curl] threw: ${(e as Error).message}`);
+      cleanupTemp();
       resolve({ status: 0 });
     }
   });
@@ -565,7 +605,7 @@ async function httpPutBinary(
   })();
 
   // Attempt 1: curl (uses system TLS stack, works for Alibaba Cloud OSS)
-  const curlResult = await uploadViaCurl(url, pdfPath);
+  const curlResult = await uploadViaCurl(url, pdfPath, bytes);
   if (curlResult.status >= 200 && curlResult.status < 300) {
     return curlResult;
   }
@@ -660,9 +700,11 @@ async function parsePdfViaUpload(
   }
 
   report("Uploading PDF…");
+  // Do NOT send Content-Type — the presigned URL's signature may not include it,
+  // and adding it would cause Alibaba OSS to return 403.
   const uploadResult = await httpPutBinary(
     fileUrls[0],
-    { "Content-Type": "application/octet-stream" },
+    {},
     pdfPath,
     pdfBytes,
   );
