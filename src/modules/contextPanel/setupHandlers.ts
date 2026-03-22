@@ -1,4 +1,5 @@
 import { createElement } from "../../utils/domHelpers";
+import { t } from "../../utils/i18n";
 import type { RuntimeModelEntry } from "../../utils/modelProviders";
 import {
   config,
@@ -12,9 +13,9 @@ import {
   FONT_SCALE_MAX_PERCENT,
   FONT_SCALE_STEP_PERCENT,
   FONT_SCALE_DEFAULT_PERCENT,
-  SELECT_TEXT_EXPANDED_LABEL,
+  getSelectTextExpandedLabel,
   SELECT_TEXT_COMPACT_LABEL,
-  SCREENSHOT_EXPANDED_LABEL,
+  getScreenshotExpandedLabel,
   SCREENSHOT_COMPACT_LABEL,
   UPLOAD_FILE_EXPANDED_LABEL,
   UPLOAD_FILE_COMPACT_LABEL,
@@ -482,16 +483,16 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       ".llm-agent-toggle-label",
     ) as HTMLSpanElement | null;
     if (label) {
-      label.textContent = "Agent (beta)";
+      label.textContent = t("Agent (beta)");
     }
     runtimeModeBtn.classList.toggle("llm-agent-toggle-enabled", enabled);
     runtimeModeBtn.dataset.mode = mode;
     runtimeModeBtn.title = enabled
-      ? "Agent mode ON. Click to switch to Chat mode"
-      : "Agent mode OFF. Click to switch to Agent mode";
+      ? t("Agent mode ON. Click to switch to Chat mode")
+      : t("Agent mode OFF. Click to switch to Agent mode");
     runtimeModeBtn.setAttribute(
       "aria-label",
-      mode === "agent" ? "Switch to Chat mode" : "Switch to Agent mode",
+      mode === "agent" ? t("Switch to Chat mode") : t("Switch to Agent mode"),
     );
     runtimeModeBtn.setAttribute("aria-pressed", enabled ? "true" : "false");
     panelRoot.dataset.runtimeMode = mode;
@@ -1029,7 +1030,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     }
     if (!selected) {
       hideSelectionPopup();
-      if (status) setStatus(status, "No assistant text selected", "error");
+      if (status) setStatus(status, t("No assistant text selected"), "error");
       return;
     }
     let added = false;
@@ -1176,7 +1177,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
         // (for plain-text editors).  Uses the selection if present,
         // otherwise the full response.
         await copyRenderedMarkdownToClipboard(body, target.contentText);
-        if (status) setStatus(status, "Copied response", "ready");
+        if (status) setStatus(status, t("Copied response"), "ready");
       });
       responseMenuNoteBtn.addEventListener("click", async (e: Event) => {
         e.preventDefault();
@@ -1210,7 +1211,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
               modelName,
             );
             if (status) {
-              setStatus(status, "Created a new note", "ready");
+              setStatus(status, t("Created a new note"), "ready");
             }
             return;
           }
@@ -1223,14 +1224,14 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
             setStatus(
               status,
               saveResult === "appended"
-                ? "Appended to existing note"
-                : "Created a new note",
+                ? t("Appended to existing note")
+                : t("Created a new note"),
               "ready",
             );
           }
         } catch (err) {
           ztoolkit.log("Create note failed:", err);
-          if (status) setStatus(status, "Failed to create note", "error");
+          if (status) setStatus(status, t("Failed to create note"), "error");
         }
       });
       if (responseMenuDeleteBtn) {
@@ -1251,7 +1252,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
             !Number.isFinite(assistantTimestamp) ||
             assistantTimestamp <= 0
           ) {
-            if (status) setStatus(status, "No deletable turn found", "error");
+            if (status) setStatus(status, t("No deletable turn found"), "error");
             return;
           }
           await queueTurnDeletion({
@@ -1290,7 +1291,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
             !Number.isFinite(target.assistantTimestamp) ||
             target.assistantTimestamp <= 0
           ) {
-            if (status) setStatus(status, "No deletable turn found", "error");
+            if (status) setStatus(status, t("No deletable turn found"), "error");
             return;
           }
           await queueTurnDeletion({
@@ -1325,13 +1326,13 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
         const history = chatHistory.get(conversationKey) || [];
         const payload = buildChatHistoryNotePayload(history);
         if (!payload.noteText) {
-          if (status) setStatus(status, "No chat history detected.", "ready");
+          if (status) setStatus(status, t("No chat history detected."), "ready");
           closeExportMenu();
           return;
         }
         // Match single-response "copy as md": copy markdown/plain text only.
         await copyTextToClipboard(body, payload.noteText);
-        if (status) setStatus(status, "Copied chat as md", "ready");
+        if (status) setStatus(status, t("Copied chat as md"), "ready");
         closeExportMenu();
       });
       exportMenuNoteBtn.addEventListener("click", async (e: Event) => {
@@ -1347,7 +1348,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
           const history = chatHistory.get(conversationKey) || [];
           const payload = buildChatHistoryNotePayload(history);
           if (!payload.noteText) {
-            if (status) setStatus(status, "No chat history detected.", "ready");
+            if (status) setStatus(status, t("No chat history detected."), "ready");
             return;
           }
           if (isGlobalMode()) {
@@ -1359,10 +1360,10 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
             await createNoteFromChatHistory(currentItem, history);
           }
           if (status)
-            setStatus(status, "Saved chat history to new note", "ready");
+            setStatus(status, t("Saved chat history to new note"), "ready");
         } catch (err) {
           ztoolkit.log("Save chat history note failed:", err);
-          if (status) setStatus(status, "Failed to save chat history", "error");
+          if (status) setStatus(status, t("Failed to save chat history"), "error");
         }
       });
     }
@@ -1405,7 +1406,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       } catch (error) {
         ztoolkit.log("LLM: Failed to open plugin preferences", error);
         if (status) {
-          setStatus(status, "Could not open plugin settings", "error");
+          setStatus(status, t("Could not open plugin settings"), "error");
         }
       }
     });
@@ -1527,7 +1528,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
           // Update tooltip
           const label = chip.querySelector(".llm-paper-context-chip-label") as HTMLElement | null;
           if (label && label.title && !label.title.includes("MinerU")) {
-            label.title = `${label.title}\nSource: MinerU (enhanced markdown)`;
+            label.title = `${label.title}\n${t("Source: MinerU (enhanced markdown)")}`;
           }
         }
       }
@@ -1714,7 +1715,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     withScrollGuard(chatBox, conversationKey, fn);
   };
   const EDIT_STALE_STATUS_TEXT =
-    "Edit target changed. Please edit latest prompt again.";
+    t("Edit target changed. Please edit latest prompt again.");
   const getLatestEditablePair = async () => {
     if (!item) return null;
     await ensureConversationLoaded(item);
@@ -1879,13 +1880,13 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       void focusPaperContextInActiveTab(paperChipMenuTarget)
         .then((focused) => {
           if (!focused && status) {
-            setStatus(status, "Could not focus this paper", "error");
+            setStatus(status, t("Could not focus this paper"), "error");
           }
         })
         .catch((err) => {
           ztoolkit.log("LLM: Failed to focus paper context from menu", err);
           if (status) {
-            setStatus(status, "Could not focus this paper", "error");
+            setStatus(status, t("Could not focus this paper"), "error");
           }
         });
     });
@@ -2125,7 +2126,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       "llm-paper-context-chip-label",
       {
         textContent: formatPaperContextChipLabel(paperContext),
-        title: mineru ? `${chipTitle}\nSource: MinerU (enhanced markdown)` : chipTitle,
+        title: mineru ? `${chipTitle}\n${t("Source: MinerU (enhanced markdown)")}` : chipTitle,
       },
     );
     chipHeader.append(chipLabel);
@@ -2291,7 +2292,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       filePreviewMeta.textContent = formatFileCountLabel(0);
       filePreviewMeta.classList.remove("expanded");
       filePreviewMeta.setAttribute("aria-expanded", "false");
-      filePreviewMeta.title = "Expand files panel";
+      filePreviewMeta.title = t("Expand files panel");
       filePreviewList.innerHTML = "";
       clearSelectedFileState(itemId);
       return;
@@ -2309,8 +2310,8 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     filePreviewMeta.classList.toggle("expanded", expanded);
     filePreviewMeta.setAttribute("aria-expanded", expanded ? "true" : "false");
     filePreviewMeta.title = expanded
-      ? "Collapse files panel"
-      : "Expand files panel";
+      ? t("Collapse files panel")
+      : t("Expand files panel");
     filePreviewList.innerHTML = "";
     const ownerDoc = body.ownerDocument;
     if (!ownerDoc) return;
@@ -2378,7 +2379,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
         if (status) {
           setStatus(
             status,
-            `Attachment removed (${nextFiles.length})`,
+            `${t("Attachment removed")} (${nextFiles.length})`,
             "ready",
           );
         }
@@ -2435,8 +2436,8 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       previewMeta.classList.toggle("expanded", expanded);
       previewMeta.setAttribute("aria-expanded", expanded ? "true" : "false");
       previewMeta.title = expanded
-        ? "Collapse figures panel"
-        : "Expand figures panel";
+        ? t("Collapse figures panel")
+        : t("Expand figures panel");
 
       imagePreview.style.display = "flex";
       imagePreview.classList.toggle("expanded", expanded);
@@ -2546,7 +2547,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       previewMeta.textContent = formatFigureCountLabel(0);
       previewMeta.classList.remove("expanded");
       previewMeta.setAttribute("aria-expanded", "false");
-      previewMeta.title = "Expand figures panel";
+      previewMeta.title = t("Expand figures panel");
       clearSelectedImageState(item.id);
       screenshotBtn.disabled = screenshotUnsupported;
       screenshotBtn.title = screenshotUnsupported
@@ -2704,7 +2705,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
 
   const showTurnUndoToast = () => {
     if (!historyUndo || !historyUndoText) return;
-    historyUndoText.textContent = "Deleted one turn";
+    historyUndoText.textContent = t("Deleted one turn");
     historyUndo.style.display = "flex";
   };
 
@@ -4264,7 +4265,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     if (hasError && status) {
       setStatus(
         status,
-        "Failed to fully delete conversation. Check logs.",
+        t("Failed to fully delete conversation. Check logs."),
         "error",
       );
     }
@@ -4333,7 +4334,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     if (hasError && status) {
       setStatus(
         status,
-        "Failed to fully delete conversation. Check logs.",
+        t("Failed to fully delete conversation. Check logs."),
         "error",
       );
     }
@@ -4378,9 +4379,9 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     }
     scheduleAttachmentGc();
     if (hasError && status) {
-      setStatus(status, "Failed to fully delete turn. Check logs.", "error");
+      setStatus(status, t("Failed to fully delete turn. Check logs."), "error");
     } else if (reason === "timeout" && status) {
-      setStatus(status, "Turn deleted", "ready");
+      setStatus(status, t("Turn deleted"), "ready");
     }
     void refreshGlobalHistoryHeader();
   };
@@ -4408,7 +4409,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       activeEditSession = null;
       refreshChatPreservingScroll();
     }
-    if (status) setStatus(status, "Turn restored", "ready");
+    if (status) setStatus(status, t("Turn restored"), "ready");
     void refreshGlobalHistoryHeader();
   };
 
@@ -4424,18 +4425,18 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       inputBox?.disabled
     ) {
       if (status) {
-        setStatus(status, "Cannot delete while generating", "ready");
+        setStatus(status, t("Cannot delete while generating"), "ready");
       }
       return;
     }
     const activeConversationKey = getConversationKey(item);
     if (activeConversationKey !== target.conversationKey) {
-      if (status) setStatus(status, "Delete target changed", "error");
+      if (status) setStatus(status, t("Delete target changed"), "error");
       return;
     }
     await ensureConversationLoaded(item);
     if (!item || getConversationKey(item) !== target.conversationKey) {
-      if (status) setStatus(status, "Delete target changed", "error");
+      if (status) setStatus(status, t("Delete target changed"), "error");
       return;
     }
     if (pendingHistoryDeletion) {
@@ -4456,7 +4457,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       target.assistantTimestamp,
     );
     if (!pair) {
-      if (status) setStatus(status, "No deletable turn found", "error");
+      if (status) setStatus(status, t("No deletable turn found"), "error");
       return;
     }
 
@@ -4480,7 +4481,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     }, MESSAGE_TURN_UNDO_WINDOW_MS);
     pendingTurnDeletion = pending;
     showTurnUndoToast();
-    if (status) setStatus(status, "Turn deleted. Undo available.", "ready");
+    if (status) setStatus(status, t("Turn deleted. Undo available."), "ready");
   };
 
   const clearPendingHistoryDeletion = (
@@ -4533,11 +4534,11 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
         kind: pending.kind,
         conversationKey: pending.conversationKey,
       });
-      if (status) setStatus(status, "Conversation restored", "ready");
+      if (status) setStatus(status, t("Conversation restored"), "ready");
       return;
     }
     await refreshGlobalHistoryHeader();
-    if (status) setStatus(status, "Conversation restored", "ready");
+    if (status) setStatus(status, t("Conversation restored"), "ready");
   };
 
   const findHistoryEntryByKey = (
@@ -4580,7 +4581,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     if (raw === null) return null;
     const normalized = normalizeConversationTitleSeed(raw);
     if (!normalized) {
-      if (status) setStatus(status, "Chat title cannot be empty", "error");
+      if (status) setStatus(status, t("Chat title cannot be empty"), "error");
       return null;
     }
     return normalized;
@@ -4595,7 +4596,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       inputBox?.disabled
     ) {
       if (status) {
-        setStatus(status, "History is unavailable while generating", "ready");
+        setStatus(status, t("History is unavailable while generating"), "ready");
       }
       return;
     }
@@ -4608,10 +4609,10 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
         await setGlobalConversationTitle(entry.conversationKey, nextTitle);
       }
       await refreshGlobalHistoryHeader();
-      if (status) setStatus(status, "Conversation renamed", "ready");
+      if (status) setStatus(status, t("Conversation renamed"), "ready");
     } catch (err) {
       ztoolkit.log("LLM: Failed to rename conversation", err);
-      if (status) setStatus(status, "Failed to rename conversation", "error");
+      if (status) setStatus(status, t("Failed to rename conversation"), "error");
     }
   };
 
@@ -4620,7 +4621,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     if (!entry.deletable) return;
     const libraryID = getCurrentLibraryID();
     if (!libraryID) {
-      if (status) setStatus(status, "No active library for deletion", "error");
+      if (status) setStatus(status, t("No active library for deletion"), "error");
       return;
     }
 
@@ -4641,7 +4642,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
         const paperItemID = Number(entry.paperItemID || 0);
         if (!paperItemID) {
           if (status) {
-            setStatus(status, "Cannot resolve active paper session", "error");
+            setStatus(status, t("Cannot resolve active paper session"), "error");
           }
           return;
         }
@@ -4660,7 +4661,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
         if (status) {
           setStatus(
             status,
-            "Cannot delete active conversation right now",
+            t("Cannot delete active conversation right now"),
             "error",
           );
         }
@@ -4700,7 +4701,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     showHistoryUndoToast(entry.title);
     await refreshGlobalHistoryHeader();
     if (status)
-      setStatus(status, "Conversation deleted. Undo available.", "ready");
+      setStatus(status, t("Conversation deleted. Undo available."), "ready");
   };
 
   const createAndSwitchGlobalConversation = async () => {
@@ -4713,7 +4714,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       if (status) {
         setStatus(
           status,
-          "Wait for the current response to finish before starting a new chat",
+          t("Wait for the current response to finish before starting a new chat"),
           "ready",
         );
       }
@@ -4723,7 +4724,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     const libraryID = getCurrentLibraryID();
     if (!libraryID) {
       if (status) {
-        setStatus(status, "No active library for global conversation", "error");
+        setStatus(status, t("No active library for global conversation"), "error");
       }
       return;
     }
@@ -4779,7 +4780,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       reuseReason = null;
     }
     if (!targetConversationKey) {
-      if (status) setStatus(status, "Failed to create conversation", "error");
+      if (status) setStatus(status, t("Failed to create conversation"), "error");
       return;
     }
 
@@ -4795,8 +4796,8 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       setStatus(
         status,
         reuseReason
-          ? "Reused existing new conversation"
-          : "Started new conversation",
+          ? t("Reused existing new conversation")
+          : t("Started new conversation"),
         "ready",
       );
     }
@@ -4813,7 +4814,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       if (status) {
         setStatus(
           status,
-          "Wait for the current response to finish before starting a new chat",
+          t("Wait for the current response to finish before starting a new chat"),
           "ready",
         );
       }
@@ -4823,7 +4824,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     const paperItem = resolveCurrentPaperBaseItem();
     if (!paperItem) {
       if (status) {
-        setStatus(status, "Open a paper to start a paper chat", "error");
+        setStatus(status, t("Open a paper to start a paper chat"), "error");
       }
       return;
     }
@@ -4832,7 +4833,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     const paperItemID = Number(paperItem.id || 0);
     if (!libraryID || !Number.isFinite(paperItemID) || paperItemID <= 0) {
       if (status) {
-        setStatus(status, "No active paper for paper chat", "error");
+        setStatus(status, t("No active paper for paper chat"), "error");
       }
       return;
     }
@@ -4886,7 +4887,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
         ztoolkit.log("LLM: Failed to create new paper conversation", err);
       }
       if (!createdSummary?.conversationKey) {
-        if (status) setStatus(status, "Failed to create paper chat", "error");
+        if (status) setStatus(status, t("Failed to create paper chat"), "error");
         return;
       }
       targetConversationKey = createdSummary.conversationKey;
@@ -4904,7 +4905,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     if (status) {
       setStatus(
         status,
-        reuseReason ? "Reused existing new chat" : "Started new paper chat",
+        reuseReason ? t("Reused existing new chat") : t("Started new paper chat"),
         "ready",
       );
     }
@@ -4944,7 +4945,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
         if (status) {
           setStatus(
             status,
-            "Wait for the current response to finish before starting a new chat",
+            t("Wait for the current response to finish before starting a new chat"),
             "ready",
           );
         }
@@ -5010,7 +5011,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
         if (status) {
           setStatus(
             status,
-            "Wait for the current response to finish before switching modes",
+            t("Wait for the current response to finish before switching modes"),
             "ready",
           );
         }
@@ -5086,7 +5087,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
         closeHistoryNewMenu();
         closeHistoryMenu();
         if (status) {
-          setStatus(status, "History is unavailable while generating", "ready");
+          setStatus(status, t("History is unavailable while generating"), "ready");
         }
         return;
       }
@@ -5157,7 +5158,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
         closeHistoryNewMenu();
         closeHistoryMenu();
         if (status) {
-          setStatus(status, "History is unavailable while generating", "ready");
+          setStatus(status, t("History is unavailable while generating"), "ready");
         }
         return;
       }
@@ -5254,7 +5255,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
         } else {
           await switchGlobalConversation(parsedConversationKey);
         }
-        if (status) setStatus(status, "Conversation loaded", "ready");
+        if (status) setStatus(status, t("Conversation loaded"), "ready");
       })();
     });
 
@@ -5270,7 +5271,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
         e.stopPropagation();
         closeHistoryRowMenu();
         if (status) {
-          setStatus(status, "History is unavailable while generating", "ready");
+          setStatus(status, t("History is unavailable while generating"), "ready");
         }
         return;
       }
@@ -5660,13 +5661,13 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
         getContextButtonWidth(
           selectTextSlot,
           selectTextBtn,
-          SELECT_TEXT_EXPANDED_LABEL,
+          getSelectTextExpandedLabel(),
           state.selectText,
         ),
         getContextButtonWidth(
           screenshotSlot,
           screenshotBtn,
-          SCREENSHOT_EXPANDED_LABEL,
+          getScreenshotExpandedLabel(),
           state.screenshot,
         ),
         getModelWidth(state.model),
@@ -5710,13 +5711,13 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       );
       setActionButtonLabel(
         selectTextBtn,
-        SELECT_TEXT_EXPANDED_LABEL,
+        getSelectTextExpandedLabel(),
         SELECT_TEXT_COMPACT_LABEL,
         "full",
       );
       setActionButtonLabel(
         screenshotBtn,
-        SCREENSHOT_EXPANDED_LABEL,
+        getScreenshotExpandedLabel(),
         SCREENSHOT_COMPACT_LABEL,
         "full",
       );
@@ -5748,13 +5749,13 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       );
       setActionButtonLabel(
         selectTextBtn,
-        SELECT_TEXT_EXPANDED_LABEL,
+        getSelectTextExpandedLabel(),
         SELECT_TEXT_COMPACT_LABEL,
         state.selectText,
       );
       setActionButtonLabel(
         screenshotBtn,
-        SCREENSHOT_EXPANDED_LABEL,
+        getScreenshotExpandedLabel(),
         SCREENSHOT_COMPACT_LABEL,
         state.screenshot,
       );
@@ -5948,9 +5949,9 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     const { groupedChoices, selectedEntryId } = getSelectedModelInfo();
 
     modelMenu.innerHTML = "";
-    appendDropdownInstruction(modelMenu, "Select model", "llm-model-menu-hint");
+    appendDropdownInstruction(modelMenu, t("Select model"), "llm-model-menu-hint");
     if (!groupedChoices.length) {
-      appendModelMenuEmptyState(modelMenu, "No models configured yet.");
+      appendModelMenuEmptyState(modelMenu, t("No models configured yet."));
       return;
     }
 
@@ -6008,7 +6009,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       : [];
     retryModelMenu.innerHTML = "";
     if (!groupedChoices.length) {
-      appendModelMenuEmptyState(retryModelMenu, "No models configured yet.");
+      appendModelMenuEmptyState(retryModelMenu, t("No models configured yet."));
       return;
     }
     for (const group of groupedChoices) {
@@ -6143,7 +6144,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     reasoningMenu.innerHTML = "";
     appendDropdownInstruction(
       reasoningMenu,
-      "Reasoning level",
+      t("Reasoning level"),
       "llm-reasoning-menu-section",
     );
     if (!enabledLevels.length) {
@@ -6801,7 +6802,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     // "Agent actions" section label
     const agentLabel = mkAgentEl("div", "llm-slash-menu-section");
     agentLabel.setAttribute("aria-hidden", "true");
-    agentLabel.textContent = "Agent actions";
+    agentLabel.textContent = t("Agent actions");
     list.insertBefore(agentLabel, firstBase);
     // Agent action items
     filtered.forEach((action) => {
@@ -6826,7 +6827,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     // "Base actions" section label (above the static base items)
     const baseLabel = mkAgentEl("div", "llm-slash-menu-section");
     baseLabel.setAttribute("aria-hidden", "true");
-    baseLabel.textContent = "Base actions";
+    baseLabel.textContent = t("Base actions");
     list.insertBefore(baseLabel, firstBase);
   };
 
@@ -7110,7 +7111,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
         entry.contextItemId === paper.contextItemId,
     );
     if (duplicate) {
-      if (status) setStatus(status, "Paper already selected", "warning");
+      if (status) setStatus(status, t("Paper already selected"), "warning");
       return false;
     }
     if (selectedPapers.length >= MAX_SELECTED_PAPER_CONTEXTS) {
@@ -7142,10 +7143,10 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     updatePaperPreviewPreservingScroll();
     if (status) {
       const addedPaper = nextPapers[nextPapers.length - 1];
-      const mineruTag = isPaperContextMineru(addedPaper) ? " (MinerU)" : "";
+      const mineruTag = isPaperContextMineru(addedPaper) ? ` ${t("(MinerU)")}` : "";
       setStatus(
         status,
-        `Paper context added. Full text will be sent on the next turn.${mineruTag}`,
+        `${t("Paper context added. Full text will be sent on the next turn.")}${mineruTag}`,
         "ready",
       );
     }
@@ -7157,7 +7158,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     const noteItem = Zotero.Items.get(contextItemId) || null;
     const snapshot = readNoteSnapshot(noteItem);
     if (!snapshot?.text) {
-      if (status) setStatus(status, "Selected note is empty", "warning");
+      if (status) setStatus(status, t("Selected note is empty"), "warning");
       return false;
     }
     const appended = appendSelectedTextContextForItem(
@@ -7177,11 +7178,11 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       },
     );
     if (!appended) {
-      if (status) setStatus(status, "Note already selected", "warning");
+      if (status) setStatus(status, t("Note already selected"), "warning");
       return false;
     }
     updateSelectedTextPreviewPreservingScroll();
-    if (status) setStatus(status, "Note context added as text.", "ready");
+    if (status) setStatus(status, t("Note context added as text."), "ready");
     return true;
   };
   const upsertOtherRefContext = (ref: OtherContextRef): boolean => {
@@ -7189,7 +7190,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     const existing = selectedOtherRefContextCache.get(item.id) || [];
     const duplicate = existing.some((e) => e.contextItemId === ref.contextItemId);
     if (duplicate) {
-      if (status) setStatus(status, "File already selected", "warning");
+      if (status) setStatus(status, t("File already selected"), "warning");
       return false;
     }
     selectedOtherRefContextCache.set(item.id, [...existing, ref]);
@@ -7974,7 +7975,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       if (status) {
         setStatus(
           status,
-          nextMode === "agent" ? "Agent mode enabled" : "Chat mode enabled",
+          nextMode === "agent" ? t("Agent mode enabled") : t("Chat mode enabled"),
           "ready",
         );
       }
@@ -8261,7 +8262,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
           if (status) {
             setStatus(
               status,
-              "Paper mode only accepts text from this paper",
+              t("Paper mode only accepts text from this paper"),
               "error",
             );
           }
@@ -8339,7 +8340,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
         updateImagePreviewPreservingScroll();
         return;
       }
-      if (status) setStatus(status, "Select a region...", "sending");
+      if (status) setStatus(status, t("Select a region..."), "sending");
 
       try {
         ztoolkit.log("Screenshot: Starting capture selection...");
@@ -8378,11 +8379,11 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
             );
           }
         } else {
-          if (status) setStatus(status, "Selection cancelled", "ready");
+          if (status) setStatus(status, t("Selection cancelled"), "ready");
         }
       } catch (err) {
         ztoolkit.log("Screenshot selection error:", err);
-        if (status) setStatus(status, "Screenshot failed", "error");
+        if (status) setStatus(status, t("Screenshot failed"), "error");
       }
     });
   }
@@ -8414,7 +8415,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     if (status) {
       setStatus(
         status,
-        "Reference picker ready. Browse collections or type to search papers.",
+        t("Reference picker ready. Browse collections or type to search papers."),
         "ready",
       );
     }
@@ -8498,13 +8499,13 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
           if (pdfAtts.length === 1) {
             attachment = pdfAtts[0];
           } else if (pdfAtts.length > 1) {
-            if (status) setStatus(status, "Multiple PDFs found — select a specific PDF attachment", "error");
+            if (status) setStatus(status, t("Multiple PDFs found — select a specific PDF attachment"), "error");
             return;
           }
         }
       }
       if (!attachment) {
-        if (status) setStatus(status, "No PDF found — open a PDF or select an item with a PDF attachment", "error");
+        if (status) setStatus(status, t("No PDF found — open a PDF or select an item with a PDF attachment"), "error");
         return;
       }
       const filePath = await (async () => {
@@ -8520,10 +8521,10 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
         return (attachment as unknown as { attachmentPath?: string }).attachmentPath;
       })();
       if (!filePath) {
-        if (status) setStatus(status, "Could not locate the PDF file", "error");
+        if (status) setStatus(status, t("Could not locate the PDF file"), "error");
         return;
       }
-      if (status) setStatus(status, "Loading PDF...", "sending");
+      if (status) setStatus(status, t("Loading PDF..."), "sending");
       try {
         const bytes = await readAttachmentBytes(filePath);
         if (bytes.byteLength > MAX_UPLOAD_PDF_SIZE_BYTES) {
@@ -8533,10 +8534,10 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
         const fileName = filePath.split(/[\\/]/).pop() || "document.pdf";
         const file = new File([bytes], fileName, { type: "application/pdf" });
         await processIncomingFiles([file]);
-        if (status) setStatus(status, "PDF added to context", "ready");
+        if (status) setStatus(status, t("PDF added to context"), "ready");
       } catch (err) {
         ztoolkit.log("Full PDF load error:", err);
-        if (status) setStatus(status, "Failed to load PDF", "error");
+        if (status) setStatus(status, t("Failed to load PDF"), "error");
       }
     });
   }
@@ -8558,7 +8559,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
         if (status) setStatus(status, `Maximum ${MAX_SELECTED_IMAGES} images allowed`, "error");
         return;
       }
-      if (status) setStatus(status, "Capturing PDF page...", "sending");
+      if (status) setStatus(status, t("Capturing PDF page..."), "sending");
       try {
         const dataUrl = await captureCurrentPdfPage();
         if (dataUrl) {
@@ -8578,12 +8579,12 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
           updateImagePreviewPreservingScroll();
           if (status) setStatus(status, `Page captured (${nextImages.length}/${MAX_SELECTED_IMAGES})`, "ready");
         } else {
-          if (status) setStatus(status, "No PDF page found — open a PDF in the reader first", "error");
+          if (status) setStatus(status, t("No PDF page found — open a PDF in the reader first"), "error");
           updateImagePreviewPreservingScroll();
         }
       } catch (err) {
         ztoolkit.log("PDF page capture error:", err);
-        if (status) setStatus(status, "PDF page capture failed", "error");
+        if (status) setStatus(status, t("PDF page capture failed"), "error");
         updateImagePreviewPreservingScroll();
       }
     });
@@ -9093,7 +9094,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       if (!item) return;
       clearSelectedImageState(item.id);
       updateImagePreviewPreservingScroll();
-      if (status) setStatus(status, "Figures cleared", "ready");
+      if (status) setStatus(status, t("Figures cleared"), "ready");
     });
   }
 
@@ -9139,7 +9140,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       clearSelectedFileState(item.id);
       updateFilePreviewPreservingScroll();
       scheduleAttachmentGc();
-      if (status) setStatus(status, "Files cleared", "ready");
+      if (status) setStatus(status, t("Files cleared"), "ready");
     });
   }
 
@@ -9170,7 +9171,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       if (status) {
         setStatus(
           status,
-          nextPinned ? "File pinned for next sends" : "File unpinned",
+          nextPinned ? t("File pinned for next sends") : t("File unpinned"),
           "ready",
         );
       }
@@ -9212,8 +9213,8 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
         setStatus(
           status,
           nextPinned
-            ? "Screenshot pinned for next sends"
-            : "Screenshot unpinned",
+            ? t("Screenshot pinned for next sends")
+            : t("Screenshot unpinned"),
           "ready",
         );
       }
@@ -9317,12 +9318,12 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       );
       closePaperChipMenu();
       if (status) {
-        const mineruTag = isPaperContextMineru(paperContext) ? " (MinerU)" : "";
+        const mineruTag = isPaperContextMineru(paperContext) ? ` ${t("(MinerU)")}` : "";
         setStatus(
           status,
           nextMode === "full-sticky"
-            ? `Paper set to always send full text.${mineruTag}`
-            : `Paper set to retrieval mode.${mineruTag}`,
+            ? `${t("Paper set to always send full text.")}${mineruTag}`
+            : `${t("Paper set to retrieval mode.")}${mineruTag}`,
           "ready",
         );
       }
@@ -9349,7 +9350,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
         void focusPaperContextInActiveTab(paperContextForCard)
           .then((focused) => {
             if (!focused && status) {
-              setStatus(status, "Could not focus this paper", "error");
+              setStatus(status, t("Could not focus this paper"), "error");
             }
           })
           .catch((err) => {
@@ -9358,7 +9359,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
               err,
             );
             if (status) {
-              setStatus(status, "Could not focus this paper", "error");
+              setStatus(status, t("Could not focus this paper"), "error");
             }
           });
         return;
@@ -9650,7 +9651,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
         setSelectedTextContextEntries(textContextKey, nextContexts);
         setSelectedTextExpandedIndex(textContextKey, null);
         updateSelectedTextPreviewPreservingScroll();
-        if (status) setStatus(status, "Selected text removed", "ready");
+        if (status) setStatus(status, t("Selected text removed"), "ready");
         return;
       }
 
@@ -9738,7 +9739,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
         if (status) {
           setStatus(
             status,
-            "Live note preview is pinned while editing",
+            t("Live note preview is pinned while editing"),
             "ready",
           );
         }
@@ -9770,7 +9771,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
         if (status) {
           setStatus(
             status,
-            "Editing focus syncs to the live note selection",
+            t("Editing focus syncs to the live note selection"),
             "ready",
           );
         }
@@ -9788,8 +9789,8 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
         setStatus(
           status,
           nextPinned
-            ? "Text context pinned for next sends"
-            : "Text context unpinned",
+            ? t("Text context pinned for next sends")
+            : t("Text context unpinned"),
           "ready",
         );
       }
@@ -9869,7 +9870,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
         currentAbortController.abort();
       }
       setCancelledRequestId(currentRequestId);
-      if (status) setStatus(status, "Cancelled", "ready");
+      if (status) setStatus(status, t("Cancelled"), "ready");
       // Re-enable UI
       if (inputBox) inputBox.disabled = false;
       if (sendBtn) {

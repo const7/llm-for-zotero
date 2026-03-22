@@ -9,6 +9,7 @@ import {
   deleteMineruCacheForItem,
   onBatchStateChange,
 } from "./mineruBatchProcessor";
+import { t } from "../utils/i18n";
 import type {
   MineruBatchState,
   MineruItemEntry,
@@ -124,23 +125,23 @@ export async function registerMineruManagerScript(
 
     if (startBtn) {
       if (s.running && !s.paused) {
-        startBtn.textContent = "Pause";
+        startBtn.textContent = t("Pause");
       } else if (hasSelection) {
-        startBtn.textContent = `Start Selected (${selectedIds.size})`;
+        startBtn.textContent = `${t("Start Selected")} (${selectedIds.size})`;
       } else if (inFolder) {
-        startBtn.textContent = "Start Folder";
+        startBtn.textContent = t("Start Folder");
       } else {
-        startBtn.textContent = "Start All";
+        startBtn.textContent = t("Start All");
       }
     }
 
     if (deleteBtn) {
       if (hasSelection) {
-        deleteBtn.textContent = `Delete Cache (${selectedIds.size})`;
+        deleteBtn.textContent = `${t("Delete Cache")} (${selectedIds.size})`;
       } else if (inFolder) {
-        deleteBtn.textContent = "Delete Folder Cache";
+        deleteBtn.textContent = t("Delete Folder Cache");
       } else {
-        deleteBtn.textContent = "Delete All Cache";
+        deleteBtn.textContent = t("Delete All Cache");
       }
     }
   }
@@ -169,10 +170,10 @@ export async function registerMineruManagerScript(
   function renderSidebar(): void {
     if (!sidebar) return;
     sidebar.innerHTML = "";
-    sidebar.appendChild(createSidebarEntry("My Library", "all", 0, allItems.length));
+    sidebar.appendChild(createSidebarEntry(t("My Library"), "all", 0, allItems.length));
     for (const root of collectionTree) renderSidebarNode(sidebar, root, 1);
     const uc = allItems.filter((i) => i.collectionIds.length === 0).length;
-    if (uc > 0) sidebar.appendChild(createSidebarEntry("Unfiled Items", "unfiled", 0, uc));
+    if (uc > 0) sidebar.appendChild(createSidebarEntry(t("Unfiled Items"), "unfiled", 0, uc));
   }
 
   function createSidebarEntry(name: string, key: number | "all" | "unfiled", indent: number, count: number): HTMLElement {
@@ -220,7 +221,7 @@ export async function registerMineruManagerScript(
     for (let i = 0; i < spans.length; i++) {
       const sp = spans[i] as HTMLElement;
       const key = sp.getAttribute("data-sort-key") as SortKey;
-      const label = { cached: "\u25CF", title: "Title", firstCreator: "Author", year: "Year", dateAdded: "Added" }[key];
+      const label = { cached: "\u25CF", title: t("Title"), firstCreator: t("Author"), year: t("Year"), dateAdded: t("Added") }[key];
       if (sortKey === key) {
         if (key === "cached") {
           sp.textContent = sortDir === "asc" ? "\u25B2" : "\u25BC";
@@ -492,8 +493,8 @@ export async function registerMineruManagerScript(
         // Not actively processing, but there were failures — show error reason
         // Error reason goes first (actionable); count provides context
         const msg = s.failedCount > 1
-          ? `${s.failedCount} items failed — ${s.lastFailedMessage}`
-          : `Failed — ${s.lastFailedMessage}`;
+          ? `${s.failedCount} ${t("items failed")} — ${s.lastFailedMessage}`
+          : `${t("Failed")} — ${s.lastFailedMessage}`;
         statusEl.textContent = msg;
         statusEl.title = msg;
         statusEl.style.color = "#dc2626";
@@ -584,7 +585,7 @@ export async function registerMineruManagerScript(
   if (deleteBtn) {
     deleteBtn.addEventListener("click", async () => {
       if (selectedIds.size > 0) {
-        if (!win.confirm(`Delete MinerU cache for ${selectedIds.size} selected item(s)?`)) return;
+        if (!win.confirm(`${t("Delete MinerU cache for")} ${selectedIds.size} ${t("selected item(s)?")}`)) return;
         for (const id of selectedIds) {
           await deleteMineruCacheForItem(id);
           const entry = allItems.find((i) => i.attachmentId === id);
@@ -596,7 +597,7 @@ export async function registerMineruManagerScript(
         renderItemsList();
       } else if (isSubfolder() || activeCollectionId === "unfiled") {
         const ids = getFolderItemIds();
-        if (!win.confirm(`Delete MinerU cache for ${ids.length} item(s) in this folder?`)) return;
+        if (!win.confirm(`${t("Delete MinerU cache for")} ${ids.length} ${t("item(s) in this folder?")}`)) return;
         for (const id of ids) {
           await deleteMineruCacheForItem(id);
           const entry = allItems.find((i) => i.attachmentId === id);
@@ -606,7 +607,7 @@ export async function registerMineruManagerScript(
         updateProgressBar();
         renderItemsList();
       } else {
-        if (!win.confirm("Delete all MinerU cached files? This cannot be undone.")) return;
+        if (!win.confirm(t("Delete all MinerU cached files? This cannot be undone."))) return;
         await deleteAllMineruCache();
         await loadData();
         renderSidebar();

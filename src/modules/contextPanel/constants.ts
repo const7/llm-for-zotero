@@ -1,4 +1,5 @@
 import { config } from "../../../package.json";
+import { t } from "../../utils/i18n";
 import { ReasoningLevel as LLMReasoningLevel } from "../../utils/llmClient";
 
 // =============================================================================
@@ -41,23 +42,27 @@ export function formatFigureCountLabel(
   maxCount = MAX_SELECTED_IMAGES,
 ): string {
   if (count <= 0) return "";
-  const noun = count === 1 ? "Figure" : "Figures";
+  const noun = count === 1 ? t("Figure") : t("Figures");
   return `${noun} (${count}/${maxCount})`;
 }
 
 export function formatFileCountLabel(count: number): string {
   if (count <= 0) return "";
-  return `Files (${count})`;
+  return `${t("Files")} (${count})`;
 }
 
 export function formatPaperCountLabel(count: number): string {
   if (count <= 0) return "";
-  return "Papers";
+  return t("Papers");
 }
 
-export const SELECT_TEXT_EXPANDED_LABEL = "Add Text";
+export function getSelectTextExpandedLabel() {
+  return t("Add Text");
+}
 export const SELECT_TEXT_COMPACT_LABEL = "";
-export const SCREENSHOT_EXPANDED_LABEL = "Screenshots";
+export function getScreenshotExpandedLabel() {
+  return t("Screenshots");
+}
 export const SCREENSHOT_COMPACT_LABEL = "";
 export const UPLOAD_FILE_EXPANDED_LABEL = "";
 export const UPLOAD_FILE_COMPACT_LABEL = "";
@@ -149,12 +154,14 @@ export const MODEL_PROFILE_ORDER: ModelProfileKey[] = [
 ];
 export const ASSISTANT_NOTE_MAP_PREF_KEY = "assistantNoteMap";
 
-export const MODEL_PROFILE_SUFFIX: Record<ModelProfileKey, string> = {
-  primary: "Primary",
-  secondary: "Secondary",
-  tertiary: "Tertiary",
-  quaternary: "Quaternary",
-};
+export function getModelProfileSuffix(): Record<ModelProfileKey, string> {
+  return {
+    primary: t("Primary"),
+    secondary: t("Secondary"),
+    tertiary: t("Tertiary"),
+    quaternary: t("Quaternary"),
+  };
+}
 
 export { config };
 export type { LLMReasoningLevel };

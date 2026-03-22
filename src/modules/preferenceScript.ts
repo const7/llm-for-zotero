@@ -1,4 +1,5 @@
 import { config } from "../../package.json";
+import { t } from "../utils/i18n";
 import {
   DEFAULT_MAX_TOKENS,
   DEFAULT_TEMPERATURE,
@@ -74,9 +75,12 @@ const PROVIDER_PROFILES: ProviderProfile[] = [
 ];
 
 function getProviderProfile(index: number): ProviderProfile {
-  if (index < PROVIDER_PROFILES.length) return PROVIDER_PROFILES[index];
+  if (index < PROVIDER_PROFILES.length) {
+    const p = PROVIDER_PROFILES[index];
+    return { ...p, label: t(p.label) };
+  }
   const letter = String.fromCharCode("A".charCodeAt(0) + index);
-  return { label: `Provider ${letter}`, modelPlaceholder: "", defaultModel: "" };
+  return { label: t(`Provider ${letter}`), modelPlaceholder: "", defaultModel: "" };
 }
 
 function normalizeProviderPresetId(value: unknown): ProviderPresetId {
@@ -88,9 +92,9 @@ function normalizeProviderPresetId(value: unknown): ProviderPresetId {
 
 function getPresetSelectHelperText(presetId: ProviderPresetId): string {
   if (presetId === "customized") {
-    return CUSTOMIZED_API_HELPER_TEXT;
+    return t(CUSTOMIZED_API_HELPER_TEXT);
   }
-  return `${getProviderPreset(presetId).helperText} Switch to Customized to edit the URL manually.`;
+  return `${getProviderPreset(presetId).helperText} ${t("Switch to Customized to edit the URL manually.")}`;
 }
 
 function getProtocolOptions(
@@ -398,6 +402,67 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
   const doc = _window.document;
   await new Promise((resolve) => setTimeout(resolve, 100));
 
+  // ── Translate static XHTML text ────────────────────────────────
+  // Tab buttons
+  const tabButtons = doc.querySelectorAll("[data-pref-tab]");
+  for (let i = 0; i < tabButtons.length; i++) {
+    const btn = tabButtons[i] as HTMLElement;
+    const text = btn.textContent?.trim();
+    if (text) btn.textContent = t(text);
+  }
+  // Walk all labels, spans, and helper text in the preference panels
+  // and translate their text content if it matches a known key.
+  const translateTextNodes = (container: Element) => {
+    const elements = container.querySelectorAll("label, span");
+    for (let i = 0; i < elements.length; i++) {
+      const el = elements[i] as HTMLElement;
+      // Skip elements with children that are not just text (e.g., labels with checkboxes)
+      // For labels with inputs, translate the text node after the input
+      if (el.tagName.toLowerCase() === "label" && el.querySelector("input")) {
+        for (const child of Array.from(el.childNodes)) {
+          if (child && child.nodeType === 3 /* TEXT_NODE */ && child.textContent && child.textContent.trim()) {
+            const original = child.textContent.trim();
+            const translated = t(original);
+            if (translated !== original) {
+              child.textContent = `\n            ${translated}\n          `;
+            }
+          }
+        }
+        continue;
+      }
+      // For plain text elements
+      const text = el.textContent?.trim();
+      if (text && el.children.length === 0) {
+        const translated = t(text);
+        if (translated !== text) {
+          el.textContent = translated;
+        }
+      }
+    }
+  };
+  const prefPanels = doc.querySelectorAll("[data-pref-panel]");
+  for (let i = 0; i < prefPanels.length; i++) {
+    translateTextNodes(prefPanels[i]);
+  }
+  // Translate textarea placeholder
+  const systemPrompt = doc.querySelector(`#${config.addonRef}-system-prompt`) as HTMLTextAreaElement | null;
+  if (systemPrompt?.placeholder) {
+    systemPrompt.placeholder = t(systemPrompt.placeholder);
+  }
+  const mineruApiKeyEl = doc.querySelector(`#${config.addonRef}-mineru-api-key`) as HTMLInputElement | null;
+  if (mineruApiKeyEl?.placeholder) {
+    mineruApiKeyEl.placeholder = t(mineruApiKeyEl.placeholder);
+  }
+  // Translate language dropdown options
+  const localeSelectEl = doc.querySelector(`#${config.addonRef}-locale-select`) as HTMLSelectElement | null;
+  if (localeSelectEl) {
+    const autoOption = localeSelectEl.querySelector('option[value="auto"]') as HTMLOptionElement | null;
+    if (autoOption) autoOption.textContent = t("Auto (follow Zotero)");
+  }
+  // Translate restart hint
+  const restartHint = doc.querySelector(`#${config.addonRef}-locale-restart-hint`) as HTMLElement | null;
+  if (restartHint) restartHint.textContent = t("Restart Zotero to apply language change.");
+
   // ── Tab bar switching ───────────────────────────────────────────
   const tabBar = doc.querySelector(`#${config.addonRef}-pref-tab-bar`) as HTMLElement | null;
   if (tabBar) {
@@ -483,12 +548,12 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
     // Section heading
     const headingLeft = el(doc, "div", "display: flex; flex-direction: column; gap: 2px; margin-bottom: 2px;");
     headingLeft.append(
-      el(doc, "span", "font-size: 14px; font-weight: 800; color: var(--fill-primary, inherit);", "AI Providers"),
+      el(doc, "span", "font-size: 14px; font-weight: 800; color: var(--fill-primary, inherit);", t("AI Providers")),
       el(
         doc,
         "span",
         "font-size: 11.5px; color: var(--fill-secondary, #888);",
-        "Each provider has an auth mode, API URL, and one or more model variants.",
+        t("Each provider has an auth mode, API URL, and one or more model variants."),
       ),
     );
     wrap.appendChild(headingLeft);
@@ -507,7 +572,7 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
       cardHeader.append(
         el(doc, "span", "font-weight: 700; font-size: 13px;", profile.label),
       );
-      const removeProvBtn = iconBtn(doc, "×", "Remove provider");
+      const removeProvBtn = iconBtn(doc, "×", t("Remove provider"));
       removeProvBtn.addEventListener("click", () => {
         groups.splice(groupIndex, 1);
         persistGroups(groups);
@@ -520,16 +585,16 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
 
       // ── Auth mode ────────────────────────────────────────────────
       const authModeWrap = el(doc, "div", "display: flex; flex-direction: column;");
-      const authModeLabel = el(doc, "label", LABEL_STYLE, "Auth Mode");
+      const authModeLabel = el(doc, "label", LABEL_STYLE, t("Auth Mode"));
       const authModeSelect = el(doc, "select", INPUT_STYLE) as HTMLSelectElement;
       authModeSelect.id = `${config.addonRef}-auth-mode-${group.id}`;
       authModeLabel.setAttribute("for", authModeSelect.id);
       const apiKeyOption = el(doc, "option") as HTMLOptionElement;
       apiKeyOption.value = "api_key";
-      apiKeyOption.textContent = "API Key";
+      apiKeyOption.textContent = t("API Key");
       const codexOption = el(doc, "option") as HTMLOptionElement;
       codexOption.value = "codex_auth";
-      codexOption.textContent = "codex auth";
+      codexOption.textContent = t("codex auth");
       authModeSelect.append(apiKeyOption, codexOption);
       authModeSelect.value = group.authMode;
       authModeSelect.addEventListener("change", () => {
@@ -554,7 +619,7 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
           doc,
           "span",
           HELPER_STYLE,
-          "codex auth reuses local `codex login` credentials from ~/.codex/auth.json",
+          t("codex auth reuses local `codex login` credentials from ~/.codex/auth.json"),
         ),
       );
 
@@ -577,7 +642,7 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
         "display: flex; flex-direction: column;",
       );
       if (group.authMode !== "codex_auth") {
-        const providerPresetLabel = el(doc, "label", LABEL_STYLE, "Provider");
+        const providerPresetLabel = el(doc, "label", LABEL_STYLE, t("Provider"));
         const providerPresetSelect = el(
           doc,
           "select",
@@ -594,7 +659,7 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
         }
         const customizedOption = el(doc, "option") as HTMLOptionElement;
         customizedOption.value = "customized";
-        customizedOption.textContent = "Customized";
+        customizedOption.textContent = t("Customized");
         providerPresetSelect.appendChild(customizedOption);
 
         providerPresetSelect.value = selectedPresetId;
@@ -623,7 +688,7 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
         "div",
         "display: flex; flex-direction: column;",
       );
-      const protocolLabel = el(doc, "label", LABEL_STYLE, "Protocol");
+      const protocolLabel = el(doc, "label", LABEL_STYLE, t("Protocol"));
       const protocolSelect = el(doc, "select", INPUT_STYLE) as HTMLSelectElement;
       protocolSelect.id = `${config.addonRef}-provider-protocol-${group.id}`;
       protocolLabel.setAttribute("for", protocolSelect.id);
@@ -660,7 +725,7 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
 
       // ── API URL ──────────────────────────────────────────────────
       const apiUrlWrap = el(doc, "div", "display: flex; flex-direction: column;");
-      const apiUrlLabel = el(doc, "label", LABEL_STYLE, "API URL");
+      const apiUrlLabel = el(doc, "label", LABEL_STYLE, t("API URL"));
       const apiUrlInput = el(doc, "input", INPUT_STYLE) as HTMLInputElement;
       apiUrlInput.id = `${config.addonRef}-api-base-${group.id}`;
       apiUrlLabel.setAttribute("for", apiUrlInput.id);
@@ -675,7 +740,7 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
       apiUrlInput.style.cursor = apiUrlInput.readOnly ? "default" : "text";
       apiUrlInput.style.pointerEvents = apiUrlInput.readOnly ? "none" : "auto";
       apiUrlInput.title = apiUrlInput.readOnly
-        ? "Switch Provider to Customized to edit this URL manually."
+        ? t("Switch Provider to Customized to edit this URL manually.")
         : "";
       apiUrlInput.addEventListener("input", () => {
         group.apiBase = apiUrlInput.value;
@@ -687,7 +752,7 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
         "span",
         HELPER_STYLE,
         group.authMode === "codex_auth"
-          ? CODEX_API_HELPER_TEXT
+          ? t(CODEX_API_HELPER_TEXT)
           : getPresetSelectHelperText(selectedPresetId),
       );
       apiUrlWrap.append(
@@ -698,7 +763,7 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
 
       // ── API Key ──────────────────────────────────────────────────
       const apiKeyWrap = el(doc, "div", "display: flex; flex-direction: column;");
-      const apiKeyLabel = el(doc, "label", LABEL_STYLE, "API Key");
+      const apiKeyLabel = el(doc, "label", LABEL_STYLE, t("API Key"));
       const apiKeyInput = el(doc, "input", INPUT_STYLE) as HTMLInputElement;
       apiKeyInput.id = `${config.addonRef}-api-key-${group.id}`;
       apiKeyLabel.setAttribute("for", apiKeyInput.id);
@@ -723,9 +788,9 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
         "div",
         "display: flex; align-items: center; justify-content: space-between; margin-bottom: 2px;",
       );
-      modelsHeaderRow.appendChild(el(doc, "span", SECTION_LABEL_STYLE, "Model names"));
+      modelsHeaderRow.appendChild(el(doc, "span", SECTION_LABEL_STYLE, t("Model names")));
 
-      const addModelBtn = iconBtn(doc, "+", "Add model");
+      const addModelBtn = iconBtn(doc, "+", t("Add model"));
       addModelBtn.style.color = "var(--color-accent, #2563eb)";
       modelsHeaderRow.appendChild(addModelBtn);
       modelsWrap.appendChild(modelsHeaderRow);
@@ -735,8 +800,8 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
         addModelBtn.disabled = !canAdd;
         addModelBtn.style.opacity = canAdd ? "1" : "0.35";
         addModelBtn.title = canAdd
-          ? "Add model"
-          : "Fill in the current model name first";
+          ? t("Add model")
+          : t("Fill in the current model name first");
       };
       syncAddModelBtn();
 
@@ -765,15 +830,15 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
         modelInput.value = modelEntry.model;
         modelInput.placeholder = modelIndex === 0 ? profile.modelPlaceholder : "";
 
-        const testBtn = el(doc, "button", OUTLINE_BTN_STYLE, "Test") as HTMLButtonElement;
+        const testBtn = el(doc, "button", OUTLINE_BTN_STYLE, t("Test")) as HTMLButtonElement;
         testBtn.type = "button";
 
-        const advGearBtn = iconBtn(doc, "⚙", "Advanced options");
+        const advGearBtn = iconBtn(doc, "⚙", t("Advanced options"));
 
         mainRow.append(modelInput, testBtn, advGearBtn);
 
         if (group.models.length > 1) {
-          const removeModelBtn = iconBtn(doc, "×", "Remove model");
+          const removeModelBtn = iconBtn(doc, "×", t("Remove model"));
           removeModelBtn.addEventListener("click", () => {
             group.models = group.models.filter((e) => e.id !== modelEntry.id);
             if (!group.models.length) {
@@ -818,17 +883,17 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
         };
 
         const tempField = makeCompactField(
-          "Temperature",
+          t("Temperature"),
           `${modelEntry.temperature ?? DEFAULT_TEMPERATURE}`,
           `${DEFAULT_TEMPERATURE}`,
         );
         const maxTokField = makeCompactField(
-          "Max tokens",
+          t("Max tokens"),
           `${modelEntry.maxTokens ?? DEFAULT_MAX_TOKENS}`,
           `${DEFAULT_MAX_TOKENS}`,
         );
         const inputCapField = makeCompactField(
-          "Input cap",
+          t("Input cap"),
           modelEntry.inputTokenCap !== undefined ? `${modelEntry.inputTokenCap}` : "",
           "optional",
         );
@@ -840,7 +905,7 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
             doc,
             "span",
             "font-size: 10.5px; color: var(--fill-secondary, #888); margin-top: 2px; display: block;",
-            "Temperature: randomness (0–2)  ·  Max tokens: output limit  ·  Input cap: context limit (optional)",
+            t("Temperature: randomness (0–2)  ·  Max tokens: output limit  ·  Input cap: context limit (optional)"),
           ),
         );
 
@@ -888,7 +953,7 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
         const runTest = async () => {
           testBtn.disabled = true;
           statusLine.style.display = "block";
-          statusLine.textContent = "Testing…";
+          statusLine.textContent = t("Testing…");
           statusLine.style.color = "var(--fill-secondary, #888)";
 
           try {
@@ -906,12 +971,12 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
             ).trim();
             const providerProtocol = resolveSelectedProtocol(group, selectedPresetId);
 
-            if (!apiBase) throw new Error("API URL is required");
+            if (!apiBase) throw new Error(t("API URL is required"));
             if (!apiKey) {
               throw new Error(
                 authMode === "codex_auth"
-                  ? "codex token missing. Run `codex login` first."
-                  : "API Key is required",
+                  ? t("codex token missing. Run `codex login` first.")
+                  : t("API Key is required"),
               );
             }
 
@@ -925,8 +990,8 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
               modelName,
             });
             statusLine.textContent =
-              `✓ Success — model says: "${result.reply}"\n` +
-              `Agent capability: ${result.capabilityLabel}`;
+              `${t("✓ Success — model says: ")}"${result.reply}"\n` +
+              `${t("Agent capability: ")}${result.capabilityLabel}`;
             statusLine.style.color = "green";
           } catch (error) {
             statusLine.textContent = `✗ ${(error as Error).message}`;
@@ -978,7 +1043,7 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
       doc,
       "button",
       PRIMARY_BTN_STYLE + " margin-top: 2px; font-size: 12.5px; text-align: center;",
-      "+ Add Provider",
+      t("+ Add Provider"),
     ) as HTMLButtonElement;
     addProviderBtn.type = "button";
 
@@ -992,8 +1057,8 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
       addProviderBtn.title = atMax
         ? `Maximum ${MAX_PROVIDER_COUNT} providers`
         : hasEmpty
-          ? "Complete the empty provider first"
-          : "Add provider";
+          ? t("Complete the empty provider first")
+          : t("Add provider");
     };
     syncAddProviderBtnInner();
     syncAddProviderBtn = syncAddProviderBtnInner;
@@ -1097,17 +1162,17 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
       const apiKey = getMineruApiKey().trim();
       if (!apiKey) {
         mineruTestStatus.style.display = "inline";
-        mineruTestStatus.textContent = "Enter an API key first";
+        mineruTestStatus.textContent = t("Enter an API key first");
         mineruTestStatus.style.color = "var(--fill-secondary, #888)";
         return;
       }
       mineruTestBtn.disabled = true;
       mineruTestStatus.style.display = "inline";
-      mineruTestStatus.textContent = "Testing…";
+      mineruTestStatus.textContent = t("Testing…");
       mineruTestStatus.style.color = "var(--fill-secondary, #888)";
       try {
         await testMineruConnection(apiKey);
-        mineruTestStatus.textContent = "\u2713 Connection successful";
+        mineruTestStatus.textContent = t("✓ Connection successful");
         mineruTestStatus.style.color = "green";
       } catch (error) {
         mineruTestStatus.textContent = `\u2717 ${(error as Error).message}`;
@@ -1118,6 +1183,25 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
     };
     mineruTestBtn.addEventListener("click", () => void runMineruTest());
     mineruTestBtn.addEventListener("command", () => void runMineruTest());
+  }
+
+  // ── Language selector ────────────────────────────────────────────
+  const localeSelect = doc.querySelector(
+    `#${config.addonRef}-locale-select`,
+  ) as HTMLSelectElement | null;
+  const localeRestartHint = doc.querySelector(
+    `#${config.addonRef}-locale-restart-hint`,
+  ) as HTMLSpanElement | null;
+  if (localeSelect) {
+    const prefsPrefix = config.prefsPrefix;
+    const currentLocale = Zotero.Prefs.get(`${prefsPrefix}.locale`, true) as string || "auto";
+    localeSelect.value = currentLocale;
+    localeSelect.addEventListener("change", () => {
+      Zotero.Prefs.set(`${prefsPrefix}.locale`, localeSelect.value, true);
+      if (localeRestartHint) {
+        localeRestartHint.style.display = "block";
+      }
+    });
   }
 
   // ── Embedded MinerU manager ──────────────────────────────────────

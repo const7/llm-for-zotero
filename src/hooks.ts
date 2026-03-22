@@ -1,4 +1,5 @@
 import { initLocale } from "./utils/locale";
+import { initI18n } from "./utils/i18n";
 import { registerPrefsScripts } from "./modules/preferenceScript";
 import { PREFERENCES_PANE_ID } from "./modules/contextPanel/constants";
 import {
@@ -34,6 +35,7 @@ async function onStartup() {
   }
 
   initLocale();
+  initI18n();
 
   try {
     await initChatStore();

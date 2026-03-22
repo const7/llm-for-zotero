@@ -1,8 +1,9 @@
 import { createElement } from "../../utils/domHelpers";
+import { t } from "../../utils/i18n";
 import {
   PREFERENCES_PANE_ID,
-  SELECT_TEXT_EXPANDED_LABEL,
-  SCREENSHOT_EXPANDED_LABEL,
+  getSelectTextExpandedLabel,
+  getScreenshotExpandedLabel,
   UPLOAD_FILE_EXPANDED_LABEL,
   formatFigureCountLabel,
   formatFileCountLabel,
@@ -149,7 +150,7 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
   // });
   const title = createElement(doc, "div", "llm-title", {
     id: "llm-title-static",
-    textContent: "LLM Assistant",
+    textContent: t("LLM Assistant"),
   });
   if (hasItem) {
     title.style.display = "none";
@@ -162,18 +163,18 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
     id: "llm-history-new",
     type: "button",
     textContent: "",
-    title: "Start a new chat",
+    title: t("Start a new chat"),
   });
-  historyNewBtn.setAttribute("aria-label", "Start a new chat");
+  historyNewBtn.setAttribute("aria-label", t("Start a new chat"));
   historyNewBtn.style.display = activeNoteSession ? "none" : "";
 
   // History toggle button (clock icon)
   const historyToggle = createElement(doc, "button", "llm-history-toggle", {
     id: "llm-history-toggle",
     type: "button",
-    title: "Conversation history",
+    title: t("Conversation history"),
   });
-  historyToggle.setAttribute("aria-label", "Conversation history");
+  historyToggle.setAttribute("aria-label", t("Conversation history"));
   historyToggle.setAttribute("aria-haspopup", "menu");
   historyToggle.setAttribute("aria-expanded", "false");
   historyToggle.style.display = activeNoteSession ? "none" : "";
@@ -188,35 +189,35 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
     id: "llm-mode-chip",
     type: "button",
     textContent: hasItem && isGlobalMode
-      ? (activeNoteSession ? "Open note" : "Open chat")
-      : (activeNoteSession ? "Paper note" : "Paper chat"),
+      ? (activeNoteSession ? t("Open note") : t("Open chat"))
+      : (activeNoteSession ? t("Paper note") : t("Paper chat")),
     title:
       activeNoteSession
         ? hasItem && isGlobalMode
-          ? "Open note"
-          : "Paper note"
+          ? t("Open note")
+          : t("Paper note")
         : hasItem && isGlobalMode
-          ? "Switch to paper chat"
-          : "Switch to open chat",
+          ? t("Switch to paper chat")
+          : t("Switch to open chat"),
   });
   modeChipBtn.setAttribute(
     "aria-label",
     activeNoteSession
       ? hasItem && isGlobalMode
-        ? "Open note"
-        : "Paper note"
+        ? t("Open note")
+        : t("Paper note")
       : hasItem && isGlobalMode
-        ? "Switch to paper chat"
-        : "Switch to open chat",
+        ? t("Switch to paper chat")
+        : t("Switch to open chat"),
   );
 
   // Lock button, right of chip (only visible in open-chat mode)
   const modeLockBtn = createElement(doc, "div", "llm-mode-lock", {
     id: "llm-mode-lock",
-    title: "Lock open chat as default",
+    title: t("Lock open chat as default"),
   });
   modeLockBtn.dataset.locked = "false";
-  modeLockBtn.setAttribute("aria-label", "Lock open chat as default");
+  modeLockBtn.setAttribute("aria-label", t("Lock open chat as default"));
   modeLockBtn.setAttribute("role", "button");
   modeLockBtn.setAttribute("tabindex", "0");
   modeLockBtn.style.display =
@@ -233,21 +234,21 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
   const settingsBtn = createElement(doc, "button", "llm-btn-icon llm-settings-btn", {
     id: "llm-settings",
     type: "button",
-    title: "Settings",
+    title: t("Settings"),
   });
-  settingsBtn.setAttribute("aria-label", "Open plugin settings");
+  settingsBtn.setAttribute("aria-label", t("Open plugin settings"));
   settingsBtn.dataset.preferencesPaneId = PREFERENCES_PANE_ID;
   const exportBtn = createElement(doc, "button", "llm-btn-icon", {
     id: "llm-export",
     type: "button",
     textContent: "⤓",
-    title: "Export",
+    title: t("Export"),
     disabled: !hasItem,
   });
   const clearBtn = createElement(doc, "button", "llm-btn-icon", {
     id: "llm-clear",
     type: "button",
-    textContent: "Clear",
+    textContent: t("Clear"),
   });
   headerActions.append(settingsBtn, exportBtn, clearBtn);
   headerTop.appendChild(headerActions);
@@ -269,8 +270,8 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
     {
       id: "llm-history-row-rename",
       type: "button",
-      textContent: "Rename",
-      title: "Rename chat",
+      textContent: t("Rename"),
+      title: t("Rename chat"),
     },
   );
   historyRowMenu.append(historyRowRenameBtn);
@@ -287,8 +288,8 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
   const historyUndoBtn = createElement(doc, "button", "llm-history-undo-btn", {
     id: "llm-history-undo-btn",
     type: "button",
-    textContent: "Undo",
-    title: "Restore deleted conversation",
+    textContent: t("Undo"),
+    title: t("Restore deleted conversation"),
   });
   historyUndo.append(historyUndoText, historyUndoBtn);
   header.appendChild(historyUndo);
@@ -319,27 +320,27 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
   const menuEditBtn = createElement(doc, "button", "llm-shortcut-menu-item", {
     id: "llm-shortcut-menu-edit",
     type: "button",
-    textContent: "Edit",
+    textContent: t("Edit"),
   });
   const menuDeleteBtn = createElement(doc, "button", "llm-shortcut-menu-item", {
     id: "llm-shortcut-menu-delete",
     type: "button",
-    textContent: "Delete",
+    textContent: t("Delete"),
   });
   const menuAddBtn = createElement(doc, "button", "llm-shortcut-menu-item", {
     id: "llm-shortcut-menu-add",
     type: "button",
-    textContent: "Add",
+    textContent: t("Add"),
   });
   const menuMoveBtn = createElement(doc, "button", "llm-shortcut-menu-item", {
     id: "llm-shortcut-menu-move",
     type: "button",
-    textContent: "Move",
+    textContent: t("Move"),
   });
   const menuResetBtn = createElement(doc, "button", "llm-shortcut-menu-item", {
     id: "llm-shortcut-menu-reset",
     type: "button",
-    textContent: "Reset",
+    textContent: t("Reset"),
   });
   shortcutMenu.append(
     menuEditBtn,
@@ -362,7 +363,7 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
     {
       id: "llm-response-menu-copy",
       type: "button",
-      textContent: "Copy",
+      textContent: t("Copy"),
     },
   );
   const responseMenuNoteBtn = createElement(
@@ -372,7 +373,7 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
     {
       id: "llm-response-menu-note",
       type: "button",
-      textContent: "Save as note",
+      textContent: t("Save as note"),
     },
   );
   const responseMenuDeleteBtn = createElement(
@@ -382,8 +383,8 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
     {
       id: "llm-response-menu-delete",
       type: "button",
-      textContent: "Delete this turn",
-      title: "Delete this prompt and response",
+      textContent: t("Delete this turn"),
+      title: t("Delete this prompt and response"),
     },
   );
   responseMenu.append(
@@ -405,8 +406,8 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
     {
       id: "llm-prompt-menu-delete",
       type: "button",
-      textContent: "Delete this turn",
-      title: "Delete this prompt and response",
+      textContent: t("Delete this turn"),
+      title: t("Delete this prompt and response"),
     },
   );
   promptMenu.append(promptMenuDeleteBtn);
@@ -424,7 +425,7 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
     {
       id: "llm-export-copy",
       type: "button",
-      textContent: "Copy chat as md",
+      textContent: t("Copy chat as md"),
     },
   );
   const exportMenuNoteBtn = createElement(
@@ -434,7 +435,7 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
     {
       id: "llm-export-note",
       type: "button",
-      textContent: "Save chat as note",
+      textContent: t("Save chat as note"),
     },
   );
   exportMenu.append(exportMenuCopyBtn, exportMenuNoteBtn);
@@ -466,23 +467,23 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
   };
   const slashUploadBtn = makeSlashItem(
     "llm-slash-upload-option",
-    "Upload files",
-    "Add documents or images",
+    t("Upload files"),
+    t("Add documents or images"),
   );
   const slashReferenceBtn = makeSlashItem(
     "llm-slash-reference-option",
-    "Select references",
-    "Add papers from your library",
+    t("Select references"),
+    t("Add papers from your library"),
   );
   const slashPdfPageBtn = makeSlashItem(
     "llm-slash-pdf-page-option",
-    "Send current PDF page",
-    "Capture the visible page as an image",
+    t("Send current PDF page"),
+    t("Capture the visible page as an image"),
   );
   const slashFullPdfBtn = makeSlashItem(
     "llm-slash-full-pdf-option",
-    "Send current entire PDF",
-    "Add the open PDF file to context",
+    t("Send current entire PDF"),
+    t("Add the open PDF file to context"),
   );
   slashList.append(slashUploadBtn, slashReferenceBtn, slashPdfPageBtn, slashFullPdfBtn);
   slashMenu.append(slashList);
@@ -507,11 +508,11 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
     {
       id: "llm-runtime-mode-toggle",
       type: "button",
-      title: "Switch to Agent mode",
+      title: t("Switch to Agent mode"),
       disabled: !hasItem,
     },
   );
-  runtimeModeBtn.setAttribute("aria-label", "Switch to Agent mode");
+  runtimeModeBtn.setAttribute("aria-label", t("Switch to Agent mode"));
   runtimeModeBtn.setAttribute("aria-pressed", "false");
   const runtimeModeIndicator = createElement(
     doc,
@@ -524,7 +525,7 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
     "span",
     "llm-agent-toggle-label llm-agent-process-summary-label",
     {
-      textContent: "Agent mode",
+      textContent: t("Agent mode"),
     },
   );
   runtimeModeBtn.append(runtimeModeIndicator, runtimeModeLabel);
@@ -569,7 +570,7 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
       id: "llm-image-preview-meta",
       type: "button",
       textContent: formatFigureCountLabel(0),
-      title: "Expand figures",
+      title: t("Expand figures"),
     },
   );
   const imagePreviewHeader = createElement(
@@ -584,9 +585,9 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
     id: "llm-remove-img",
     type: "button",
     textContent: "×",
-    title: "Clear selected screenshots",
+    title: t("Clear selected screenshots"),
   });
-  removeImgBtn.setAttribute("aria-label", "Clear selected screenshots");
+  removeImgBtn.setAttribute("aria-label", t("Clear selected screenshots"));
   imagePreviewHeader.append(imagePreviewMeta, removeImgBtn);
 
   const imagePreviewExpanded = createElement(
@@ -614,7 +615,7 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
     "llm-image-preview-selected-img",
     {
       id: "llm-image-preview-selected-img",
-      alt: "Selected screenshot preview",
+      alt: t("Selected screenshot preview"),
     },
   ) as HTMLImageElement;
   previewLargeWrap.appendChild(previewLargeImg);
@@ -635,7 +636,7 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
       id: "llm-file-context-meta",
       type: "button",
       textContent: formatFileCountLabel(0),
-      title: "Expand files",
+      title: t("Expand files"),
     },
   );
   const filePreviewHeader = createElement(
@@ -650,7 +651,7 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
     id: "llm-file-context-clear",
     type: "button",
     textContent: "×",
-    title: "Clear uploaded files",
+    title: t("Clear uploaded files"),
   });
   filePreviewHeader.append(filePreviewMeta, filePreviewClear);
   const filePreviewExpanded = createElement(
@@ -707,9 +708,9 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
     id: "llm-input",
     placeholder: hasItem
       ? isGlobalMode
-        ? "Ask anything... Type / for actions, @ to add papers"
-        : "Ask about this paper... Type / for actions, @ to add papers"
-      : "Open a PDF first",
+        ? t("Ask anything... Type / for actions, @ to add papers")
+        : t("Ask about this paper... Type / for actions, @ to add papers")
+      : t("Open a PDF first"),
     disabled: !hasItem,
   });
   composeArea.appendChild(inputBox);
@@ -725,8 +726,8 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
     "llm-shortcut-btn llm-action-btn llm-action-btn-secondary llm-select-text-btn",
     {
       id: "llm-select-text",
-      textContent: SELECT_TEXT_EXPANDED_LABEL,
-      title: "Include selected reader text",
+      textContent: getSelectTextExpandedLabel(),
+      title: t("Include selected reader text"),
       disabled: !hasItem,
     },
   );
@@ -740,8 +741,8 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
     "llm-shortcut-btn llm-action-btn llm-action-btn-secondary llm-screenshot-btn",
     {
       id: "llm-screenshot",
-      textContent: SCREENSHOT_EXPANDED_LABEL,
-      title: "Select figure screenshot",
+      textContent: getScreenshotExpandedLabel(),
+      title: t("Select figure screenshot"),
       disabled: !hasItem,
     },
   );
@@ -756,13 +757,13 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
       id: "llm-upload-file",
       type: "button",
       textContent: UPLOAD_FILE_EXPANDED_LABEL,
-      title: "Context actions",
+      title: t("Context actions"),
       disabled: !hasItem,
     },
   );
   uploadBtn.setAttribute("aria-haspopup", "menu");
   uploadBtn.setAttribute("aria-expanded", "false");
-  uploadBtn.setAttribute("aria-label", "Context actions");
+  uploadBtn.setAttribute("aria-label", t("Context actions"));
   const uploadInput = createElement(doc, "input", "", {
     id: "llm-upload-input",
     type: "file",
@@ -798,7 +799,7 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
     buttonId: "llm-reasoning-toggle",
     buttonClassName:
       "llm-shortcut-btn llm-action-btn llm-action-btn-secondary llm-reasoning-btn",
-    buttonText: "Reasoning",
+    buttonText: t("Reasoning"),
     menuId: "llm-reasoning-menu",
     menuClassName: "llm-reasoning-menu",
     disabled: !hasItem,
@@ -810,8 +811,8 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
     "llm-shortcut-btn llm-action-btn llm-action-btn-primary llm-send-btn",
     {
       id: "llm-send",
-      textContent: "Send",
-      title: "Send",
+      textContent: t("Send"),
+      title: t("Send"),
       disabled: !hasItem,
     },
   );
@@ -821,7 +822,7 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
     "llm-shortcut-btn llm-action-btn llm-action-btn-danger llm-send-btn llm-cancel-btn",
     {
       id: "llm-cancel",
-      textContent: "Cancel",
+      textContent: t("Cancel"),
     },
   );
   cancelBtn.style.display = "none";
@@ -833,9 +834,9 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
     id: "llm-status",
     textContent: hasItem
       ? isGlobalMode
-        ? "No active paper context. Type / to add papers."
-        : "Ready"
-      : "Select an item or open a PDF",
+        ? t("No active paper context. Type / to add papers.")
+        : t("Ready")
+      : t("Select an item or open a PDF"),
   });
   const tokenUsage = createElement(doc, "span", "llm-token-usage", {
     id: "llm-token-usage",
