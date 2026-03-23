@@ -33,6 +33,13 @@ import {
 } from "../utils/providerProtocol";
 import { runProviderConnectionTest } from "../utils/providerConnectionTest";
 import {
+  startCopilotDeviceFlow,
+  pollCopilotDeviceAuth,
+  resolveCopilotAccessToken,
+  fetchCopilotModelList,
+  fetchCopilotModelListRaw,
+} from "../utils/llmClient";
+import {
   isMineruEnabled,
   getMineruApiKey,
   setMineruEnabled,
@@ -57,6 +64,9 @@ const CUSTOMIZED_API_HELPER_TEXT =
   "Choose a preset above, or switch to Customized to enter a full base URL or endpoint manually.";
 const CODEX_API_HELPER_TEXT =
   "codex auth usually uses https://chatgpt.com/backend-api/codex/responses";
+const COPILOT_API_HELPER_TEXT =
+  "GitHub Copilot uses device-based login. Click Login to authenticate via GitHub.";
+const DEFAULT_COPILOT_API_BASE = "https://api.githubcopilot.com";
 const MAX_PROVIDER_COUNT = 10;
 const INITIAL_PROVIDER_COUNT = 4;
 const DEFAULT_CODEX_API_BASE = "https://chatgpt.com/backend-api/codex/responses";
@@ -102,6 +112,7 @@ function getProtocolOptions(
   presetId: ProviderPresetId,
 ): ProviderProtocol[] {
   if (authMode === "codex_auth") return ["codex_responses"];
+  if (authMode === "copilot_auth") return ["openai_chat_compat", "responses_api"];
   if (presetId !== "customized") {
     return getProviderPreset(presetId).supportedProtocols.filter(
       (protocol) => protocol !== "codex_responses",
@@ -193,7 +204,9 @@ function hasEmptyModel(group: ModelProviderGroup): boolean {
 }
 
 function normalizeAuthMode(value: unknown): ModelProviderAuthMode {
-  return value === "codex_auth" ? "codex_auth" : "api_key";
+  if (value === "codex_auth") return "codex_auth";
+  if (value === "copilot_auth") return "copilot_auth";
+  return "api_key";
 }
 
 type ProcessLike = { env?: Record<string, string | undefined> };
@@ -611,13 +624,18 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
       const codexOption = el(doc, "option") as HTMLOptionElement;
       codexOption.value = "codex_auth";
       codexOption.textContent = t("codex auth");
-      authModeSelect.append(apiKeyOption, codexOption);
+      const copilotOption = el(doc, "option") as HTMLOptionElement;
+      copilotOption.value = "copilot_auth";
+      copilotOption.textContent = t("GitHub Copilot");
+      authModeSelect.append(apiKeyOption, codexOption, copilotOption);
       authModeSelect.value = group.authMode;
       authModeSelect.addEventListener("change", () => {
         const nextAuthMode = normalizeAuthMode(authModeSelect.value);
         group.authMode = nextAuthMode;
         if (nextAuthMode === "codex_auth") {
           group.providerProtocol = "codex_responses";
+        } else if (nextAuthMode === "copilot_auth") {
+          group.providerProtocol = "responses_api";
         } else if (group.providerProtocol === "codex_responses") {
           group.providerProtocol =
             selectedPreset?.defaultProtocol || "openai_chat_compat";
@@ -625,22 +643,24 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
         if (nextAuthMode === "codex_auth" && !group.apiBase.trim()) {
           group.apiBase = DEFAULT_CODEX_API_BASE;
         }
+        if (nextAuthMode === "copilot_auth" && !group.apiBase.trim()) {
+          group.apiBase = DEFAULT_COPILOT_API_BASE;
+        }
         persistGroups(groups);
         setTimeout(() => rerender(), 0);
       });
+      const authModeHelperText =
+        group.authMode === "copilot_auth"
+          ? t(COPILOT_API_HELPER_TEXT)
+          : t("codex auth reuses local `codex login` credentials from ~/.codex/auth.json");
       authModeWrap.append(
         authModeLabel,
         authModeSelect,
-        el(
-          doc,
-          "span",
-          HELPER_STYLE,
-          t("codex auth reuses local `codex login` credentials from ~/.codex/auth.json"),
-        ),
+        el(doc, "span", HELPER_STYLE, authModeHelperText),
       );
 
       const selectedPresetId: ProviderPresetId =
-        group.authMode === "codex_auth"
+        group.authMode === "codex_auth" || group.authMode === "copilot_auth"
           ? "customized"
           : (group.presetIdOverride ?? detectProviderPreset(group.apiBase));
       const selectedPreset =
@@ -648,7 +668,9 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
           ? null
           : getProviderPreset(selectedPresetId);
       const isCustomizedPreset =
-        group.authMode !== "codex_auth" && selectedPresetId === "customized";
+        group.authMode !== "codex_auth" &&
+        group.authMode !== "copilot_auth" &&
+        selectedPresetId === "customized";
       group.providerProtocol = resolveSelectedProtocol(group, selectedPresetId);
 
       // ── Provider preset ─────────────────────────────────────────
@@ -657,7 +679,7 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
         "div",
         "display: flex; flex-direction: column;",
       );
-      if (group.authMode !== "codex_auth") {
+      if (group.authMode !== "codex_auth" && group.authMode !== "copilot_auth") {
         const providerPresetLabel = el(doc, "label", LABEL_STYLE, t("Provider"));
         const providerPresetSelect = el(
           doc,
@@ -749,9 +771,14 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
       apiUrlInput.placeholder =
         group.authMode === "codex_auth"
           ? DEFAULT_CODEX_API_BASE
-          : selectedPreset?.defaultApiBase || "https://api.openai.com/v1";
+          : group.authMode === "copilot_auth"
+            ? DEFAULT_COPILOT_API_BASE
+            : selectedPreset?.defaultApiBase || "https://api.openai.com/v1";
       apiUrlInput.value = group.apiBase;
-      apiUrlInput.readOnly = group.authMode !== "codex_auth" && !isCustomizedPreset;
+      apiUrlInput.readOnly =
+        group.authMode !== "codex_auth" &&
+        group.authMode !== "copilot_auth" &&
+        !isCustomizedPreset;
       apiUrlInput.style.opacity = apiUrlInput.readOnly ? "0.85" : "1";
       apiUrlInput.style.cursor = apiUrlInput.readOnly ? "default" : "text";
       apiUrlInput.style.pointerEvents = apiUrlInput.readOnly ? "none" : "auto";
@@ -769,7 +796,9 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
         HELPER_STYLE,
         group.authMode === "codex_auth"
           ? t(CODEX_API_HELPER_TEXT)
-          : getPresetSelectHelperText(selectedPresetId),
+          : group.authMode === "copilot_auth"
+            ? t(COPILOT_API_HELPER_TEXT)
+            : getPresetSelectHelperText(selectedPresetId),
       );
       apiUrlWrap.append(
         apiUrlLabel,
@@ -792,8 +821,263 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
         syncAddProviderBtn();
       });
       apiKeyWrap.append(apiKeyLabel, apiKeyInput);
-      if (group.authMode === "codex_auth") {
+      if (group.authMode === "codex_auth" || group.authMode === "copilot_auth") {
         apiKeyWrap.style.display = "none";
+      }
+
+      // ── Copilot Login ────────────────────────────────────────────
+      const copilotLoginWrap = el(doc, "div", "display: flex; flex-direction: column; gap: 6px;");
+      if (group.authMode === "copilot_auth") {
+        const isLoggedIn = group.apiKey.startsWith("ghu_");
+        const copilotStatus = el(
+          doc,
+          "span",
+          HELPER_STYLE + " font-weight: 500;",
+          isLoggedIn ? t("Logged in to GitHub Copilot") : "",
+        );
+
+        const copilotLoginBtn = el(
+          doc,
+          "button",
+          PRIMARY_BTN_STYLE + " font-size: 12.5px;",
+          isLoggedIn ? t("Re-login") : t("Login with GitHub Copilot"),
+        ) as HTMLButtonElement;
+        copilotLoginBtn.type = "button";
+
+        const AbortControllerCtor =
+          (ztoolkit.getGlobal("AbortController") as (new () => AbortController) | undefined) ||
+          (globalThis as typeof globalThis & { AbortController?: new () => AbortController }).AbortController;
+        let loginAbort: AbortController | null = null;
+
+        copilotLoginBtn.addEventListener("click", async () => {
+          if (loginAbort) {
+            loginAbort.abort();
+            loginAbort = null;
+          }
+          loginAbort = AbortControllerCtor ? new AbortControllerCtor() : null;
+          const signal = loginAbort?.signal;
+
+          copilotLoginBtn.disabled = true;
+          copilotStatus.style.color = "var(--fill-secondary, #888)";
+          copilotStatus.textContent = t("Requesting device code…");
+
+          try {
+            const device = await startCopilotDeviceFlow(signal);
+            copilotStatus.textContent = `${t("Enter this code on GitHub:")} ${device.user_code}`;
+            copilotStatus.style.color = "var(--color-accent, #2563eb)";
+
+            // Show popup dialog with the device code
+            const dialogOverlay = el(
+              doc,
+              "div",
+              "position: fixed; inset: 0; z-index: 10000;" +
+              " background: rgba(0,0,0,0.5);" +
+              " display: flex; align-items: center; justify-content: center;",
+            );
+            const dialogBox = el(
+              doc,
+              "div",
+              "background: var(--material-background, #fff); color: var(--fill-primary, #222);" +
+              " border-radius: 12px; padding: 28px 36px; min-width: 340px; max-width: 420px;" +
+              " box-shadow: 0 8px 32px rgba(0,0,0,0.25); text-align: center;" +
+              " display: flex; flex-direction: column; gap: 16px; position: relative;",
+            );
+            const closeBtn = el(
+              doc,
+              "button",
+              "position: absolute; top: 10px; right: 14px; background: none; border: none;" +
+              " font-size: 20px; cursor: pointer; color: var(--fill-secondary, #888);" +
+              " line-height: 1; padding: 2px 6px;",
+              "\u00D7",
+            ) as HTMLButtonElement;
+            closeBtn.type = "button";
+            closeBtn.title = t("Close");
+            closeBtn.addEventListener("click", () => {
+              try { dialogOverlay.remove(); } catch (_e) { /* ignore */ }
+            });
+            dialogBox.appendChild(closeBtn);
+            dialogBox.appendChild(
+              el(doc, "div", "font-size: 15px; font-weight: 600;", t("Enter this code on GitHub:")),
+            );
+            const codeDisplay = el(
+              doc,
+              "div",
+              "font-size: 32px; font-weight: 700;" +
+              " font-family: monospace; padding: 12px 0;" +
+              " background: var(--material-sidepane, #f4f4f4); border-radius: 8px;" +
+              " user-select: all; cursor: text;" +
+              " display: flex; justify-content: center;",
+            );
+            codeDisplay.textContent = device.user_code;
+            dialogBox.appendChild(codeDisplay);
+
+            const copyBtn = el(
+              doc,
+              "button",
+              PRIMARY_BTN_STYLE +
+              " font-size: 13px; padding: 8px 20px; align-self: center;" +
+              " display: flex; align-items: center; justify-content: center; line-height: 1.4;",
+              t("Copy code & open GitHub"),
+            ) as HTMLButtonElement;
+            copyBtn.type = "button";
+            copyBtn.addEventListener("click", () => {
+              try {
+                const clipHelper = (
+                  globalThis as typeof globalThis & {
+                    Components?: {
+                      classes?: Record<string, { getService?: (iface: unknown) => { kSuppressClearClipboard?: unknown; copyString?: (text: string, ctx?: unknown) => void } }>;
+                      interfaces?: Record<string, unknown>;
+                    };
+                  }
+                ).Components;
+                const svc = clipHelper?.classes?.["@mozilla.org/widget/clipboardhelper;1"]?.getService?.(
+                  clipHelper?.interfaces?.nsIClipboardHelper,
+                );
+                if (svc?.copyString) {
+                  svc.copyString(device.user_code, svc.kSuppressClearClipboard);
+                }
+              } catch (_e) { /* ignore */ }
+              try {
+                const launch = (Zotero as unknown as { launchURL?: (url: string) => void }).launchURL;
+                if (typeof launch === "function") launch(device.verification_uri);
+              } catch (_e) { /* ignore */ }
+            });
+            dialogBox.appendChild(copyBtn);
+
+            const waitingText = el(
+              doc,
+              "div",
+              "font-size: 12px; color: var(--fill-secondary, #888);",
+              t("Waiting for authorization…"),
+            );
+            dialogBox.appendChild(waitingText);
+
+            dialogOverlay.addEventListener("click", (e) => {
+              if (e.target === dialogOverlay) {
+                try { dialogOverlay.remove(); } catch (_e) { /* ignore */ }
+              }
+            });
+            dialogOverlay.appendChild(dialogBox);
+            const dialogParent = doc.body ?? doc.documentElement;
+            if (dialogParent) dialogParent.appendChild(dialogOverlay);
+
+            // Also open browser automatically
+            try {
+              const launch = (Zotero as unknown as { launchURL?: (url: string) => void }).launchURL;
+              if (typeof launch === "function") launch(device.verification_uri);
+            } catch (_err) { /* ignore */ }
+
+            let dialogDismissed = false;
+            const dismissDialog = (msg?: string, color?: string) => {
+              if (dialogDismissed) return;
+              dialogDismissed = true;
+              try { dialogOverlay.remove(); } catch (_e) { /* ignore */ }
+              if (msg) {
+                copilotStatus.textContent = msg;
+                copilotStatus.style.color = color || "green";
+              }
+            };
+
+            try {
+              const token = await pollCopilotDeviceAuth({
+                deviceCode: device.device_code,
+                interval: device.interval,
+                expiresIn: device.expires_in,
+                signal,
+              });
+
+              group.apiKey = token;
+              persistGroups(groups);
+              dismissDialog(t("Login successful!"), "green");
+              setTimeout(() => rerender(), 500);
+            } catch (innerErr) {
+              dismissDialog();
+              throw innerErr;
+            }
+          } catch (err) {
+            if (!signal?.aborted) {
+              copilotStatus.textContent = `✗ ${(err as Error).message}`;
+              copilotStatus.style.color = "red";
+            }
+          } finally {
+            copilotLoginBtn.disabled = false;
+            loginAbort = null;
+          }
+        });
+
+        const copilotLogoutBtn = el(
+          doc,
+          "button",
+          OUTLINE_BTN_STYLE + " font-size: 11px; padding: 2px 8px;",
+          t("Log out"),
+        ) as HTMLButtonElement;
+        copilotLogoutBtn.type = "button";
+        copilotLogoutBtn.style.display = isLoggedIn ? "inline-block" : "none";
+        copilotLogoutBtn.addEventListener("click", () => {
+          group.apiKey = "";
+          persistGroups(groups);
+          rerender();
+        });
+
+        const copilotBtnRow = el(doc, "div", "display: flex; gap: 8px; align-items: center;");
+        copilotBtnRow.append(copilotLoginBtn, copilotLogoutBtn);
+
+        // ── Fetch models button ──
+        const fetchModelsBtn = el(
+          doc,
+          "button",
+          OUTLINE_BTN_STYLE + " font-size: 11px; padding: 3px 10px;",
+          t("Fetch available models"),
+        ) as HTMLButtonElement;
+        fetchModelsBtn.type = "button";
+        fetchModelsBtn.style.display = isLoggedIn ? "inline-block" : "none";
+        const fetchModelsStatus = el(doc, "span", HELPER_STYLE, "");
+
+        fetchModelsBtn.addEventListener("click", async () => {
+          fetchModelsBtn.disabled = true;
+          fetchModelsStatus.textContent = t("Fetching models…");
+          fetchModelsStatus.style.color = "var(--fill-secondary, #888)";
+          try {
+            // DEBUG: log raw /models response — remove after debugging
+            const rawModels = await fetchCopilotModelListRaw({
+              githubToken: group.apiKey,
+            });
+            ztoolkit.log("[Copilot DEBUG] Raw /models response:", JSON.stringify(rawModels, null, 2));
+
+            const models = await fetchCopilotModelList({
+              githubToken: group.apiKey,
+            });
+            if (!models.length) {
+              fetchModelsStatus.textContent = t("No models found");
+              fetchModelsStatus.style.color = "red";
+              return;
+            }
+            const existingIds = new Set(group.models.map((m) => m.model.trim().toLowerCase()));
+            let added = 0;
+            for (const m of models) {
+              if (!existingIds.has(m.id.toLowerCase())) {
+                group.models.push(createProviderModelEntry(m.id));
+                added++;
+              }
+            }
+            persistGroups(groups);
+            fetchModelsStatus.textContent = added > 0
+              ? t("Added %n models").replace("%n", String(added))
+              : t("All models already added");
+            fetchModelsStatus.style.color = "green";
+            if (added > 0) setTimeout(() => rerender(), 300);
+          } catch (err) {
+            fetchModelsStatus.textContent = `✗ ${(err as Error).message}`;
+            fetchModelsStatus.style.color = "red";
+          } finally {
+            fetchModelsBtn.disabled = false;
+          }
+        });
+
+        const fetchModelsRow = el(doc, "div", "display: flex; gap: 8px; align-items: center;");
+        fetchModelsRow.append(fetchModelsBtn, fetchModelsStatus);
+
+        copilotLoginWrap.append(copilotBtnRow, copilotStatus, fetchModelsRow);
       }
 
       // ── Models list ──────────────────────────────────────────────
@@ -976,12 +1260,18 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
             const authMode = normalizeAuthMode(group.authMode);
             const apiBase = (
               group.apiBase.trim() ||
-              (authMode === "codex_auth" ? DEFAULT_CODEX_API_BASE : "")
+              (authMode === "codex_auth"
+                ? DEFAULT_CODEX_API_BASE
+                : authMode === "copilot_auth"
+                  ? DEFAULT_COPILOT_API_BASE
+                  : "")
             ).replace(/\/$/, "");
             const apiKey =
               authMode === "codex_auth"
                 ? await readCodexAccessToken()
-                : group.apiKey.trim();
+                : authMode === "copilot_auth"
+                  ? await resolveCopilotAccessToken({ githubToken: group.apiKey.trim() })
+                  : group.apiKey.trim();
             const modelName = (
               modelEntry.model || profile.defaultModel || "gpt-5.4"
             ).trim();
@@ -992,7 +1282,9 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
               throw new Error(
                 authMode === "codex_auth"
                   ? t("codex token missing. Run `codex login` first.")
-                  : t("API Key is required"),
+                  : authMode === "copilot_auth"
+                    ? t("Copilot token missing. Click Login first.")
+                    : t("API Key is required"),
               );
             }
 
@@ -1029,7 +1321,16 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
         "hr",
         "border: none; border-top: 1px solid var(--stroke-secondary, #c8c8c8); margin: 0;",
       );
-      if (group.authMode === "codex_auth") {
+      if (group.authMode === "copilot_auth") {
+        cardBody.append(
+          authModeWrap,
+          copilotLoginWrap,
+          protocolWrap,
+          apiUrlWrap,
+          divider,
+          modelsWrap,
+        );
+      } else if (group.authMode === "codex_auth") {
         cardBody.append(
           authModeWrap,
           protocolWrap,

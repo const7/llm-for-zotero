@@ -244,6 +244,7 @@ export class OpenAIChatCompatAgentAdapter implements AgentModelAdapter {
     const url = resolveProviderTransportEndpoint({
       protocol: "openai_chat_compat",
       apiBase: request.apiBase || "",
+      authMode: request.authMode,
     });
     const response = await postWithReasoningFallback({
       url,

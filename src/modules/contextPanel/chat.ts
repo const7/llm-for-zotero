@@ -915,6 +915,9 @@ function formatDisplayModelName(
   if (provider.includes("(codex auth)")) {
     return `codex/${normalizedModel}`;
   }
+  if (provider.includes("(copilot auth)")) {
+    return `copilot/${normalizedModel}`;
+  }
   return normalizedModel;
 }
 

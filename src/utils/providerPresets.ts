@@ -9,7 +9,8 @@ export type SupportedProviderPresetId =
   | "deepseek"
   | "grok"
   | "qwen"
-  | "kimi";
+  | "kimi"
+  | "copilot";
 
 export type ProviderPresetId = SupportedProviderPresetId | "customized";
 
@@ -111,6 +112,7 @@ const QWEN_PATHS = [
   "/compatible-mode/v1/chat/completions",
 ];
 const KIMI_PATHS = ["/", "/v1", "/v1/chat/completions"];
+const COPILOT_PATHS = ["/", "/chat/completions", "/models"];
 
 export const PROVIDER_PRESETS: ProviderPreset[] = [
   {
@@ -212,6 +214,19 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     matches: makeHostAndPathMatcher(
       ["api.moonshot.cn", "api.moonshot.ai"],
       KIMI_PATHS,
+    ),
+  },
+  {
+    id: "copilot",
+    label: "GitHub Copilot",
+    defaultApiBase: "https://api.githubcopilot.com",
+    defaultProtocol: "responses_api",
+    supportedProtocols: ["responses_api", "openai_chat_compat"],
+    helperText:
+      "Uses GitHub Copilot via device login. Requires an active Copilot subscription.",
+    matches: makeHostAndPathMatcher(
+      ["api.githubcopilot.com"],
+      COPILOT_PATHS,
     ),
   },
 ];

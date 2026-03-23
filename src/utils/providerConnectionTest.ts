@@ -240,12 +240,14 @@ export async function runProviderConnectionTest(params: {
     apiBase: params.apiBase,
     model: params.modelName,
     stream: expectsSse,
+    authMode: params.authMode,
   });
   const response = await params.fetchFn(url, {
     method: "POST",
     headers: buildProviderTransportHeaders({
       protocol: params.protocol,
       apiKey: params.apiKey,
+      authMode: params.authMode,
     }),
     body: JSON.stringify(body),
   });

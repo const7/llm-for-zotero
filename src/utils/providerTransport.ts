@@ -4,6 +4,7 @@ import {
   buildHeaders,
   resolveEndpoint,
 } from "./apiHelpers";
+import type { ModelProviderAuthMode } from "./modelProviders";
 import type { ProviderProtocol } from "./providerProtocol";
 
 const ANTHROPIC_VERSION = "2023-06-01";
@@ -156,19 +157,34 @@ export function resolveGeminiNativeEndpoint(params: {
   return `${base}/models/${modelName}:${action}`;
 }
 
+function isCopilotHost(apiBase: string): boolean {
+  const parsed = parseApiBase(apiBase);
+  return Boolean(parsed && parsed.hostname.includes("githubcopilot.com"));
+}
+
 export function resolveProviderTransportEndpoint(params: {
   protocol: ProviderProtocol;
   apiBase: string;
   model?: string;
   stream?: boolean;
+  authMode?: ModelProviderAuthMode;
 }): string {
   if (
     params.protocol === "codex_responses" ||
     params.protocol === "responses_api"
   ) {
+    // Copilot uses /responses (no /v1 prefix)
+    if (params.authMode === "copilot_auth" || isCopilotHost(params.apiBase)) {
+      const base = trimTrailingSlash(params.apiBase);
+      return `${base}/responses`;
+    }
     return resolveEndpoint(params.apiBase, RESPONSES_ENDPOINT);
   }
   if (params.protocol === "openai_chat_compat") {
+    if (params.authMode === "copilot_auth" || isCopilotHost(params.apiBase)) {
+      const base = trimTrailingSlash(params.apiBase);
+      return `${base}/chat/completions`;
+    }
     return resolveEndpoint(
       normalizeOpenAICompatibleBase(params.apiBase),
       API_ENDPOINT,
@@ -187,12 +203,23 @@ export function resolveProviderTransportEndpoint(params: {
 export function buildProviderTransportHeaders(params: {
   protocol: ProviderProtocol;
   apiKey: string;
+  authMode?: ModelProviderAuthMode;
 }): Record<string, string> {
   if (
     params.protocol === "codex_responses" ||
     params.protocol === "responses_api" ||
     params.protocol === "openai_chat_compat"
   ) {
+    if (params.authMode === "copilot_auth") {
+      return {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${params.apiKey}`,
+        "Copilot-Integration-Id": "vscode-chat",
+        "Editor-Version": "vscode/1.96.0",
+        "Editor-Plugin-Version": "copilot-chat/0.24.2",
+        "Openai-Intent": "conversation-panel",
+      };
+    }
     return buildHeaders(params.apiKey);
   }
   if (params.protocol === "anthropic_messages") {

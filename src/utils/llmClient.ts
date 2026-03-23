@@ -48,6 +48,7 @@ import {
   type ModelProviderAuthMode,
 } from "./modelProviders";
 import { isGrokApiBase } from "./providerPresets";
+import { setCopilotModelEndpoints } from "./copilotModelCache";
 import type { ProviderProtocol } from "./providerProtocol";
 import {
   buildProviderTransportHeaders,
@@ -204,6 +205,12 @@ const DEFAULT_CODEX_API_BASE = "https://chatgpt.com/backend-api/codex/responses"
 const CODEX_REFRESH_TOKEN_URL = "https://auth.openai.com/oauth/token";
 const CODEX_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 
+const COPILOT_GITHUB_CLIENT_ID = "Iv1.b507a08c87ecfe98";
+const COPILOT_DEVICE_CODE_URL = "https://github.com/login/device/code";
+const COPILOT_OAUTH_TOKEN_URL = "https://github.com/login/oauth/access_token";
+const COPILOT_TOKEN_URL = "https://api.github.com/copilot_internal/v2/token";
+const DEFAULT_COPILOT_API_BASE = "https://api.githubcopilot.com";
+
 // =============================================================================
 // Utilities
 // =============================================================================
@@ -235,7 +242,11 @@ function getApiConfig(overrides?: {
   const resolvedApiBase =
     overrides?.apiBase ||
     prefApiBase ||
-    (authMode === "codex_auth" ? DEFAULT_CODEX_API_BASE : "");
+    (authMode === "codex_auth"
+      ? DEFAULT_CODEX_API_BASE
+      : authMode === "copilot_auth"
+        ? DEFAULT_COPILOT_API_BASE
+        : "");
   const apiBase = resolvedApiBase.trim().replace(/\/$/, "");
   const apiKey = (
     overrides?.apiKey ||
@@ -649,6 +660,260 @@ async function resolveCodexAccessToken(params?: {
   throw new Error(
     "codex auth token not found. Please run `codex login` and ensure ~/.codex/auth.json is available.",
   );
+}
+
+// =============================================================================
+// GitHub Copilot Auth
+// =============================================================================
+
+let cachedCopilotJwt: { token: string; expiresAt: number } | null = null;
+
+function buildCopilotHeaders(token: string): Record<string, string> {
+  return {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${token}`,
+    "Copilot-Integration-Id": "vscode-chat",
+    "Editor-Version": "vscode/1.96.0",
+    "Editor-Plugin-Version": "copilot-chat/0.24.2",
+    "Openai-Intent": "conversation-panel",
+  };
+}
+
+export async function startCopilotDeviceFlow(signal?: AbortSignal): Promise<{
+  device_code: string;
+  user_code: string;
+  verification_uri: string;
+  interval: number;
+  expires_in: number;
+}> {
+  const response = await getFetch()(COPILOT_DEVICE_CODE_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    body: JSON.stringify({
+      client_id: COPILOT_GITHUB_CLIENT_ID,
+      scope: "read:user",
+    }),
+    signal,
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(
+      `GitHub device code request failed: ${response.status} ${response.statusText} - ${errorText}`,
+    );
+  }
+  return (await response.json()) as unknown as {
+    device_code: string;
+    user_code: string;
+    verification_uri: string;
+    interval: number;
+    expires_in: number;
+  };
+}
+
+export async function pollCopilotDeviceAuth(params: {
+  deviceCode: string;
+  interval: number;
+  expiresIn: number;
+  signal?: AbortSignal;
+}): Promise<string> {
+  const deadline = Date.now() + params.expiresIn * 1000;
+  let interval = params.interval * 1000;
+
+  while (Date.now() < deadline) {
+    if (params.signal?.aborted) {
+      throw new Error("Copilot device auth polling aborted");
+    }
+
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(resolve, interval);
+      params.signal?.addEventListener(
+        "abort",
+        () => {
+          clearTimeout(timer);
+          reject(new Error("Copilot device auth polling aborted"));
+        },
+        { once: true },
+      );
+    });
+
+    const response = await getFetch()(COPILOT_OAUTH_TOKEN_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify({
+        client_id: COPILOT_GITHUB_CLIENT_ID,
+        device_code: params.deviceCode,
+        grant_type: "urn:ietf:params:oauth:grant-type:device_code",
+      }),
+      signal: params.signal,
+    });
+
+    const payload = (await response.json()) as {
+      access_token?: string;
+      error?: string;
+    };
+
+    if (payload.access_token) {
+      return payload.access_token;
+    }
+
+    if (payload.error === "authorization_pending") {
+      continue;
+    }
+    if (payload.error === "slow_down") {
+      interval += 5000;
+      continue;
+    }
+    if (payload.error === "expired_token") {
+      throw new Error("Login expired. Try again.");
+    }
+    if (payload.error === "access_denied") {
+      throw new Error("Login denied by user.");
+    }
+    throw new Error(`Unexpected device auth error: ${payload.error}`);
+  }
+
+  throw new Error("Login expired. Try again.");
+}
+
+async function fetchCopilotJwt(
+  githubToken: string,
+  signal?: AbortSignal,
+): Promise<{ token: string; expiresAt: number }> {
+  const response = await getFetch()(COPILOT_TOKEN_URL, {
+    method: "GET",
+    headers: {
+      Authorization: `token ${githubToken}`,
+      Accept: "application/json",
+      "Editor-Version": "vscode/1.96.0",
+      "Editor-Plugin-Version": "copilot-chat/0.24.2",
+      "User-Agent": "GithubCopilot/1.246.0",
+    },
+    signal,
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(
+      `Copilot token exchange failed: ${response.status} ${response.statusText} - ${errorText}`,
+    );
+  }
+  const payload = (await response.json()) as {
+    token?: string;
+    expires_at?: number;
+  };
+  const token = typeof payload.token === "string" ? payload.token.trim() : "";
+  if (!token) {
+    throw new Error("Copilot token exchange returned empty token");
+  }
+  const expiresAt = typeof payload.expires_at === "number"
+    ? payload.expires_at * 1000
+    : Date.now() + 25 * 60 * 1000;
+  cachedCopilotJwt = { token, expiresAt };
+  return { token, expiresAt };
+}
+
+export async function resolveCopilotAccessToken(params: {
+  githubToken: string;
+  signal?: AbortSignal;
+}): Promise<string> {
+  if (
+    cachedCopilotJwt &&
+    cachedCopilotJwt.expiresAt > Date.now() + 60_000
+  ) {
+    return cachedCopilotJwt.token;
+  }
+  const result = await fetchCopilotJwt(params.githubToken, params.signal);
+  return result.token;
+}
+
+/** DEBUG: returns the raw /models JSON for inspection. Remove after debugging. */
+export async function fetchCopilotModelListRaw(params: {
+  githubToken: string;
+  signal?: AbortSignal;
+}): Promise<unknown> {
+  const jwt = await resolveCopilotAccessToken(params);
+  const response = await getFetch()(`${DEFAULT_COPILOT_API_BASE}/models`, {
+    method: "GET",
+    headers: buildCopilotHeaders(jwt),
+    signal: params.signal,
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(
+      `Copilot model list fetch failed: ${response.status} ${response.statusText} - ${errorText}`,
+    );
+  }
+  return await response.json();
+}
+
+type CopilotModelEntry = {
+  id?: string;
+  name?: string;
+  model_picker_enabled?: boolean;
+  capabilities?: {
+    type?: string;
+    supports?: {
+      chat?: boolean;
+      tool_calls?: boolean;
+    };
+  };
+  policy?: {
+    state?: string;
+  };
+  supported_endpoints?: string[];
+};
+
+function isCopilotModelUsable(m: CopilotModelEntry): boolean {
+  // Exclude non-chat models (e.g. embeddings)
+  if (m.capabilities?.type && m.capabilities.type !== "chat") return false;
+  // Exclude models with disabled policy
+  if (m.policy?.state === "disabled") return false;
+  // Exclude models that support neither /chat/completions nor /responses.
+  // If supported_endpoints is absent (older models), assume chat is supported.
+  if (
+    Array.isArray(m.supported_endpoints) &&
+    !m.supported_endpoints.includes("/chat/completions") &&
+    !m.supported_endpoints.includes("/responses")
+  ) {
+    return false;
+  }
+  return true;
+}
+
+export async function fetchCopilotModelList(params: {
+  githubToken: string;
+  signal?: AbortSignal;
+}): Promise<Array<{ id: string; name: string }>> {
+  const jwt = await resolveCopilotAccessToken(params);
+  const response = await getFetch()(`${DEFAULT_COPILOT_API_BASE}/models`, {
+    method: "GET",
+    headers: buildCopilotHeaders(jwt),
+    signal: params.signal,
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(
+      `Copilot model list fetch failed: ${response.status} ${response.statusText} - ${errorText}`,
+    );
+  }
+  const payload = (await response.json()) as {
+    data?: CopilotModelEntry[];
+  };
+  const allModels = payload.data || [];
+  // Populate the endpoint cache for ALL models (including filtered ones)
+  for (const m of allModels) {
+    if (typeof m.id === "string" && m.id.trim() && Array.isArray(m.supported_endpoints)) {
+      setCopilotModelEndpoints(m.id.trim(), m.supported_endpoints);
+    }
+  }
+  return allModels
+    .filter((m) => typeof m.id === "string" && m.id.trim() && isCopilotModelUsable(m))
+    .map((m) => ({ id: m.id!.trim(), name: (m.name || m.id || "").trim() }));
 }
 
 async function readLocalFileBytes(path: string): Promise<Uint8Array> {
@@ -2105,9 +2370,18 @@ export type RequestAuthState = {
     authPath: string;
     refreshToken: string;
   };
+  copilot?: {
+    githubToken: string;
+  };
 };
 
-function buildAuthHeaders(token: string): Record<string, string> {
+function buildAuthHeaders(
+  token: string,
+  mode?: ModelProviderAuthMode,
+): Record<string, string> {
+  if (mode === "copilot_auth") {
+    return buildCopilotHeaders(token);
+  }
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
@@ -2145,6 +2419,25 @@ async function refreshCodexAuthState(
   };
 }
 
+async function refreshCopilotAuthState(
+  state: RequestAuthState,
+  signal?: AbortSignal,
+): Promise<RequestAuthState> {
+  if (state.mode !== "copilot_auth" || !state.copilot?.githubToken) {
+    return state;
+  }
+  cachedCopilotJwt = null;
+  const token = await resolveCopilotAccessToken({
+    githubToken: state.copilot.githubToken,
+    signal,
+  });
+  return {
+    mode: "copilot_auth",
+    token,
+    copilot: { githubToken: state.copilot.githubToken },
+  };
+}
+
 async function postWithTemperatureFallback(params: {
   url: string;
   auth: RequestAuthState;
@@ -2160,7 +2453,7 @@ async function postWithTemperatureFallback(params: {
   const send = (bodyPayload: Record<string, unknown>, auth: RequestAuthState) =>
     getFetch()(params.url, {
       method: "POST",
-      headers: params.headers ?? buildAuthHeaders(auth.token),
+      headers: params.headers ?? buildAuthHeaders(auth.token, auth.mode),
       body: JSON.stringify(bodyPayload),
       signal: params.signal,
     });
@@ -2173,13 +2466,14 @@ async function postWithTemperatureFallback(params: {
 
   let authState = params.auth;
   let res = await send(requestPayload, authState);
-  if (
-    res.status === 401 &&
-    authState.mode === "codex_auth" &&
-    authState.codex?.refreshToken
-  ) {
-    authState = await refreshCodexAuthState(authState, params.signal);
-    res = await send(requestPayload, authState);
+  if (res.status === 401) {
+    if (authState.mode === "codex_auth" && authState.codex?.refreshToken) {
+      authState = await refreshCodexAuthState(authState, params.signal);
+      res = await send(requestPayload, authState);
+    } else if (authState.mode === "copilot_auth" && authState.copilot?.githubToken) {
+      authState = await refreshCopilotAuthState(authState, params.signal);
+      res = await send(requestPayload, authState);
+    }
   }
   if (res.ok) return res;
 
@@ -2193,13 +2487,14 @@ async function postWithTemperatureFallback(params: {
       recoveryPolicy,
     );
     res = await send(fallbackPayload, authState);
-    if (
-      res.status === 401 &&
-      authState.mode === "codex_auth" &&
-      authState.codex?.refreshToken
-    ) {
-      authState = await refreshCodexAuthState(authState, params.signal);
-      res = await send(fallbackPayload, authState);
+    if (res.status === 401) {
+      if (authState.mode === "codex_auth" && authState.codex?.refreshToken) {
+        authState = await refreshCodexAuthState(authState, params.signal);
+        res = await send(fallbackPayload, authState);
+      } else if (authState.mode === "copilot_auth" && authState.copilot?.githubToken) {
+        authState = await refreshCopilotAuthState(authState, params.signal);
+        res = await send(fallbackPayload, authState);
+      }
     }
     if (res.ok) {
       temperaturePolicyCache.set(policyKey, recoveryPolicy);
@@ -2345,6 +2640,17 @@ export async function resolveRequestAuthState(params: {
       },
     };
   }
+  if (params.authMode === "copilot_auth") {
+    const token = await resolveCopilotAccessToken({
+      githubToken: params.apiKey,
+      signal: params.signal,
+    });
+    return {
+      mode: "copilot_auth",
+      token,
+      copilot: { githubToken: params.apiKey },
+    };
+  }
   return {
     mode: "api_key",
     token: params.apiKey,
@@ -2454,8 +2760,8 @@ export async function callLLM(params: ChatParams): Promise<string> {
   const effectiveTemperature = normalizeTemperature(params.temperature);
   const effectiveMaxTokens = normalizeMaxTokens(params.maxTokens);
 
-  const url = resolveProviderTransportEndpoint({ protocol: providerProtocol, apiBase, model, stream: false });
-  const requestHeaders = buildProviderTransportHeaders({ protocol: providerProtocol, apiKey: auth.token });
+  const url = resolveProviderTransportEndpoint({ protocol: providerProtocol, apiBase, model, stream: false, authMode });
+  const requestHeaders = buildProviderTransportHeaders({ protocol: providerProtocol, apiKey: auth.token, authMode });
   const buildPayload = createChatPayloadBuilder({
     model,
     messages,
@@ -2545,8 +2851,8 @@ export async function callLLMStream(
   const effectiveTemperature = normalizeTemperature(params.temperature);
   const effectiveMaxTokens = normalizeMaxTokens(params.maxTokens);
 
-  const url = resolveProviderTransportEndpoint({ protocol: providerProtocol, apiBase, model, stream: true });
-  const requestHeaders = buildProviderTransportHeaders({ protocol: providerProtocol, apiKey: auth.token });
+  const url = resolveProviderTransportEndpoint({ protocol: providerProtocol, apiBase, model, stream: true, authMode });
+  const requestHeaders = buildProviderTransportHeaders({ protocol: providerProtocol, apiKey: auth.token, authMode });
   const buildPayload = createChatPayloadBuilder({
     model,
     messages,

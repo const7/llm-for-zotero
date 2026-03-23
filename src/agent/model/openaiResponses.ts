@@ -96,6 +96,7 @@ export class OpenAIResponsesAgentAdapter implements AgentModelAdapter {
     const url = resolveProviderTransportEndpoint({
       protocol: "responses_api",
       apiBase: request.apiBase || "",
+      authMode: request.authMode,
     });
     const response = await postWithReasoningFallback({
       url,

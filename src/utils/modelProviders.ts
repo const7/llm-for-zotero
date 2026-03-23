@@ -11,6 +11,7 @@ import {
 } from "./providerProtocol";
 import { detectProviderPreset, getProviderPreset } from "./providerPresets";
 import type { ProviderPresetId } from "./providerPresets";
+import { resolveCopilotProtocolForModel } from "./copilotModelCache";
 
 export type LegacyModelSlotKey =
   | "primary"
@@ -29,7 +30,7 @@ export type ModelProviderModel = AdvancedModelConfig & {
   model: string;
 };
 
-export type ModelProviderAuthMode = "api_key" | "codex_auth";
+export type ModelProviderAuthMode = "api_key" | "codex_auth" | "copilot_auth";
 
 export type ModelProviderGroup = {
   id: string;
@@ -128,7 +129,9 @@ function normalizeApiBase(apiBase: string): string {
 }
 
 function normalizeProviderAuthMode(value: unknown): ModelProviderAuthMode {
-  return value === "codex_auth" ? "codex_auth" : "api_key";
+  if (value === "codex_auth") return "codex_auth";
+  if (value === "copilot_auth") return "copilot_auth";
+  return "api_key";
 }
 
 function normalizeAdvancedModelConfig(
@@ -169,6 +172,7 @@ export function deriveProviderLabel(
   ) {
     return "Gemini";
   }
+  if (lowerHost.includes("githubcopilot.com")) return "GitHub Copilot";
   if (lowerHost.includes("openai.com") || lowerHost === "chatgpt.com") {
     return "OpenAI";
   }
@@ -499,7 +503,9 @@ export function getRuntimeModelEntries(): RuntimeModelEntry[] {
     const providerLabel =
       authMode === "codex_auth"
         ? `${baseProviderLabel} (codex auth)`
-        : baseProviderLabel;
+        : authMode === "copilot_auth"
+          ? `${baseProviderLabel} (copilot auth)`
+          : baseProviderLabel;
     const normalizedCounts = new Map<string, number>();
     for (const modelEntry of group.models) {
       const modelName = modelEntry.model.trim();
@@ -508,7 +514,11 @@ export function getRuntimeModelEntries(): RuntimeModelEntry[] {
       const duplicateCount = (normalizedCounts.get(normalizedModel) || 0) + 1;
       normalizedCounts.set(normalizedModel, duplicateCount);
       const baseModelLabel =
-        authMode === "codex_auth" ? `codex/${modelName}` : modelName;
+        authMode === "codex_auth"
+          ? `codex/${modelName}`
+          : authMode === "copilot_auth"
+            ? `copilot/${modelName}`
+            : modelName;
       entries.push({
         entryId: modelEntry.id,
         groupId: group.id,
@@ -516,11 +526,21 @@ export function getRuntimeModelEntries(): RuntimeModelEntry[] {
         apiBase: normalizeApiBase(group.apiBase),
         apiKey: group.apiKey.trim(),
         authMode,
-        providerProtocol: normalizeProviderProtocolForAuthMode({
-          protocol: group.providerProtocol,
-          authMode,
-          apiBase: group.apiBase,
-        }),
+        providerProtocol:
+          authMode === "copilot_auth"
+            ? resolveCopilotProtocolForModel(
+                modelName,
+                normalizeProviderProtocolForAuthMode({
+                  protocol: group.providerProtocol,
+                  authMode,
+                  apiBase: group.apiBase,
+                }) as "responses_api" | "openai_chat_compat",
+              )
+            : normalizeProviderProtocolForAuthMode({
+                protocol: group.providerProtocol,
+                authMode,
+                apiBase: group.apiBase,
+              }),
         providerLabel,
         providerOrder: groupIndex,
         displayModelLabel:
