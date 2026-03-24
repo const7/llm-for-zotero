@@ -9,6 +9,7 @@ import type {
   OtherContextRef,
   ChatRuntimeMode,
   PaperContextSendMode,
+  PaperContentSourceMode,
 } from "./types";
 // =============================================================================
 // Module State
@@ -99,6 +100,10 @@ export const selectedOtherRefContextCache = new Map<number, OtherContextRef[]>()
 export const paperContextModeOverrides = new Map<
   number,
   Map<string, PaperContextSendMode>
+>();
+export const paperContentSourceOverrides = new Map<
+  number,
+  Map<string, PaperContentSourceMode>
 >();
 // Stores the contextItemId of the currently expanded (sticky) paper chip, or false/undefined if none
 export const selectedPaperPreviewExpandedCache = new Map<number, number | false>();

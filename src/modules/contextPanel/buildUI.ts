@@ -480,12 +480,7 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
     t("Send current PDF page"),
     t("Capture the visible page as an image"),
   );
-  const slashFullPdfBtn = makeSlashItem(
-    "llm-slash-full-pdf-option",
-    t("Send current entire PDF"),
-    t("Add the open PDF file to context"),
-  );
-  slashList.append(slashUploadBtn, slashReferenceBtn, slashPdfPageBtn, slashFullPdfBtn);
+  slashList.append(slashUploadBtn, slashReferenceBtn, slashPdfPageBtn);
   slashMenu.append(slashList);
   // slashMenu is appended to composeArea below (after composeArea is created)
 

@@ -73,6 +73,8 @@ export type PaperContextSendMode =
   | "full-next"
   | "full-sticky";
 
+export type PaperContentSourceMode = "text" | "mineru" | "pdf";
+
 export type ReasoningProviderKind =
   | "openai"
   | "gemini"

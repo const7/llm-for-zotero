@@ -20,6 +20,7 @@ import {
   getToolContinuationMessages,
   groupToolContinuationMessages,
   parseDataUrl,
+  readFileRefAsBase64,
 } from "./shared";
 
 type GeminiPart = Record<string, unknown>;
@@ -218,7 +219,7 @@ function resolveGeminiReasoningConfig(request: AgentRuntimeRequest) {
   };
 }
 
-function buildGeminiParts(message: AgentModelMessage): GeminiPart[] {
+async function buildGeminiParts(message: AgentModelMessage): Promise<GeminiPart[]> {
   if (typeof message.content === "string") {
     return [{ text: message.content }];
   }
@@ -242,7 +243,17 @@ function buildGeminiParts(message: AgentModelMessage): GeminiPart[] {
       }
       continue;
     }
-    parts.push({ text: `[Prepared file: ${part.file_ref.name}]` });
+    if (part.file_ref.mimeType === "application/pdf") {
+      const data = await readFileRefAsBase64(part.file_ref.storedPath);
+      parts.push({
+        inlineData: {
+          mimeType: "application/pdf",
+          data,
+        },
+      });
+    } else {
+      parts.push({ text: `[Prepared file: ${part.file_ref.name}]` });
+    }
   }
   return parts.length ? parts : [{ text: "" }];
 }
@@ -258,9 +269,9 @@ function extractGeminiResponseParts(data: GeminiResponse): GeminiPart[] {
     .map((part) => ({ ...part }));
 }
 
-function buildInitialGeminiMessages(
+async function buildInitialGeminiMessages(
   messages: AgentModelMessage[],
-): { systemInstruction?: { parts: Array<{ text: string }> }; contents: GeminiMessage[] } {
+): Promise<{ systemInstruction?: { parts: Array<{ text: string }> }; contents: GeminiMessage[] }> {
   const systemParts: string[] = [];
   const contents: GeminiMessage[] = [];
   for (const message of messages) {
@@ -272,7 +283,7 @@ function buildInitialGeminiMessages(
     }
     if (message.role === "assistant") {
       const parts = [
-        ...buildGeminiParts(message),
+        ...(await buildGeminiParts(message)),
         ...(Array.isArray(message.tool_calls)
           ? message.tool_calls.map((call) => ({
               functionCall: {
@@ -290,7 +301,7 @@ function buildInitialGeminiMessages(
     }
     contents.push({
       role: "user",
-      parts: buildGeminiParts(message),
+      parts: await buildGeminiParts(message),
     });
   }
   return {
@@ -301,9 +312,9 @@ function buildInitialGeminiMessages(
   };
 }
 
-function buildGeminiContinuationMessages(
+async function buildGeminiContinuationMessages(
   messages: AgentModelMessage[],
-): GeminiMessage[] {
+): Promise<GeminiMessage[]> {
   const { toolMessages, followupUserMessages } = groupToolContinuationMessages(
     messages,
   );
@@ -330,7 +341,7 @@ function buildGeminiContinuationMessages(
   for (const message of followupUserMessages) {
     contents.push({
       role: "user",
-      parts: buildGeminiParts(message),
+      parts: await buildGeminiParts(message),
     });
   }
   return contents;
@@ -530,12 +541,12 @@ export class GeminiNativeAgentAdapter implements AgentModelAdapter {
 
   async runStep(params: AgentStepParams): Promise<AgentModelStep> {
     const request = params.request;
-    const initial = buildInitialGeminiMessages(params.messages);
+    const initial = await buildInitialGeminiMessages(params.messages);
     if (!this.conversationMessages) {
       this.conversationMessages = initial.contents;
       this.systemInstruction = initial.systemInstruction;
     }
-    const continuation = buildGeminiContinuationMessages(
+    const continuation = await buildGeminiContinuationMessages(
       getToolContinuationMessages(params.messages),
     );
     const contents =

@@ -49,6 +49,13 @@ type SendFlowControllerDeps = {
     item: Zotero.Item,
     paperContexts: PaperContextRef[],
   ) => PaperContextRef[];
+  getPdfModePaperContexts: (
+    item: Zotero.Item,
+    paperContexts: PaperContextRef[],
+  ) => PaperContextRef[];
+  resolvePdfPaperAttachments: (
+    paperContexts: PaperContextRef[],
+  ) => Promise<ChatAttachment[]>;
   getSelectedFiles: (itemId: number) => ChatAttachment[];
   getSelectedImages: (itemId: number) => string[];
   resolvePromptText: (
@@ -171,13 +178,30 @@ export function createSendFlowController(deps: SendFlowControllerDeps): {
       (entry) => entry.noteContext,
     );
     const primarySelectedText = selectedTexts[0] || "";
-    const selectedPaperContexts = deps.getSelectedPaperContexts(item.id);
+    const allSelectedPaperContexts = deps.getSelectedPaperContexts(item.id);
+    const pdfModePaperContexts = deps.getPdfModePaperContexts(
+      item,
+      allSelectedPaperContexts,
+    );
+    // Papers in PDF mode are sent as file attachments, not through the text pipeline
+    const pdfModeKeySet = new Set(
+      pdfModePaperContexts.map((p) => `${p.itemId}:${p.contextItemId}`),
+    );
+    const selectedPaperContexts = allSelectedPaperContexts.filter(
+      (p) => !pdfModeKeySet.has(`${p.itemId}:${p.contextItemId}`),
+    );
     const fullTextPaperContexts = deps.getFullTextPaperContexts(
       item,
       selectedPaperContexts,
     );
-    const selectedFiles = deps.getSelectedFiles(item.id);
-    const hasPaperComposeState = selectedPaperContexts.length > 0 || !deps.isGlobalMode();
+    const pdfAttachments = pdfModePaperContexts.length
+      ? await deps.resolvePdfPaperAttachments(pdfModePaperContexts)
+      : [];
+    const selectedFiles = [
+      ...deps.getSelectedFiles(item.id),
+      ...pdfAttachments,
+    ];
+    const hasPaperComposeState = allSelectedPaperContexts.length > 0 || !deps.isGlobalMode();
 
     if (
       !text &&

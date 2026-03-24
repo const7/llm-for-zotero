@@ -619,8 +619,18 @@ export async function registerMineruManagerScript(
 
   // ── Load data & initial render ─────────────────────────────────────────────
   async function loadData(): Promise<void> {
-    allItems = await getMineruItemList();
-    collectionTree = getLibraryCollectionTree();
+    try {
+      allItems = await getMineruItemList();
+    } catch (err) {
+      ztoolkit.log("LLM MinerU: getMineruItemList failed", err);
+      allItems = [];
+    }
+    try {
+      collectionTree = getLibraryCollectionTree();
+    } catch (err) {
+      ztoolkit.log("LLM MinerU: getLibraryCollectionTree failed", err);
+      collectionTree = [];
+    }
     buildCollectionMaps();
     localTotalCount = allItems.length;
     localProcessedCount = allItems.filter((i) => i.cached).length;

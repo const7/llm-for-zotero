@@ -223,7 +223,7 @@ export async function hasCachedMineruMd(id: number): Promise<boolean> {
   // Check legacy _content.md path
   if (await pathExists(getLegacyContentMdPath(id))) return true;
   // Check legacy single-file cache
-  return pathExists(getLegacyMdPath(id));
+  return await pathExists(getLegacyMdPath(id));
 }
 
 export async function readCachedMineruMd(

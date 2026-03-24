@@ -19,6 +19,7 @@ import {
   buildOpenAIFunctionTools,
   createFallbackToolCallId,
   parseToolCallArguments,
+  readFileRefAsBase64,
 } from "./shared";
 
 type ChatCompletionChoice = {
@@ -44,31 +45,45 @@ function isToolCapableApiBase(request: AgentRuntimeRequest): boolean {
   return true;
 }
 
-function buildMessagesPayload(messages: AgentModelMessage[]) {
-  return messages.map((message) => {
+async function buildMessagesPayload(messages: AgentModelMessage[]) {
+  const result = [];
+  for (const message of messages) {
     if (message.role === "tool") {
-      return {
+      result.push({
         role: "tool",
         content: message.content,
         tool_call_id: message.tool_call_id,
         name: message.name,
-      };
+      });
+      continue;
     }
-    return {
+    let content: string | unknown[];
+    if (typeof message.content === "string") {
+      content = message.content;
+    } else {
+      const parts: unknown[] = [];
+      for (const part of message.content) {
+        if (part.type === "text") {
+          parts.push(part);
+        } else if (part.type === "image_url") {
+          parts.push({ type: "image_url" as const, image_url: part.image_url });
+        } else if (
+          part.type === "file_ref" &&
+          part.file_ref.mimeType === "application/pdf"
+        ) {
+          const data = await readFileRefAsBase64(part.file_ref.storedPath);
+          parts.push({
+            type: "image_url" as const,
+            image_url: { url: `data:application/pdf;base64,${data}` },
+          });
+        }
+        // Non-PDF file_refs are silently dropped (no provider support)
+      }
+      content = parts;
+    }
+    result.push({
       role: message.role,
-      content:
-        typeof message.content === "string"
-          ? message.content
-          : message.content
-              .filter((part) => part.type !== "file_ref")
-              .map((part) =>
-                part.type === "text"
-                  ? part
-                  : {
-                      type: "image_url" as const,
-                      image_url: part.image_url,
-                    },
-              ),
+      content,
       ...(message.role === "assistant" &&
       Array.isArray(message.tool_calls) &&
       message.tool_calls.length
@@ -83,8 +98,9 @@ function buildMessagesPayload(messages: AgentModelMessage[]) {
             })),
           }
         : {}),
-    };
-  });
+    });
+  }
+  return result;
 }
 
 function normalizeToolCalls(
@@ -246,6 +262,7 @@ export class OpenAIChatCompatAgentAdapter implements AgentModelAdapter {
       apiBase: request.apiBase || "",
       authMode: request.authMode,
     });
+    const resolvedMessages = await buildMessagesPayload(params.messages);
     const response = await postWithReasoningFallback({
       url,
       auth,
@@ -260,7 +277,7 @@ export class OpenAIChatCompatAgentAdapter implements AgentModelAdapter {
         );
         return {
           model: request.model,
-          messages: buildMessagesPayload(params.messages),
+          messages: resolvedMessages,
           tools: buildOpenAIFunctionTools(params.tools),
           tool_choice: "auto",
           stream: true,

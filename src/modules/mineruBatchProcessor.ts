@@ -380,34 +380,42 @@ export async function getMineruItemList(): Promise<MineruItemEntry[]> {
   const results: MineruItemEntry[] = [];
 
   for (const item of allItems) {
-    if (!item.isRegularItem?.()) continue;
-    const pdfs = getPdfAttachments(item);
-    if (pdfs.length === 0) continue;
-    let collectionIds: number[] = [];
     try {
-      collectionIds = (item.getCollections?.() || [])
-        .map((id: unknown) => Number(id))
-        .filter((id: number) => Number.isFinite(id) && id > 0);
-    } catch { /* ignore */ }
-    const parentTitle = item.getField("title") || `Item ${item.id}`;
-    const firstCreator = item.getField("firstCreator") || "";
-    const year = item.getField("year") || "";
-    const dateAdded = item.getField("dateAdded") || "";
-    for (const pdfAtt of pdfs) {
-      const cached = await hasCachedMineruMd(pdfAtt.id);
-      const title = pdfs.length > 1
-        ? `${parentTitle} [${pdfAtt.getField?.("title") || `PDF ${pdfAtt.id}`}]`
-        : parentTitle;
-      results.push({
-        parentItemId: item.id,
-        attachmentId: pdfAtt.id,
-        title,
-        firstCreator,
-        year,
-        dateAdded,
-        cached,
-        collectionIds,
-      });
+      if (!item.isRegularItem?.()) continue;
+      const pdfs = getPdfAttachments(item);
+      if (pdfs.length === 0) continue;
+      let collectionIds: number[] = [];
+      try {
+        collectionIds = (item.getCollections?.() || [])
+          .map((id: unknown) => Number(id))
+          .filter((id: number) => Number.isFinite(id) && id > 0);
+      } catch { /* ignore */ }
+      let parentTitle = `Item ${item.id}`;
+      let firstCreator = "";
+      let year = "";
+      let dateAdded = "";
+      try { parentTitle = item.getField("title") || parentTitle; } catch { /* ignore */ }
+      try { firstCreator = item.getField("firstCreator") || ""; } catch { /* ignore */ }
+      try { year = item.getField("year") || ""; } catch { /* ignore */ }
+      try { dateAdded = item.getField("dateAdded") || ""; } catch { /* ignore */ }
+      for (const pdfAtt of pdfs) {
+        const cached = await hasCachedMineruMd(pdfAtt.id);
+        const title = pdfs.length > 1
+          ? `${parentTitle} [${pdfAtt.getField?.("title") || `PDF ${pdfAtt.id}`}]`
+          : parentTitle;
+        results.push({
+          parentItemId: item.id,
+          attachmentId: pdfAtt.id,
+          title,
+          firstCreator,
+          year,
+          dateAdded,
+          cached,
+          collectionIds,
+        });
+      }
+    } catch (err) {
+      ztoolkit.log("LLM MinerU: Failed to process item", item?.id, err);
     }
   }
 

@@ -1,5 +1,6 @@
 import { AgentToolRegistry } from "./tools/registry";
 import { readAttachmentBytes } from "../modules/contextPanel/attachmentStorage";
+import { encodeBytesBase64 } from "./model/shared";
 import { recordAgentTurn } from "./store/conversationMemory";
 import type {
   AgentInheritedApproval,
@@ -44,21 +45,6 @@ function createRunId(): string {
 
 function createConfirmationRequestId(): string {
   return `confirm-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-}
-
-function encodeBytesBase64(bytes: Uint8Array): string {
-  let out = "";
-  const chunkSize = 0x8000;
-  for (let index = 0; index < bytes.length; index += chunkSize) {
-    const chunk = bytes.subarray(index, Math.min(bytes.length, index + chunkSize));
-    out += String.fromCharCode(...chunk);
-  }
-  const btoaFn =
-    (globalThis as typeof globalThis & { btoa?: (value: string) => string }).btoa;
-  if (typeof btoaFn !== "function") {
-    throw new Error("btoa is unavailable");
-  }
-  return btoaFn(out);
 }
 
 async function toDataUrl(

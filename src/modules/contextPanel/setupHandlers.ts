@@ -40,6 +40,7 @@ import {
   selectedPaperContextCache,
   selectedOtherRefContextCache,
   paperContextModeOverrides,
+  paperContentSourceOverrides,
   selectedPaperPreviewExpandedCache,
   pinnedSelectedTextKeys,
   pinnedImageKeys,
@@ -210,6 +211,7 @@ import type {
   PaperContextRef,
   OtherContextRef,
   PaperContextSendMode,
+  PaperContentSourceMode,
   SelectedTextContext,
 } from "./types";
 import type { ReasoningLevel as LLMReasoningLevel } from "../../utils/llmClient";
@@ -274,6 +276,7 @@ import {
   formatPaperContextChipTitle,
   normalizePaperContextEntries,
   resolvePaperContextDisplayMetadata,
+  resolveAttachmentTitle,
 } from "./setupHandlers/controllers/composeContextController";
 import {
   clearPinnedContextOwner,
@@ -359,7 +362,6 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     slashUploadOption,
     slashReferenceOption,
     slashPdfPageOption,
-    slashFullPdfOption,
     imagePreview,
     selectedContextList,
     previewStrip,
@@ -1501,10 +1503,67 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     return mode === "full-next" || mode === "full-sticky";
   };
 
+  // ── Content source mode helpers ──────────────────────────────────────────
+  const getPaperContentSourceOverride = (
+    itemId: number,
+    paperContext: PaperContextRef,
+  ): PaperContentSourceMode | null => {
+    return paperContentSourceOverrides.get(itemId)?.get(buildPaperKey(paperContext)) || null;
+  };
+
+  const setPaperContentSourceOverride = (
+    itemId: number,
+    paperContext: PaperContextRef,
+    mode: PaperContentSourceMode,
+  ) => {
+    let overrides = paperContentSourceOverrides.get(itemId);
+    if (!overrides) {
+      overrides = new Map<string, PaperContentSourceMode>();
+      paperContentSourceOverrides.set(itemId, overrides);
+    }
+    overrides.set(buildPaperKey(paperContext), mode);
+  };
+
+  const clearPaperContentSourceOverrides = (itemId: number) => {
+    paperContentSourceOverrides.delete(itemId);
+  };
+
+  const resolvePaperContentSourceMode = (
+    itemId: number,
+    paperContext: PaperContextRef,
+  ): PaperContentSourceMode => {
+    const explicit = getPaperContentSourceOverride(itemId, paperContext);
+    if (explicit) return explicit;
+    // Default: MinerU if available, otherwise Text
+    return isPaperContextMineru(paperContext) ? "mineru" : "text";
+  };
+
+  const getNextContentSourceMode = (
+    current: PaperContentSourceMode,
+    hasMinerU: boolean,
+  ): PaperContentSourceMode => {
+    if (hasMinerU) {
+      // MinerU available: toggle mineru <-> pdf
+      return current === "pdf" ? "mineru" : "pdf";
+    }
+    // No MinerU: toggle text <-> pdf
+    return current === "pdf" ? "text" : "pdf";
+  };
+  // ────────────────────────────────────────────────────────────────────────
+
+  // Lightweight sync cache: once checkAndApplyMineruChipStyle confirms MinerU
+  // exists on disk, the contextItemId is added here so isPaperContextMineru
+  // returns true immediately without waiting for pdfTextCache to be populated.
+  const mineruAvailableIds = new Set<number>();
+
   const isPaperContextMineru = (paperContext: PaperContextRef): boolean => {
-    // Check in-memory cache first (available after ensurePDFTextCached completes)
+    if (mineruAvailableIds.has(paperContext.contextItemId)) return true;
+    // Check in-memory pdfTextCache (populated after ensurePDFTextCached)
     const cached = pdfTextCache.get(paperContext.contextItemId);
-    if (cached?.sourceType === "mineru") return true;
+    if (cached?.sourceType === "mineru") {
+      mineruAvailableIds.add(paperContext.contextItemId);
+      return true;
+    }
     // Cache may not be populated yet — trigger async check and update chip later
     if (!cached) {
       void checkAndApplyMineruChipStyle(paperContext.contextItemId);
@@ -1514,59 +1573,15 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
 
   const checkAndApplyMineruChipStyle = async (contextItemId: number): Promise<void> => {
     try {
+      if (mineruAvailableIds.has(contextItemId)) return; // already detected
       const { hasCachedMineruMd } = await import("./mineruCache");
       const { isMineruEnabled } = await import("../../utils/mineruConfig");
       if (!isMineruEnabled()) return;
       const hasCache = await hasCachedMineruMd(contextItemId);
       if (!hasCache) return;
-      // Find the chip in the DOM and apply the MinerU class
-      if (!paperPreviewList) return;
-      const chips = paperPreviewList.querySelectorAll(
-        `.llm-paper-context-chip[data-paper-context-item-id="${contextItemId}"]`,
-      );
-      for (let i = 0; i < chips.length; i++) {
-        const chip = chips[i] as HTMLDivElement;
-        if (!chip.classList.contains("llm-paper-context-chip-mineru")) {
-          chip.classList.add("llm-paper-context-chip-mineru");
-          chip.dataset.mineru = "true";
-          // Update tooltip
-          const label = chip.querySelector(".llm-paper-context-chip-label") as HTMLElement | null;
-          if (label && label.title && !label.title.includes("MinerU")) {
-            label.title = `${label.title}\n${t("Source: MinerU (enhanced markdown)")}`;
-          }
-          // Update badge text in expanded card
-          const chipDoc = chip.ownerDocument;
-          const badge = chip.querySelector(".llm-paper-picker-badge") as HTMLElement | null;
-          if (badge) {
-            badge.textContent = "MD";
-          } else if (chipDoc) {
-            const titleLine = chip.querySelector(".llm-paper-picker-group-title-line");
-            if (titleLine) {
-              titleLine.appendChild(
-                createElement(chipDoc, "span", "llm-paper-picker-badge", {
-                  textContent: "MD",
-                }),
-              );
-            }
-          }
-          // Update or insert attachment text
-          const attachmentEl = chip.querySelector(".llm-paper-context-card-attachment") as HTMLElement | null;
-          if (attachmentEl) {
-            attachmentEl.textContent = "full.md";
-            attachmentEl.title = "full.md";
-          } else if (chipDoc) {
-            const rowMain = chip.querySelector(".llm-paper-picker-group-row-main");
-            if (rowMain) {
-              rowMain.appendChild(
-                createElement(chipDoc, "span",
-                  "llm-paper-picker-meta llm-paper-context-card-attachment",
-                  { textContent: "full.md", title: "full.md" },
-                ),
-              );
-            }
-          }
-        }
-      }
+      mineruAvailableIds.add(contextItemId);
+      // MinerU is now available — re-render chips so the default mode flips to "mineru"
+      updatePaperPreviewPreservingScroll();
     } catch { /* ignore */ }
   };
 
@@ -1588,7 +1603,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     return "retrieval";
   };
 
-  const getEffectiveFullTextPaperContexts = (
+  const getAllEffectivePaperContexts = (
     currentItem: Zotero.Item,
     selectedPaperContexts?: PaperContextRef[],
   ): PaperContextRef[] => {
@@ -1598,15 +1613,32 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     const autoLoadedPaperContext = isGlobalPortalItem(currentItem)
       ? null
       : resolveAutoLoadedPaperContext();
-    const effectivePapers = normalizePaperContextEntries([
+    return normalizePaperContextEntries([
       ...(autoLoadedPaperContext ? [autoLoadedPaperContext] : []),
       ...selectedPapers,
     ]);
-    return effectivePapers.filter(
+  };
+
+  const getEffectiveFullTextPaperContexts = (
+    currentItem: Zotero.Item,
+    selectedPaperContexts?: PaperContextRef[],
+  ): PaperContextRef[] => {
+    return getAllEffectivePaperContexts(currentItem, selectedPaperContexts).filter(
       (paperContext) =>
+        resolvePaperContentSourceMode(currentItem.id, paperContext) !== "pdf" &&
         isPaperContextFullTextMode(
           resolvePaperContextNextSendMode(currentItem.id, paperContext),
         ),
+    );
+  };
+
+  const getEffectivePdfModePaperContexts = (
+    currentItem: Zotero.Item,
+    selectedPaperContexts?: PaperContextRef[],
+  ): PaperContextRef[] => {
+    return getAllEffectivePaperContexts(currentItem, selectedPaperContexts).filter(
+      (paperContext) =>
+        resolvePaperContentSourceMode(currentItem.id, paperContext) === "pdf",
     );
   };
 
@@ -1614,6 +1646,9 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     selectedPaperContextCache.delete(itemId);
     selectedPaperPreviewExpandedCache.delete(itemId);
     clearPaperModeOverrides(itemId);
+    // Note: content source overrides are NOT cleared here because auto-loaded
+    // papers may still have overrides even when selectedPaperContextCache is empty.
+    // They are cleared when the paper is truly removed from all contexts.
   };
   const clearAllRefContextState = (itemId: number) => {
     clearSelectedPaperState(itemId);
@@ -1743,6 +1778,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     clearDraftInputState(itemId);
     clearSelectedImageState(itemId);
     clearAllRefContextState(itemId);
+    clearPaperContentSourceOverrides(itemId);
     clearSelectedFileState(itemId);
     clearSelectedTextState(itemId);
   };
@@ -1822,7 +1858,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
   const buildPaperChipMenuCard = (
     ownerDoc: Document,
     paperContext: PaperContextRef,
-    options?: { mineru?: boolean },
+    options?: { contentSourceMode?: PaperContentSourceMode },
   ): HTMLButtonElement => {
     const card = createElement(
       ownerDoc,
@@ -1848,12 +1884,12 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       title: paperContext.title,
     });
     titleLine.appendChild(title);
-    const attachmentText = buildPaperChipAttachmentText(paperContext);
-    const isMineru = options?.mineru === true;
-    if (attachmentText || isMineru) {
+    const mode = options?.contentSourceMode;
+    const badgeText = mode === "mineru" ? "MD" : mode === "pdf" ? "PDF" : mode === "text" ? "Text" : null;
+    if (badgeText) {
       titleLine.appendChild(
         createElement(ownerDoc, "span", "llm-paper-picker-badge", {
-          textContent: isMineru ? "MD" : "PDF",
+          textContent: badgeText,
         }),
       );
     }
@@ -1867,7 +1903,12 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
         }),
       );
     }
-    const displayAttachmentText = isMineru ? "full.md" : attachmentText;
+    // Attachment line: PDF shows real title, MinerU shows "full.md", Text has none
+    const displayAttachmentText = mode === "pdf"
+      ? buildPaperChipAttachmentText(paperContext) || resolveAttachmentTitle(paperContext)
+      : mode === "mineru"
+        ? "full.md"
+        : ""; // text mode: no attachment line
     if (displayAttachmentText) {
       rowMain.appendChild(
         createElement(
@@ -2005,7 +2046,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     paperChipMenuSticky = options?.sticky === true;
     paperChipMenuTarget = paperContext;
     menu.innerHTML = "";
-    menu.appendChild(buildPaperChipMenuCard(ownerDoc, paperContext, { mineru: chip.dataset.mineru === "true" }));
+    menu.appendChild(buildPaperChipMenuCard(ownerDoc, paperContext, { contentSourceMode: (chip.dataset.contentSource as PaperContentSourceMode) || "text" }));
     positionPaperChipMenuAboveAnchor(menu, chip);
     menu.style.display = "grid";
   };
@@ -2126,12 +2167,12 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       removableIndex?: number;
       autoLoaded?: boolean;
       fullText?: boolean;
-      mineru?: boolean;
+      contentSourceMode?: PaperContentSourceMode;
     },
   ) => {
     const removable = options?.removable === true;
     const fullText = options?.fullText === true;
-    const mineru = options?.mineru === true;
+    const contentSourceMode = options?.contentSourceMode || "text";
     const chip = createElement(
       ownerDoc,
       "div",
@@ -2148,8 +2189,10 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     }
     chip.dataset.fullText = fullText ? "true" : "false";
     chip.classList.toggle("llm-paper-context-chip-full", fullText);
-    chip.dataset.mineru = mineru ? "true" : "false";
-    chip.classList.toggle("llm-paper-context-chip-mineru", mineru);
+    chip.dataset.contentSource = contentSourceMode;
+    chip.classList.toggle("llm-paper-context-chip-mineru", contentSourceMode === "mineru");
+    chip.classList.toggle("llm-paper-context-chip-pdf", contentSourceMode === "pdf");
+    chip.classList.toggle("llm-paper-context-chip-text", contentSourceMode === "text");
     chip.classList.add("collapsed");
 
     const chipHeader = createElement(
@@ -2157,14 +2200,13 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       "div",
       "llm-image-preview-header llm-selected-context-header llm-paper-context-chip-header",
     );
-    const chipTitle = formatPaperContextChipTitle(paperContext);
     const chipLabel = createElement(
       ownerDoc,
       "span",
       "llm-paper-context-chip-label",
       {
-        textContent: formatPaperContextChipLabel(paperContext),
-        title: mineru ? `${chipTitle}\n${t("Source: MinerU (enhanced markdown)")}` : chipTitle,
+        textContent: formatPaperContextChipLabel(paperContext, contentSourceMode),
+        title: formatPaperContextChipTitle(paperContext, contentSourceMode),
       },
     );
     chipHeader.append(chipLabel);
@@ -2191,7 +2233,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       "div",
       "llm-selected-context-expanded llm-paper-context-chip-expanded",
     );
-    chipExpanded.appendChild(buildPaperChipMenuCard(ownerDoc, paperContext, { mineru }));
+    chipExpanded.appendChild(buildPaperChipMenuCard(ownerDoc, paperContext, { contentSourceMode }));
     chip.append(chipExpanded, chipHeader);
 
     // Restore expanded (sticky) state after re-render
@@ -2272,6 +2314,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       paperPreview.style.display = "none";
       paperPreviewList.innerHTML = "";
       clearSelectedPaperState(itemId);
+      clearPaperContentSourceOverrides(itemId);
       return;
     }
     if (selectedPapers.length) {
@@ -2292,7 +2335,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
           isPaperContextFullTextMode(
             resolvePaperContextNextSendMode(itemId, autoLoadedPaperContext),
           ),
-        mineru: isPaperContextMineru(autoLoadedPaperContext),
+        contentSourceMode: resolvePaperContentSourceMode(itemId, autoLoadedPaperContext),
       });
     }
     selectedPapers.forEach((paperContext, index) => {
@@ -2303,7 +2346,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
           isPaperContextFullTextMode(
             resolvePaperContextNextSendMode(itemId, paperContext),
         ),
-        mineru: isPaperContextMineru(paperContext),
+        contentSourceMode: resolvePaperContentSourceMode(itemId, paperContext),
       });
     });
     selectedOtherRefs.forEach((ref, index) => {
@@ -7884,6 +7927,44 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       normalizePaperContextEntries(selectedPaperContextCache.get(itemId) || []),
     getFullTextPaperContexts: (currentItem, selectedPaperContexts) =>
       getEffectiveFullTextPaperContexts(currentItem, selectedPaperContexts),
+    getPdfModePaperContexts: (currentItem, selectedPaperContexts) =>
+      getEffectivePdfModePaperContexts(currentItem, selectedPaperContexts),
+    resolvePdfPaperAttachments: async (paperContexts) => {
+      const results: import("./types").ChatAttachment[] = [];
+      for (const pc of paperContexts) {
+        try {
+          const attachment = Zotero.Items.get(pc.contextItemId);
+          if (!attachment?.isAttachment?.() || attachment.attachmentContentType !== "application/pdf") continue;
+          const filePath = await (async () => {
+            const asyncPath = await (
+              attachment as unknown as { getFilePathAsync?: () => Promise<string | false> }
+            ).getFilePathAsync?.();
+            if (asyncPath) return asyncPath as string;
+            if (typeof (attachment as { getFilePath?: () => string | undefined }).getFilePath === "function") {
+              return (attachment as { getFilePath: () => string | undefined }).getFilePath();
+            }
+            return (attachment as unknown as { attachmentPath?: string }).attachmentPath;
+          })();
+          if (!filePath) continue;
+          const bytes = await readAttachmentBytes(filePath);
+          if (bytes.byteLength > MAX_UPLOAD_PDF_SIZE_BYTES) continue;
+          const fileName = filePath.split(/[\\/]/).pop() || "document.pdf";
+          const persisted = await persistAttachmentBlob(fileName, new Uint8Array(bytes));
+          results.push({
+            id: `pdf-paper-${pc.contextItemId}-${Date.now()}`,
+            name: fileName,
+            mimeType: "application/pdf",
+            sizeBytes: bytes.byteLength,
+            category: "pdf",
+            storedPath: persisted.storedPath,
+            contentHash: persisted.contentHash,
+          });
+        } catch (err) {
+          ztoolkit.log("LLM: Failed to resolve PDF paper attachment", err);
+        }
+      }
+      return results;
+    },
     getSelectedFiles: (itemId) => selectedFileAttachmentCache.get(itemId) || [],
     getSelectedImages: (itemId) => selectedImageCache.get(itemId) || [],
     resolvePromptText,
@@ -7983,8 +8064,13 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       const selectedTextNoteContexts = selectedContexts.map(
         (entry) => entry.noteContext,
       );
-      const selectedPaperContexts = normalizePaperContextEntries(
+      const allPaperContexts = normalizePaperContextEntries(
         selectedPaperContextCache.get(currentItem.id) || [],
+      );
+      const pdfModePapers = getEffectivePdfModePaperContexts(currentItem, allPaperContexts);
+      const pdfModeKeys = new Set(pdfModePapers.map((p) => `${p.itemId}:${p.contextItemId}`));
+      const selectedPaperContexts = allPaperContexts.filter(
+        (p) => !pdfModeKeys.has(`${p.itemId}:${p.contextItemId}`),
       );
       const fullTextPaperContexts = getEffectiveFullTextPaperContexts(
         currentItem,
@@ -8567,71 +8653,6 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       consumeActiveActionToken();
       closeSlashMenu();
       openReferenceSlashFromMenu();
-    });
-  }
-
-  if (slashFullPdfOption) {
-    slashFullPdfOption.addEventListener("click", async (e: Event) => {
-      e.preventDefault();
-      e.stopPropagation();
-      if (!item) return;
-      consumeActiveActionToken();
-      closeSlashMenu();
-      let attachment = getActiveContextAttachmentFromTabs();
-      // Fallback: resolve PDF from the selected item in the library view
-      if (!attachment && item) {
-        if (item.isAttachment?.() && item.attachmentContentType === "application/pdf") {
-          attachment = item;
-        } else if (item.isRegularItem?.()) {
-          const attIds: number[] = item.getAttachments?.() || [];
-          const pdfAtts = attIds
-            .map((id: number) => Zotero.Items.get(id))
-            .filter((att: Zotero.Item) =>
-              att?.isAttachment?.() && att.attachmentContentType === "application/pdf",
-            );
-          if (pdfAtts.length === 1) {
-            attachment = pdfAtts[0];
-          } else if (pdfAtts.length > 1) {
-            if (status) setStatus(status, t("Multiple PDFs found — select a specific PDF attachment"), "error");
-            return;
-          }
-        }
-      }
-      if (!attachment) {
-        if (status) setStatus(status, t("No PDF found — open a PDF or select an item with a PDF attachment"), "error");
-        return;
-      }
-      const filePath = await (async () => {
-        // Try async method first (Zotero 7)
-        const asyncPath = await (
-          attachment as unknown as { getFilePathAsync?: () => Promise<string | false> }
-        ).getFilePathAsync?.();
-        if (asyncPath) return asyncPath as string;
-        // Sync fallback
-        if (typeof (attachment as { getFilePath?: () => string | undefined }).getFilePath === "function") {
-          return (attachment as { getFilePath: () => string | undefined }).getFilePath();
-        }
-        return (attachment as unknown as { attachmentPath?: string }).attachmentPath;
-      })();
-      if (!filePath) {
-        if (status) setStatus(status, t("Could not locate the PDF file"), "error");
-        return;
-      }
-      if (status) setStatus(status, t("Loading PDF..."), "sending");
-      try {
-        const bytes = await readAttachmentBytes(filePath);
-        if (bytes.byteLength > MAX_UPLOAD_PDF_SIZE_BYTES) {
-          if (status) setStatus(status, `PDF too large (max ${Math.round(MAX_UPLOAD_PDF_SIZE_BYTES / 1024 / 1024)} MB)`, "error");
-          return;
-        }
-        const fileName = filePath.split(/[\\/]/).pop() || "document.pdf";
-        const file = new File([bytes], fileName, { type: "application/pdf" });
-        await processIncomingFiles([file]);
-        if (status) setStatus(status, t("PDF added to context"), "ready");
-      } catch (err) {
-        ztoolkit.log("Full PDF load error:", err);
-        if (status) setStatus(status, t("Failed to load PDF"), "error");
-      }
     });
   }
 
@@ -9397,6 +9418,14 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       if (!paperContext) return;
       e.preventDefault();
       e.stopPropagation();
+      // PDF mode sends binary — retrieval/full toggle does not apply
+      const contentSource = resolvePaperContentSourceMode(item.id, paperContext);
+      if (contentSource === "pdf") {
+        if (status) {
+          setStatus(status, t("PDF mode always sends the full file. Switch to TXT/MD for retrieval mode."), "warning");
+        }
+        return;
+      }
       const currentMode = resolvePaperContextNextSendMode(item.id, paperContext);
       const nextMode = isPaperContextFullTextMode(currentMode)
         ? "retrieval"
@@ -9411,12 +9440,12 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       );
       closePaperChipMenu();
       if (status) {
-        const mineruTag = isPaperContextMineru(paperContext) ? ` ${t("(MinerU)")}` : "";
+        const sourceTag = contentSource === "mineru" ? ` ${t("(MinerU)")}` : "";
         setStatus(
           status,
           nextMode === "full-sticky"
-            ? `${t("Paper set to always send full text.")}${mineruTag}`
-            : `${t("Paper set to retrieval mode.")}${mineruTag}`,
+            ? `${t("Paper set to always send full text.")}${sourceTag}`
+            : `${t("Paper set to retrieval mode.")}${sourceTag}`,
           "ready",
         );
       }
@@ -9458,7 +9487,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
         return;
       }
 
-      // Clicking the chip header area toggles the sticky-expanded state
+      // Clicking the chip header: Cmd/Ctrl+click jumps to paper, plain click toggles content source mode
       const paperChip = target.closest(
         ".llm-paper-context-chip",
       ) as HTMLDivElement | null;
@@ -9468,36 +9497,52 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       if (!item) return;
       const paperContext = resolvePaperContextFromChipElement(paperChip);
       if (!paperContext) return;
-      const currentExpandedId = selectedPaperPreviewExpandedCache.get(item.id);
-      const isAlreadyExpanded =
-        typeof currentExpandedId === "number" &&
-        currentExpandedId === paperContext.contextItemId;
-      const nextExpandedId = isAlreadyExpanded ? false : paperContext.contextItemId;
-      selectedPaperPreviewExpandedCache.set(item.id, nextExpandedId);
-
-      // Toggle expanded class directly on the chip — no full re-render, no blink.
-      const allChips = paperPreviewList?.querySelectorAll<HTMLDivElement>(
-        ".llm-paper-context-chip",
-      );
-      if (allChips) {
-        allChips.forEach((c: HTMLDivElement) => {
-          const isThis = c === paperChip;
-          const shouldExpand = isThis && nextExpandedId !== false;
-          c.classList.toggle("expanded", shouldExpand);
-          c.classList.toggle("collapsed", !shouldExpand);
-        });
+      const mouse = e as MouseEvent;
+      if (mouse.metaKey || mouse.ctrlKey) {
+        // Open the PDF attachment in a reader tab
+        void (async () => {
+          try {
+            const tabs = (Zotero as unknown as {
+              Tabs?: {
+                getTabIDByItemID?: (itemID: number) => string;
+                select?: (id: string) => void;
+              };
+            }).Tabs;
+            // If already open in a tab, just switch to it
+            const existingTabId = tabs?.getTabIDByItemID?.(paperContext.contextItemId);
+            if (existingTabId && typeof tabs?.select === "function") {
+              tabs.select(existingTabId);
+              return;
+            }
+            // Otherwise open a new reader tab
+            const readerApi = Zotero.Reader as
+              | { open?: (itemID: number) => Promise<unknown> }
+              | undefined;
+            if (typeof readerApi?.open === "function") {
+              await readerApi.open(paperContext.contextItemId);
+            } else if (status) {
+              setStatus(status, t("Could not open PDF"), "error");
+            }
+          } catch (err) {
+            ztoolkit.log("LLM: Failed to open PDF from chip", err);
+            if (status) setStatus(status, t("Could not open PDF"), "error");
+          }
+        })();
+        return;
       }
-
-      if (nextExpandedId !== false) {
-        const textContextKey = getTextContextConversationKey();
-        if (textContextKey) {
-          setSelectedTextExpandedIndex(textContextKey, null);
-          setNoteContextExpanded(textContextKey, null);
+      const currentSource = resolvePaperContentSourceMode(item.id, paperContext);
+      const mineruAvailable = isPaperContextMineru(paperContext);
+      const nextSource = getNextContentSourceMode(currentSource, mineruAvailable);
+      setPaperContentSourceOverride(item.id, paperContext, nextSource);
+      updatePaperPreviewPreservingScroll();
+      if (status) {
+        const modeLabel = nextSource === "text" ? "Text" : nextSource === "mineru" ? "MinerU" : "PDF";
+        if (nextSource === "pdf") {
+          setStatus(status, `${t("Content source:")} ${modeLabel}. ${t("Full file will be sent. Right-click retrieval is not available.")}`, "ready");
+        } else {
+          setStatus(status, `${t("Content source:")} ${modeLabel}`, "ready");
         }
-        selectedImagePreviewExpandedCache.set(item.id, false);
-        selectedFilePreviewExpandedCache.set(item.id, false);
       }
-      // No full re-render here — DOM classes already toggled above, cache is updated.
     });
   }
 

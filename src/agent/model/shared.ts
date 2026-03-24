@@ -145,3 +145,30 @@ export function normalizeAssistantToolCalls(
     arguments: call.arguments,
   }));
 }
+
+export function encodeBytesBase64(bytes: Uint8Array): string {
+  let out = "";
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    const chunk = bytes.subarray(
+      index,
+      Math.min(bytes.length, index + chunkSize),
+    );
+    out += String.fromCharCode(...chunk);
+  }
+  const btoaFn = (
+    globalThis as typeof globalThis & { btoa?: (v: string) => string }
+  ).btoa;
+  if (typeof btoaFn !== "function") throw new Error("btoa is unavailable");
+  return btoaFn(out);
+}
+
+export async function readFileRefAsBase64(
+  storedPath: string,
+): Promise<string> {
+  const { readAttachmentBytes } = await import(
+    "../../modules/contextPanel/attachmentStorage"
+  );
+  const bytes = await readAttachmentBytes(storedPath);
+  return encodeBytesBase64(bytes);
+}

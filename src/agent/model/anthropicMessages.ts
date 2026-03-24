@@ -26,6 +26,7 @@ import {
   getToolContinuationMessages,
   groupToolContinuationMessages,
   parseDataUrl,
+  readFileRefAsBase64,
 } from "./shared";
 
 type AnthropicContentBlock = {
@@ -83,9 +84,9 @@ function normalizeAnthropicContentBlock(
   };
 }
 
-function buildAnthropicParts(
+async function buildAnthropicParts(
   message: AgentModelMessage,
-): AnthropicContentBlock[] {
+): Promise<AnthropicContentBlock[]> {
   if (typeof message.content === "string") {
     return [{ type: "text", text: message.content }];
   }
@@ -111,18 +112,30 @@ function buildAnthropicParts(
       }
       continue;
     }
-    blocks.push({
-      type: "text",
-      text: `[Prepared file: ${part.file_ref.name}]`,
-    });
+    if (part.file_ref.mimeType === "application/pdf") {
+      const data = await readFileRefAsBase64(part.file_ref.storedPath);
+      blocks.push({
+        type: "document",
+        source: {
+          type: "base64",
+          media_type: "application/pdf",
+          data,
+        },
+      });
+    } else {
+      blocks.push({
+        type: "text",
+        text: `[Prepared file: ${part.file_ref.name}]`,
+      });
+    }
   }
   return blocks.length ? blocks : [{ type: "text", text: "" }];
 }
 
-function buildInitialAnthropicMessages(messages: AgentModelMessage[]): {
+async function buildInitialAnthropicMessages(messages: AgentModelMessage[]): Promise<{
   system?: string;
   messages: AnthropicMessage[];
-} {
+}> {
   const systemParts: string[] = [];
   const anthropicMessages: AnthropicMessage[] = [];
   for (const message of messages) {
@@ -136,7 +149,7 @@ function buildInitialAnthropicMessages(messages: AgentModelMessage[]): {
       anthropicMessages.push({
         role: "assistant",
         content: [
-          ...buildAnthropicParts(message),
+          ...(await buildAnthropicParts(message)),
           ...(Array.isArray(message.tool_calls)
             ? message.tool_calls.map((call) => ({
                 type: "tool_use" as const,
@@ -151,7 +164,7 @@ function buildInitialAnthropicMessages(messages: AgentModelMessage[]): {
     }
     anthropicMessages.push({
       role: "user",
-      content: buildAnthropicParts(message),
+      content: await buildAnthropicParts(message),
     });
   }
   return {
@@ -160,9 +173,9 @@ function buildInitialAnthropicMessages(messages: AgentModelMessage[]): {
   };
 }
 
-function buildAnthropicContinuationMessages(
+async function buildAnthropicContinuationMessages(
   messages: AgentModelMessage[],
-): AnthropicMessage[] {
+): Promise<AnthropicMessage[]> {
   const { toolMessages, followupUserMessages } =
     groupToolContinuationMessages(messages);
   const anthropicMessages: AnthropicMessage[] = [];
@@ -179,7 +192,7 @@ function buildAnthropicContinuationMessages(
   for (const message of followupUserMessages) {
     anthropicMessages.push({
       role: "user",
-      content: buildAnthropicParts(message),
+      content: await buildAnthropicParts(message),
     });
   }
   return anthropicMessages;
@@ -456,12 +469,12 @@ export class AnthropicMessagesAgentAdapter implements AgentModelAdapter {
 
   async runStep(params: AgentStepParams): Promise<AgentModelStep> {
     const request = params.request;
-    const initial = buildInitialAnthropicMessages(params.messages);
+    const initial = await buildInitialAnthropicMessages(params.messages);
     if (!this.conversationMessages) {
       this.conversationMessages = initial.messages;
       this.systemPrompt = initial.system;
     }
-    const continuation = buildAnthropicContinuationMessages(
+    const continuation = await buildAnthropicContinuationMessages(
       getToolContinuationMessages(params.messages),
     );
     const messages =
