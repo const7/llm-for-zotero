@@ -160,10 +160,11 @@ export function createSendFlowController(deps: SendFlowControllerDeps): {
     );
     const primarySelectedText = selectedTexts[0] || "";
     const allSelectedPaperContexts = deps.getSelectedPaperContexts(item.id);
-    const pdfModePaperContexts = deps.getPdfModePaperContexts(
-      item,
-      allSelectedPaperContexts,
-    );
+    // Agent mode always uses text/MinerU pipeline — it can fetch PDF pages on demand
+    const isAgent = deps.isAgentMode();
+    const pdfModePaperContexts = isAgent
+      ? []
+      : deps.getPdfModePaperContexts(item, allSelectedPaperContexts);
     // Papers in PDF mode are sent as file attachments, not through the text pipeline
     const pdfModeKeySet = new Set(
       pdfModePaperContexts.map((p) => `${p.itemId}:${p.contextItemId}`),
