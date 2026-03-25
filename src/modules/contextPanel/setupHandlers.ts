@@ -8109,7 +8109,9 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       const allPaperContexts = normalizePaperContextEntries(
         selectedPaperContextCache.get(currentItem.id) || [],
       );
-      const pdfModePapers = getEffectivePdfModePaperContexts(currentItem, allPaperContexts);
+      // Agent mode always uses text/MinerU pipeline — it fetches PDF pages on demand
+      const isAgent = getCurrentRuntimeMode() === "agent";
+      const pdfModePapers = isAgent ? [] : getEffectivePdfModePaperContexts(currentItem, allPaperContexts);
       const pdfModeKeys = new Set(pdfModePapers.map((p) => `${p.itemId}:${p.contextItemId}`));
       const selectedPaperContexts = allPaperContexts.filter(
         (p) => !pdfModeKeys.has(`${p.itemId}:${p.contextItemId}`),
@@ -9673,6 +9675,19 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       const currentSource = resolvePaperContentSourceMode(item.id, paperContext);
       const mineruAvailable = isPaperContextMineru(paperContext);
       const nextSource = getNextContentSourceMode(currentSource, mineruAvailable);
+      // Block PDF mode in agent mode — Agent can access any PDF page on demand
+      if (nextSource === "pdf" && getCurrentRuntimeMode() === "agent") {
+        if (status) {
+          setStatus(status, t("Agent mode reads PDF pages on demand — no need for full PDF mode."), "ready");
+        }
+        // Skip "pdf" and advance to the next valid mode
+        const skipPdfSource = getNextContentSourceMode("pdf", mineruAvailable);
+        if (skipPdfSource !== "pdf") {
+          setPaperContentSourceOverride(item.id, paperContext, skipPdfSource);
+          updatePaperPreviewPreservingScroll();
+        }
+        return;
+      }
       // Block PDF mode for models that don't support it (e.g., Copilot)
       if (nextSource === "pdf") {
         const selectedProfile = getSelectedProfile();
