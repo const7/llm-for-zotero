@@ -1236,6 +1236,7 @@ async function buildContextPlanForRequest(params: {
   effectiveRequestConfig: EffectiveRequestConfig;
   pdfModePaperKeys?: Set<string>;
   pdfUploadSystemMessages?: string[];
+  signal?: AbortSignal;
   setStatusSafely: (
     text: string,
     kind: Parameters<typeof setStatus>[2],
@@ -1287,6 +1288,7 @@ async function buildContextPlanForRequest(params: {
     apiKey: params.effectiveRequestConfig.apiKey,
     providerProtocol: params.effectiveRequestConfig.providerProtocol,
     systemPrompt,
+    signal: params.signal,
   });
 
   if (plan.selectedPaperCount > 0) {
@@ -2070,6 +2072,14 @@ export async function retryLatestAssistantResponse(
     const llmHistory = buildLLMHistoryMessages(historyForLLM);
     const recentPaperContexts = collectRecentPaperContexts(historyForLLM);
     const retryPdfKeys = derivePdfModePaperKeys(retryPair.userMessage.attachments, item);
+
+    // Create AbortController early so the signal is available during context
+    // planning (e.g. for the retrieval query-rewrite LLM call).
+    const AbortControllerCtor = getAbortController();
+    setCurrentAbortController(
+      AbortControllerCtor ? new AbortControllerCtor() : null,
+    );
+
     const contextPlan = await buildContextPlanForRequest({
       item,
       question,
@@ -2082,6 +2092,7 @@ export async function retryLatestAssistantResponse(
       effectiveRequestConfig,
       pdfModePaperKeys: retryPdfKeys.size > 0 ? retryPdfKeys : undefined,
       pdfUploadSystemMessages,
+      signal: currentAbortController?.signal,
       setStatusSafely,
     });
     const combinedContext = contextPlan.combinedContext;
@@ -2108,14 +2119,11 @@ export async function retryLatestAssistantResponse(
       attachments: retryPair.userMessage.attachments,
     });
     if (cancelledRequestId >= thisRequestId) {
+      currentAbortController?.abort();
       await finalizeCancelledAssistant();
       return;
     }
 
-    const AbortControllerCtor = getAbortController();
-    setCurrentAbortController(
-      AbortControllerCtor ? new AbortControllerCtor() : null,
-    );
     const queueRefresh = createQueuedRefresh(refreshChatSafely);
     if (cancelledRequestId >= thisRequestId) {
       currentAbortController?.abort();
@@ -2843,6 +2851,14 @@ export async function sendQuestion(opts: import("./types").SendQuestionOptions) 
     // Apply auto-summary compression when the history grows long.
     const llmHistory = applyHistoryCompression(conversationKey, rawLLMHistory) ?? rawLLMHistory;
     const recentPaperContexts = collectRecentPaperContexts(historyForLLM);
+
+    // Create AbortController early so the signal is available during context
+    // planning (e.g. for the retrieval query-rewrite LLM call).
+    const AbortControllerCtor = getAbortController();
+    setCurrentAbortController(
+      AbortControllerCtor ? new AbortControllerCtor() : null,
+    );
+
     const contextPlan = await buildContextPlanForRequest({
       item,
       question,
@@ -2855,6 +2871,7 @@ export async function sendQuestion(opts: import("./types").SendQuestionOptions) 
       effectiveRequestConfig,
       pdfModePaperKeys,
       pdfUploadSystemMessages: opts.pdfUploadSystemMessages,
+      signal: currentAbortController?.signal,
       setStatusSafely,
     });
     const combinedContext = contextPlan.combinedContext;
@@ -2881,14 +2898,11 @@ export async function sendQuestion(opts: import("./types").SendQuestionOptions) 
     });
 
     if (cancelledRequestId >= thisRequestId) {
+      currentAbortController?.abort();
       await markCancelled();
       return;
     }
 
-    const AbortControllerCtor = getAbortController();
-    setCurrentAbortController(
-      AbortControllerCtor ? new AbortControllerCtor() : null,
-    );
     const queueRefresh = createQueuedRefresh(refreshChatSafely);
 
     if (cancelledRequestId >= thisRequestId) {
