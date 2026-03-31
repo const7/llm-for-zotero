@@ -2276,7 +2276,13 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     if (selectedPapers.length) {
       selectedPaperContextCache.set(itemId, selectedPapers);
     } else {
-      clearSelectedPaperState(itemId);
+      selectedPaperContextCache.delete(itemId);
+      selectedPaperPreviewExpandedCache.delete(itemId);
+      // Don't clear mode overrides when an auto-loaded paper exists — its
+      // override (e.g. webchat PDF toggle) must survive re-renders.
+      if (!autoLoadedPaperContext) {
+        clearPaperModeOverrides(itemId);
+      }
     }
     // Do not reset expanded state here — preserve which chip was sticky across re-renders
     paperPreview.style.display = "contents";
@@ -6364,10 +6370,10 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     if (!item) return;
     const autoLoadedPaperContext = resolveAutoLoadedPaperContext();
     if (autoLoadedPaperContext) {
-      // Default to "retrieval" (grey chip = no PDF sent).
-      // Users can right-click the chip to toggle to "full-next" (purple)
-      // when they explicitly want to attach the PDF to ChatGPT.
-      setPaperModeOverride(item.id, autoLoadedPaperContext, "retrieval");
+      // Default to "full-next" (purple chip = send PDF to ChatGPT).
+      // Users can right-click the chip to toggle to "retrieval" (grey)
+      // when they want to skip attaching the PDF.
+      setPaperModeOverride(item.id, autoLoadedPaperContext, "full-next");
     }
     updatePaperPreviewPreservingScroll();
   };
