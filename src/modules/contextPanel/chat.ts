@@ -816,6 +816,8 @@ function toPanelMessage(message: StoredChatMessage): Message {
     reasoningSummary: message.reasoningSummary,
     reasoningDetails: message.reasoningDetails,
     reasoningOpen: isReasoningExpandedByDefault(),
+    webchatRunState: message.webchatRunState,
+    webchatCompletionReason: message.webchatCompletionReason,
   };
 }
 
@@ -1119,6 +1121,7 @@ function restoreRequestUIIdle(
     }
     if (freshUi.cancelBtn) freshUi.cancelBtn.style.display = "none";
   });
+  setHistoryControlsDisabled(body, false);
 }
 
 function createPanelUpdateHelpers(
@@ -1155,7 +1158,7 @@ export type EffectiveRequestConfig = {
   model: string;
   apiBase: string;
   apiKey: string;
-  authMode: "api_key" | "codex_auth";
+  authMode: "api_key" | "codex_auth" | "webchat"; // [webchat]
   providerProtocol?: ProviderProtocol;
   modelEntryId?: string;
   modelProviderLabel?: string;
@@ -1168,7 +1171,7 @@ function resolveEffectiveRequestConfig(params: {
   model?: string;
   apiBase?: string;
   apiKey?: string;
-  authMode?: "api_key" | "codex_auth";
+  authMode?: "api_key" | "codex_auth" | "webchat"; // [webchat]
   providerProtocol?: ProviderProtocol;
   modelEntryId?: string;
   modelProviderLabel?: string;
@@ -1196,7 +1199,8 @@ function resolveEffectiveRequestConfig(params: {
   const apiKey = (params.apiKey || fallbackEntry?.apiKey || "").trim();
   const authMode =
     params.authMode ||
-    (fallbackEntry?.authMode === "codex_auth" ? "codex_auth" : "api_key");
+    (fallbackEntry?.authMode === "webchat" ? "webchat" :
+     fallbackEntry?.authMode === "codex_auth" ? "codex_auth" : "api_key");
   const reasoning =
     params.reasoning ||
     getSelectedReasoningForItem(params.item.id, model, apiBase);
@@ -1384,6 +1388,8 @@ type AssistantMessageSnapshot = Pick<
   | "reasoningSummary"
   | "reasoningDetails"
   | "reasoningOpen"
+  | "webchatRunState"
+  | "webchatCompletionReason"
 >;
 
 export function findLatestRetryPair(
@@ -1411,6 +1417,8 @@ function takeAssistantSnapshot(message: Message): AssistantMessageSnapshot {
     reasoningSummary: message.reasoningSummary,
     reasoningDetails: message.reasoningDetails,
     reasoningOpen: message.reasoningOpen,
+    webchatRunState: message.webchatRunState,
+    webchatCompletionReason: message.webchatCompletionReason,
   };
 }
 
@@ -1426,6 +1434,8 @@ function restoreAssistantSnapshot(
   message.reasoningSummary = snapshot.reasoningSummary;
   message.reasoningDetails = snapshot.reasoningDetails;
   message.reasoningOpen = snapshot.reasoningOpen;
+  message.webchatRunState = snapshot.webchatRunState;
+  message.webchatCompletionReason = snapshot.webchatCompletionReason;
   message.streaming = false;
 }
 
@@ -1446,6 +1456,70 @@ function finalizeCancelledAssistantMessage(
     ? message.reasoningOpen !== false
     : false;
   message.streaming = false;
+  message.webchatRunState = undefined;
+  message.webchatCompletionReason = null;
+}
+
+function applyWebChatAnswerSnapshot(
+  message: Message,
+  text: string,
+  snapshot: {
+    runState?: "submitted" | "active" | "settling" | "done" | "incomplete" | "error" | null;
+    completionReason?: "settled" | "forced_cancel" | "timeout" | "error" | null;
+  },
+): void {
+  message.text = sanitizeText(text || "");
+  message.timestamp = Date.now();
+  if (
+    snapshot.runState === "done" ||
+    snapshot.runState === "incomplete" ||
+    snapshot.runState === "error"
+  ) {
+    message.webchatRunState = snapshot.runState;
+    message.webchatCompletionReason = snapshot.completionReason || null;
+  } else {
+    message.webchatRunState = undefined;
+    message.webchatCompletionReason = null;
+  }
+}
+
+function applyWebChatThinkingSnapshot(
+  message: Message,
+  text: string,
+  snapshot: {
+    runState?: "submitted" | "active" | "settling" | "done" | "incomplete" | "error" | null;
+    completionReason?: "settled" | "forced_cancel" | "timeout" | "error" | null;
+  },
+): void {
+  const sanitized = sanitizeText(text || "");
+  message.reasoningDetails = sanitized || undefined;
+  message.reasoningOpen = sanitized ? isReasoningExpandedByDefault() : false;
+  if (
+    snapshot.runState === "done" ||
+    snapshot.runState === "incomplete" ||
+    snapshot.runState === "error"
+  ) {
+    message.webchatRunState = snapshot.runState;
+    message.webchatCompletionReason = snapshot.completionReason || null;
+  }
+}
+
+function getWebChatRunStateLabel(message: Message): string | null {
+  if (message.webchatRunState === "incomplete") {
+    switch (message.webchatCompletionReason) {
+      case "forced_cancel":
+        return "Partial only — ChatGPT stayed busy and needed a forced stop";
+      case "timeout":
+        return "Partial only — final answer was not verified before timeout";
+      case "error":
+      default:
+        return "Partial only — final answer not verified";
+    }
+  }
+  if (message.webchatRunState === "error") {
+    return "Web sync ended with an error";
+  }
+  return null;
 }
 
 function reconstructRetryPayload(userMessage: Message): {
@@ -2837,6 +2911,8 @@ export async function sendQuestion(opts: import("./types").SendQuestionOptions) 
       modelProviderLabel: assistantMessage.modelProviderLabel,
       reasoningSummary: assistantMessage.reasoningSummary,
       reasoningDetails: assistantMessage.reasoningDetails,
+      webchatRunState: assistantMessage.webchatRunState,
+      webchatCompletionReason: assistantMessage.webchatCompletionReason,
     });
   };
   const markCancelled = async () => {
@@ -2845,6 +2921,101 @@ export async function sendQuestion(opts: import("./types").SendQuestionOptions) 
     await persistAssistantOnce();
     setStatusSafely("Cancelled", "ready");
   };
+
+  // [webchat] Dedicated pipeline — bypass context assembly, send raw PDF + question
+  if (effectiveRequestConfig.providerProtocol === "web_sync") {
+    const webChatQueueRefresh = createQueuedRefresh(refreshChatSafely);
+    try {
+      setStatusSafely("Sending to ChatGPT…", "sending");
+      const { sendWebChatQuestion } = await import("../../webchat/pipeline");
+
+      // Note: `question` already includes selected text context via
+      // buildQuestionWithSelectedTextContexts() — no need to prepend again.
+
+      // [webchat] Mode switching disabled — users control thinking mode on chatgpt.com
+      const chatgptMode: string | undefined = undefined;
+
+      // [webchat] Send PDF only when the caller explicitly requests it via chip state.
+      // Always use dynamic port for the embedded relay server
+      const { getRelayBaseUrl } = await import("../../webchat/relayServer");
+      const answer = await sendWebChatQuestion({
+        item,
+        question,
+        host: getRelayBaseUrl(),
+        sendPdf: opts.webchatSendPdf === true,
+        forceNewChat: opts.webchatForceNewChat === true,
+        images: screenshotImagesForMessage.length > 0 ? screenshotImagesForMessage : undefined,
+        chatgptMode,
+        signal: currentAbortController?.signal,
+        onAnswerSnapshot: (text, snapshot) => {
+          applyWebChatAnswerSnapshot(assistantMessage, text, snapshot);
+          webChatQueueRefresh();
+        },
+        onThinkingSnapshot: (text, snapshot) => {
+          applyWebChatThinkingSnapshot(assistantMessage, text, snapshot);
+          webChatQueueRefresh();
+        },
+      });
+
+      if (cancelledRequestId >= thisRequestId || Boolean(currentAbortController?.signal.aborted)) {
+        await markCancelled();
+        return;
+      }
+
+      assistantMessage.text = sanitizeText(answer.text) || assistantMessage.text || "No response.";
+      assistantMessage.reasoningDetails = sanitizeText(answer.thinking || "") || assistantMessage.reasoningDetails;
+      assistantMessage.reasoningOpen = assistantMessage.reasoningDetails
+        ? isReasoningExpandedByDefault()
+        : false;
+      assistantMessage.webchatRunState =
+        answer.runState === "incomplete" || answer.runState === "error"
+          ? answer.runState
+          : "done";
+      assistantMessage.webchatCompletionReason =
+        answer.completionReason ||
+        (answer.runState === "done" ? "settled" : null);
+      assistantMessage.streaming = false;
+
+      refreshChatSafely();
+      await persistAssistantOnce();
+      restoreRequestUIIdle(body, conversationKey, thisRequestId);
+      setStatusSafely(
+        answer.runState === "incomplete"
+          ? "Captured partial response — final answer not verified"
+          : "Ready",
+        answer.runState === "incomplete" ? "error" : "ready",
+      );
+    } catch (err) {
+      const isCancelled =
+        cancelledRequestId >= thisRequestId ||
+        Boolean(currentAbortController?.signal.aborted) ||
+        (err as { name?: string }).name === "AbortError";
+      if (isCancelled) {
+        await markCancelled();
+        restoreRequestUIIdle(body, conversationKey, thisRequestId);
+        return;
+      }
+      const errMsg = (err as Error).message || "Error";
+      const hasSnapshot = Boolean(
+        sanitizeText(assistantMessage.text || "") ||
+          sanitizeText(assistantMessage.reasoningDetails || ""),
+      );
+      if (hasSnapshot) {
+        assistantMessage.webchatRunState = "incomplete";
+        assistantMessage.webchatCompletionReason = "error";
+      } else {
+        assistantMessage.text = `Error: ${errMsg}`;
+        assistantMessage.webchatRunState = "error";
+        assistantMessage.webchatCompletionReason = "error";
+      }
+      assistantMessage.streaming = false;
+      refreshChatSafely();
+      await persistAssistantOnce();
+      restoreRequestUIIdle(body, conversationKey, thisRequestId);
+      setStatusSafely(errMsg, "error");
+    }
+    return;
+  }
 
   try {
     const rawLLMHistory = buildLLMHistoryMessages(historyForLLM);
@@ -3219,6 +3390,8 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
   const latestAssistantIndex = latestRetryPair
     ? latestRetryPair.userIndex + 1
     : -1;
+  // [webchat] Resolve provider protocol once for editability checks
+  const renderProviderProtocol = resolveEffectiveRequestConfig({ item }).providerProtocol;
   const conversationIsIdle = !history.some((m) => m.streaming);
   for (const [index, msg] of history.entries()) {
     const isUser = msg.role === "user";
@@ -3229,6 +3402,7 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
       hasItem: Boolean(item),
       conversationIsIdle,
       assistantPair: assistantPairMsg,
+      providerProtocol: renderProviderProtocol,
     });
     const isInlineEditBubble = Boolean(
       canEditUserPrompt &&
@@ -4058,7 +4232,8 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
       index === latestAssistantIndex &&
       !msg.streaming &&
       msg.text.trim() &&
-      msg.runMode !== "agent"
+      msg.runMode !== "agent" &&
+      renderProviderProtocol !== "web_sync" // [webchat] no retry in webchat mode
     ) {
       const retryBtn = doc.createElement("button") as HTMLButtonElement;
       retryBtn.type = "button";
@@ -4067,6 +4242,16 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
       retryBtn.title = "Retry response with another model";
       retryBtn.setAttribute("aria-label", "Retry latest response");
       meta.appendChild(retryBtn);
+    }
+
+    if (!isUser) {
+      const webchatStateLabel = getWebChatRunStateLabel(msg);
+      if (webchatStateLabel) {
+        const status = doc.createElement("span") as HTMLSpanElement;
+        status.className = "llm-message-webchat-status";
+        status.textContent = webchatStateLabel;
+        meta.appendChild(status);
+      }
     }
 
     if (isUser && inlineEditEl) {

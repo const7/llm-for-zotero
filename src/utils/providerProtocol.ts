@@ -5,7 +5,8 @@ export type ProviderProtocol =
   | "responses_api"
   | "openai_chat_compat"
   | "anthropic_messages"
-  | "gemini_native";
+  | "gemini_native"
+  | "web_sync"; // [webchat]
 
 export type ProviderProtocolSpec = {
   id: ProviderProtocol;
@@ -76,6 +77,17 @@ export const PROVIDER_PROTOCOL_SPECS: ProviderProtocolSpec[] = [
     multimodal: true,
     fileInputs: false,
     reasoning: true,
+  },
+  {
+    id: "web_sync",
+    label: "Web Sync (ChatGPT)",
+    helperText:
+      "Relay questions to ChatGPT via the browser extension web-sync bridge.",
+    streaming: false,
+    toolCalls: false,
+    multimodal: true,
+    fileInputs: false,
+    reasoning: false,
   },
 ];
 

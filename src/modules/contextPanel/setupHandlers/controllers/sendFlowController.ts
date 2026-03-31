@@ -20,7 +20,7 @@ type SelectedProfile = {
   apiBase: string;
   apiKey: string;
   providerLabel: string;
-  authMode?: "api_key" | "codex_auth" | "copilot_auth";
+  authMode?: "api_key" | "codex_auth" | "copilot_auth" | "webchat";
   providerProtocol?: ProviderProtocol;
 };
 
@@ -132,6 +132,11 @@ type SendFlowControllerDeps = {
   autoUnlockGlobalChat: () => void;
   setStatusMessage?: (message: string, level: StatusLevel) => void;
   editStaleStatusText: string;
+  // [webchat]
+  hasActivePdfFullTextPapers?: (item: Zotero.Item, paperContexts?: any[]) => boolean;
+  hasUploadedPdfInCurrentWebChatConversation?: () => boolean;
+  markWebChatPdfUploadedForCurrentConversation?: () => void;
+  consumeWebChatForceNewChatIntent?: () => boolean;
 };
 
 export function createSendFlowController(deps: SendFlowControllerDeps): {
@@ -177,6 +182,7 @@ export function createSendFlowController(deps: SendFlowControllerDeps): {
     );
     // Resolve PDF-mode papers based on model capability
     const earlyProfile = deps.getSelectedProfile();
+    const isWebChat = earlyProfile?.authMode === "webchat";
     const earlyModelName = (
       earlyProfile?.model || deps.getCurrentModelName() || ""
     ).trim();
@@ -186,7 +192,9 @@ export function createSendFlowController(deps: SendFlowControllerDeps): {
     let pdfFileAttachments: ChatAttachment[] = [];
     let pdfPageImageDataUrls: string[] = [];
     let pdfUploadSystemMessages: string[] = [];
-    if (pdfModePaperContexts.length) {
+    // [webchat] Skip provider-capability PDF processing — webchat handles PDF
+    // through its own pipeline (sendPdf → relay → extension → attachPDF).
+    if (pdfModePaperContexts.length && !isWebChat) {
       if (pdfSupport === "none") {
         deps.setStatusMessage?.(
           "This model does not support PDF or image input. PDF papers were skipped.",
@@ -450,6 +458,18 @@ export function createSendFlowController(deps: SendFlowControllerDeps): {
       deps.updateSelectedTextPreviewPreservingScroll();
     }
 
+    // [webchat] Determine whether to send PDF and/or force a new chat
+    // (isWebChat already computed early from earlyProfile)
+    const webchatForceNewChat = isWebChat
+      ? (deps.consumeWebChatForceNewChatIntent?.() ?? false)
+      : false;
+    const webchatSendPdf = isWebChat
+      ? (
+        (deps.hasActivePdfFullTextPapers?.(item, allSelectedPaperContexts) ?? false) &&
+        (webchatForceNewChat || !(deps.hasUploadedPdfInCurrentWebChatConversation?.() ?? false))
+      )
+      : false;
+
     const sendTask = deps.sendQuestion({
       body: deps.body,
       item,
@@ -471,7 +491,12 @@ export function createSendFlowController(deps: SendFlowControllerDeps): {
       runtimeMode,
       pdfModePaperKeys: pdfModeKeySet.size > 0 ? pdfModeKeySet : undefined,
       pdfUploadSystemMessages: pdfUploadSystemMessages.length ? pdfUploadSystemMessages : undefined,
+      webchatSendPdf,
+      webchatForceNewChat,
     });
+    if (isWebChat && webchatSendPdf) {
+      deps.markWebChatPdfUploadedForCurrentConversation?.();
+    }
     if (hasPaperComposeState) {
       deps.consumePaperModeState(item.id);
       deps.retainPaperState(item.id);

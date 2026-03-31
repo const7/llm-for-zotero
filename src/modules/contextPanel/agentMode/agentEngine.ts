@@ -48,13 +48,14 @@ type EffectiveRequestConfigShape = {
   model: string;
   apiBase: string;
   apiKey: string;
-  authMode: "api_key" | "codex_auth";
+  authMode: "api_key" | "codex_auth" | "webchat"; // [webchat]
   providerProtocol?:
     | "codex_responses"
     | "responses_api"
     | "openai_chat_compat"
     | "anthropic_messages"
-    | "gemini_native";
+    | "gemini_native"
+    | "web_sync"; // [webchat]
   modelEntryId?: string;
   modelProviderLabel?: string;
   reasoning: LLMReasoningConfig | undefined;

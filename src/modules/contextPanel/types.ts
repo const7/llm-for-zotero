@@ -65,6 +65,8 @@ export interface Message {
   reasoningSummary?: string;
   reasoningDetails?: string;
   reasoningOpen?: boolean;
+  webchatRunState?: "done" | "incomplete" | "error";
+  webchatCompletionReason?: "settled" | "forced_cancel" | "timeout" | "error" | null;
 }
 
 export type ChatRuntimeMode = "chat" | "agent";
@@ -266,6 +268,10 @@ export type SendQuestionOptions = {
   pdfModePaperKeys?: Set<string>;
   /** System messages injected by provider-side PDF upload (Qwen fileid://, Kimi extracted text). */
   pdfUploadSystemMessages?: string[];
+  /** [webchat] When true, attach the paper PDF to the ChatGPT query. */
+  webchatSendPdf?: boolean;
+  /** [webchat] When true, send the prompt into a fresh ChatGPT conversation. */
+  webchatForceNewChat?: boolean;
 };
 
 export type EditRetryOptions = {

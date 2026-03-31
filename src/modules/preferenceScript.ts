@@ -112,6 +112,7 @@ function getProtocolOptions(
   authMode: ModelProviderAuthMode,
   presetId: ProviderPresetId,
 ): ProviderProtocol[] {
+  if (authMode === "webchat") return ["web_sync"]; // [webchat]
   if (authMode === "codex_auth") return ["codex_responses"];
   if (authMode === "copilot_auth") return ["openai_chat_compat", "responses_api"];
   if (presetId !== "customized") {
@@ -205,6 +206,7 @@ function hasEmptyModel(group: ModelProviderGroup): boolean {
 }
 
 function normalizeAuthMode(value: unknown): ModelProviderAuthMode {
+  if (value === "webchat") return "webchat"; // [webchat]
   if (value === "codex_auth") return "codex_auth";
   if (value === "copilot_auth") return "copilot_auth";
   return "api_key";
@@ -628,16 +630,24 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
       const copilotOption = el(doc, "option") as HTMLOptionElement;
       copilotOption.value = "copilot_auth";
       copilotOption.textContent = t("GitHub Copilot");
-      authModeSelect.append(apiKeyOption, codexOption, copilotOption);
+      // [webchat] Add webchat option
+      const webchatOption = el(doc, "option") as HTMLOptionElement;
+      webchatOption.value = "webchat";
+      webchatOption.textContent = t("WebChat");
+      authModeSelect.append(apiKeyOption, codexOption, copilotOption, webchatOption);
       authModeSelect.value = group.authMode;
       authModeSelect.addEventListener("change", () => {
         const nextAuthMode = normalizeAuthMode(authModeSelect.value);
         group.authMode = nextAuthMode;
-        if (nextAuthMode === "codex_auth") {
+        if (nextAuthMode === "webchat") {
+          group.providerProtocol = "web_sync";
+          // Force model to chatgpt.com and collapse to single entry
+          group.models = [{ ...group.models[0], model: "chatgpt.com" }];
+        } else if (nextAuthMode === "codex_auth") {
           group.providerProtocol = "codex_responses";
         } else if (nextAuthMode === "copilot_auth") {
           group.providerProtocol = "openai_chat_compat";
-        } else if (group.providerProtocol === "codex_responses") {
+        } else if (group.providerProtocol === "codex_responses" || group.providerProtocol === "web_sync") {
           group.providerProtocol =
             selectedPreset?.defaultProtocol || "openai_chat_compat";
         }
@@ -651,9 +661,11 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
         setTimeout(() => rerender(), 0);
       });
       const authModeHelperText =
-        group.authMode === "copilot_auth"
-          ? t(COPILOT_API_HELPER_TEXT)
-          : t("codex auth reuses local `codex login` credentials from ~/.codex/auth.json");
+        group.authMode === "webchat"
+          ? t("Relay questions to ChatGPT via the Sync for Zotero browser extension.")
+          : group.authMode === "copilot_auth"
+            ? t(COPILOT_API_HELPER_TEXT)
+            : t("codex auth reuses local `codex login` credentials from ~/.codex/auth.json");
       authModeWrap.append(
         authModeLabel,
         authModeSelect,
@@ -1093,6 +1105,10 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
 
       const addModelBtn = iconBtn(doc, "+", t("Add model"));
       addModelBtn.style.color = "var(--color-accent, #2563eb)";
+      // [webchat] Hide add model button — webchat only has one fixed model
+      if (group.authMode === "webchat") {
+        addModelBtn.style.display = "none";
+      }
       modelsHeaderRow.appendChild(addModelBtn);
       modelsWrap.appendChild(modelsHeaderRow);
 
@@ -1128,7 +1144,16 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
           " box-sizing: border-box; background: Field; color: FieldText;",
         ) as HTMLInputElement;
         modelInput.type = "text";
-        modelInput.value = modelEntry.model;
+        // [webchat] Force model name to "chatgpt.com" and lock it
+        if (group.authMode === "webchat") {
+          modelEntry.model = "chatgpt.com";
+          modelInput.value = "chatgpt.com";
+          modelInput.readOnly = true;
+          modelInput.style.opacity = "0.6";
+          modelInput.style.cursor = "default";
+        } else {
+          modelInput.value = modelEntry.model;
+        }
         modelInput.placeholder = modelIndex === 0 ? profile.modelPlaceholder : "";
 
         const testBtn = el(doc, "button", OUTLINE_BTN_STYLE, t("Test")) as HTMLButtonElement;
@@ -1137,6 +1162,12 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
         const advGearBtn = iconBtn(doc, "⚙", t("Advanced options"));
 
         mainRow.append(modelInput, testBtn, advGearBtn);
+
+        // [webchat] Hide test and gear buttons — not applicable for webchat
+        if (group.authMode === "webchat") {
+          testBtn.style.display = "none";
+          advGearBtn.style.display = "none";
+        }
 
         if (group.models.length > 1) {
           const removeModelBtn = iconBtn(doc, "×", t("Remove model"));
@@ -1350,7 +1381,14 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
         "hr",
         "border: none; border-top: 1px solid var(--stroke-secondary, #c8c8c8); margin: 0;",
       );
-      if (group.authMode === "copilot_auth") {
+      if (group.authMode === "webchat") {
+        // [webchat] Minimal layout: only auth mode + model names (locked to "chatgpt.com")
+        cardBody.append(
+          authModeWrap,
+          divider,
+          modelsWrap,
+        );
+      } else if (group.authMode === "copilot_auth") {
         cardBody.append(
           authModeWrap,
           copilotLoginWrap,

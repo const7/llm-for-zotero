@@ -21,6 +21,9 @@ type ClearConversationControllerDeps = {
   clearAgentToolCaches?: (conversationKey: number) => void;
   setStatusMessage?: (message: string, level: StatusLevel) => void;
   logError?: (message: string, error: unknown) => void;
+  isWebChatActive?: () => boolean; // [webchat]
+  getWebChatHost?: () => string; // [webchat]
+  markNextWebChatSendAsNewChat?: () => void; // [webchat]
 };
 
 export function createClearConversationController(

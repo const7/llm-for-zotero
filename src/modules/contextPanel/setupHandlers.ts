@@ -1494,18 +1494,32 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
   // getPaperModeOverride, setPaperModeOverride, clearPaperModeOverrides
   // → imported from ./contexts/paperContextState
 
-  const consumePaperModeState = (itemId: number) => {
+  const consumePaperModeState = (itemId: number, opts?: { webchatGreyOut?: boolean }) => {
     if (!item || item.id !== itemId) {
       clearPaperModeOverrides(itemId);
       return;
     }
+    // Standard path: consume full-next mode for non-PDF papers
     const fullTextPaperContexts = getEffectiveFullTextPaperContexts(item);
-    if (!fullTextPaperContexts.length) return;
     for (const paperContext of fullTextPaperContexts) {
-      if (resolvePaperContextNextSendMode(itemId, paperContext) !== "full-next") {
-        continue;
+      const mode = resolvePaperContextNextSendMode(itemId, paperContext);
+      if (mode === "full-next") {
+        setPaperModeOverride(itemId, paperContext, "retrieval");
       }
-      setPaperModeOverride(itemId, paperContext, "retrieval");
+    }
+    // [webchat] Also consume full-next for PDF-source papers.
+    // getEffectiveFullTextPaperContexts excludes PDF-source papers,
+    // but in webchat mode these papers also use full-next/full-sticky semantics
+    // for controlling whether to send the PDF binary to ChatGPT.
+    if (opts?.webchatGreyOut) {
+      const allPaperContexts = getAllEffectivePaperContexts(item);
+      for (const paperContext of allPaperContexts) {
+        if (resolvePaperContentSourceMode(itemId, paperContext) !== "pdf") continue;
+        const mode = resolvePaperContextNextSendMode(itemId, paperContext);
+        if (mode === "full-next") {
+          setPaperModeOverride(itemId, paperContext, "retrieval");
+        }
+      }
     }
   };
 
@@ -1517,6 +1531,8 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     itemId: number,
     paperContext: PaperContextRef,
   ): PaperContentSourceMode => {
+    // [webchat] Always use PDF content source — webchat sends raw PDF via drag-and-drop
+    if (isWebChatMode()) return "pdf";
     const explicit = getPaperContentSourceOverride(itemId, paperContext);
     return explicit || (isPaperContextMineru(paperContext) ? "mineru" : "text");
   };
@@ -1611,6 +1627,20 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     return getAllEffectivePaperContexts(currentItem, selectedPaperContexts).filter(
       (paperContext) =>
         resolvePaperContentSourceMode(currentItem.id, paperContext) === "pdf",
+    );
+  };
+
+  /** [webchat] Check if any paper has PDF content source AND full-text send mode (purple chip). */
+  const hasActivePdfFullTextPapers = (
+    currentItem: Zotero.Item,
+    selectedPaperContexts?: PaperContextRef[],
+  ): boolean => {
+    return getAllEffectivePaperContexts(currentItem, selectedPaperContexts).some(
+      (paperContext) =>
+        resolvePaperContentSourceMode(currentItem.id, paperContext) === "pdf" &&
+        isPaperContextFullTextMode(
+          resolvePaperContextNextSendMode(currentItem.id, paperContext),
+        ),
     );
   };
 
@@ -2105,9 +2135,13 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     chip.dataset.fullText = fullText ? "true" : "false";
     chip.classList.toggle("llm-paper-context-chip-full", fullText);
     chip.dataset.contentSource = contentSourceMode;
+    const showPdfChipStyle =
+      contentSourceMode === "pdf" && (!isWebChatMode() || fullText);
+    const showTextChipStyle =
+      contentSourceMode === "text" || (isWebChatMode() && contentSourceMode === "pdf" && !fullText);
     chip.classList.toggle("llm-paper-context-chip-mineru", contentSourceMode === "mineru");
-    chip.classList.toggle("llm-paper-context-chip-pdf", contentSourceMode === "pdf");
-    chip.classList.toggle("llm-paper-context-chip-text", contentSourceMode === "text");
+    chip.classList.toggle("llm-paper-context-chip-pdf", showPdfChipStyle);
+    chip.classList.toggle("llm-paper-context-chip-text", showTextChipStyle);
     chip.classList.add("collapsed");
 
     const chipHeader = createElement(
@@ -4969,6 +5003,39 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       closePromptMenu();
       closeExportMenu();
       closeHistoryMenu();
+
+      // [webchat] In webchat mode, "+" creates a new ChatGPT conversation
+      const { selectedEntry: _debugEntry } = getSelectedModelInfo();
+      ztoolkit.log(`[webchat] + clicked: authMode=${_debugEntry?.authMode}, entryId=${_debugEntry?.entryId}, isWebChat=${_debugEntry?.authMode === "webchat"}`);
+      if (isWebChatMode()) {
+        // Clear local chat panel and mark the relay as needing a new chat.
+        // The next send carries an explicit force_new_chat intent to the relay,
+        // and we also trigger a remote new-chat command immediately.
+        markNextWebChatSendAsNewChat();
+        primeFreshWebChatPaperChipState();
+        // Clear cached images so stale screenshots don't auto-attach to ChatGPT
+        if (item) {
+          selectedImageCache.delete(item.id);
+          updateImagePreviewPreservingScroll();
+        }
+        void (async () => {
+          try {
+            const [{ getRelayBaseUrl }, { sendNewChat }] = await Promise.all([
+              import("../../webchat/relayServer"),
+              import("../../webchat/client"),
+            ]);
+            await sendNewChat(getRelayBaseUrl());
+          } catch (err) {
+            ztoolkit.log("[webchat] Failed to trigger immediate new chat", err);
+          }
+        })();
+        const key = getConversationKey(item);
+        chatHistory.set(key, []);
+        refreshChatPreservingScroll();
+        if (status) setStatus(status, t("New chat — send a message to start"), "ready");
+        return;
+      }
+
       // Create new session directly in whichever mode is currently active
       if (isGlobalMode()) {
         void createAndSwitchGlobalConversation();
@@ -5017,6 +5084,8 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       e.preventDefault();
       e.stopPropagation();
       if (!item || isNoteSession()) return;
+      // [webchat] Mode chip is display-only in webchat mode
+      if (isWebChatMode()) return;
       if (currentAbortController || inputBox?.disabled) {
         if (status) {
           setStatus(
@@ -5152,6 +5221,18 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
         closePromptMenu();
         closeExportMenu();
         closeHistoryNewMenu();
+
+        // [webchat] Show ChatGPT conversation history
+        if (isWebChatMode()) {
+          if (isHistoryMenuOpen()) { closeHistoryMenu(); return; }
+          if (!historyMenu) return;
+          await renderWebChatHistoryMenu();
+          positionMenuBelowButton(body, historyMenu, historyToggleBtn);
+          historyMenu.style.display = "flex";
+          historyToggleBtn.setAttribute("aria-expanded", "true");
+          return;
+        }
+
         await refreshGlobalHistoryHeader();
         if (!latestConversationHistory.length) {
           closeHistoryMenu();
@@ -6028,6 +6109,13 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
           e.preventDefault();
           e.stopPropagation();
           if (!item) return;
+          // [webchat] Remember current model before switching to webchat
+          const wasWebChat = isWebChatMode();
+          if (!wasWebChat && entry.authMode === "webchat") {
+            const { selectedEntryId } = getSelectedModelInfo();
+            previousNonWebchatModelId = selectedEntryId || null;
+          }
+
           setSelectedModelEntryForItem(item.id, entry.entryId);
           setFloatingMenuOpen(modelMenu, MODEL_MENU_OPEN_CLASS, false);
           setFloatingMenuOpen(reasoningMenu, REASONING_MENU_OPEN_CLASS, false);
@@ -6067,6 +6155,40 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
                 );
               }
             }
+          }
+
+          // [webchat] Entering webchat mode → fresh session, then apply webchat UI AFTER re-render
+          if (entry.authMode === "webchat" && !wasWebChat) {
+            markNextWebChatSendAsNewChat();
+            primeFreshWebChatPaperChipState();
+            // Clear cached images so stale screenshots don't auto-attach to ChatGPT
+            if (item) {
+              selectedImageCache.delete(item.id);
+              updateImagePreviewPreservingScroll();
+            }
+            void (async () => {
+              if (isGlobalMode()) {
+                await createAndSwitchGlobalConversation();
+              } else {
+                await createAndSwitchPaperConversation();
+              }
+
+              // Show preloading screen to verify connectivity before enabling webchat
+              const chatShellEl = body.querySelector(".llm-chat-shell") as HTMLElement | null;
+              if (chatShellEl) {
+                try {
+                  const { showWebChatPreloadScreen } = await import("../../webchat/preloadScreen");
+                  await showWebChatPreloadScreen(chatShellEl);
+                } catch {
+                  // Preload failed or was aborted — still apply UI (dot will show status)
+                }
+              }
+
+              // Apply webchat UI after the conversation switch re-renders
+              applyWebChatModeUI();
+            })();
+          } else {
+            applyWebChatModeUI();
           }
 
           updateModelButton();
@@ -6194,9 +6316,104 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     return { provider, currentModel, options, enabledLevels, selectedLevel };
   };
 
+  // [webchat] ChatGPT mode options: maps reasoning levels to ChatGPT modes
+  const WEBCHAT_MODES: Array<{
+    level: string;
+    label: string;
+    chatgptMode: string | undefined;
+  }> = [
+    { level: "none",   label: "Instant",            chatgptMode: "instant" },
+    { level: "medium", label: "Standard Thinking",   chatgptMode: "thinking_standard" },
+    { level: "high",   label: "Extended Thinking",   chatgptMode: "thinking_extended" },
+  ];
+
+  const isWebChatMode = () => {
+    const { selectedEntry } = getSelectedModelInfo();
+    return selectedEntry?.authMode === "webchat";
+  };
+
+  // [webchat] Remember the previous model so "Exit" can restore it
+  let previousNonWebchatModelId: string | null = null;
+  let webchatForceNewChatOnNextSend = false;
+  let webchatPdfUploadedInCurrentConversation = false;
+  let webchatConnectionTimer: ReturnType<typeof setInterval> | null = null;
+
+  const markNextWebChatSendAsNewChat = () => {
+    webchatForceNewChatOnNextSend = true;
+    webchatPdfUploadedInCurrentConversation = false;
+  };
+
+  const clearNextWebChatNewChatIntent = () => {
+    webchatForceNewChatOnNextSend = false;
+  };
+
+  const consumeWebChatForceNewChatIntent = () => {
+    const shouldForce = webchatForceNewChatOnNextSend;
+    webchatForceNewChatOnNextSend = false;
+    return shouldForce;
+  };
+
+  const primeFreshWebChatPaperChipState = () => {
+    if (!item) return;
+    const autoLoadedPaperContext = resolveAutoLoadedPaperContext();
+    if (autoLoadedPaperContext) {
+      // Default to "retrieval" (grey chip = no PDF sent).
+      // Users can right-click the chip to toggle to "full-next" (purple)
+      // when they explicitly want to attach the PDF to ChatGPT.
+      setPaperModeOverride(item.id, autoLoadedPaperContext, "retrieval");
+    }
+    updatePaperPreviewPreservingScroll();
+  };
+
+  const hasUploadedPdfInCurrentWebChatConversation = () =>
+    webchatPdfUploadedInCurrentConversation;
+
+  const markWebChatPdfUploadedForCurrentConversation = () => {
+    webchatPdfUploadedInCurrentConversation = true;
+  };
+
+  const resetWebChatPdfUploadedForCurrentConversation = () => {
+    webchatPdfUploadedInCurrentConversation = false;
+  };
+
+  const startWebChatConnectionCheck = (dot: HTMLElement) => {
+    stopWebChatConnectionCheck();
+    const check = async () => {
+      try {
+        // Always use dynamic port — saved apiBase may be stale
+        const { getRelayBaseUrl } = await import("../../webchat/relayServer");
+        const host = getRelayBaseUrl();
+        const { testConnection } = await import("../../webchat/client");
+        const alive = await testConnection(host);
+        dot.className = alive
+          ? "llm-webchat-dot llm-webchat-dot-connected"
+          : "llm-webchat-dot llm-webchat-dot-disconnected";
+      } catch {
+        dot.className = "llm-webchat-dot llm-webchat-dot-disconnected";
+      }
+    };
+    void check(); // immediate first check
+    webchatConnectionTimer = setInterval(check, 5000);
+  };
+
+  const stopWebChatConnectionCheck = () => {
+    if (webchatConnectionTimer !== null) {
+      clearInterval(webchatConnectionTimer);
+      webchatConnectionTimer = null;
+    }
+  };
+
   const updateReasoningButton = () => {
     if (!item || !reasoningBtn) return;
     withScrollGuard(chatBox, conversationKey, () => {
+      // [webchat] Hide reasoning dropdown — users control thinking mode on chatgpt.com
+      if (isWebChatMode()) {
+        reasoningBtn.style.display = "none";
+        applyResponsiveActionButtonsLayout();
+        return;
+      }
+      reasoningBtn.style.display = "";
+
       const { provider, currentModel, options, enabledLevels, selectedLevel } =
         getReasoningState();
       const available = enabledLevels.length > 0;
@@ -6232,6 +6449,45 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     const { provider, currentModel, options, selectedLevel, enabledLevels } =
       getReasoningState();
     reasoningMenu.innerHTML = "";
+
+    // [webchat] Show dedicated ChatGPT mode options
+    if (isWebChatMode()) {
+      reasoningMenu.innerHTML = "";
+      appendDropdownInstruction(
+        reasoningMenu,
+        "ChatGPT mode",
+        "llm-reasoning-menu-section",
+      );
+      const currentSel = selectedReasoningCache.get(item.id) || "none";
+      for (const mode of WEBCHAT_MODES) {
+        const isSelected = currentSel === mode.level;
+        const option = createElement(
+          body.ownerDocument as Document,
+          "button",
+          "llm-response-menu-item llm-reasoning-option",
+          {
+            type: "button",
+            textContent: isSelected ? `\u2713 ${mode.label}` : mode.label,
+          },
+        );
+        const applyMode = (e: Event) => {
+          if (!isPrimaryPointerEvent(e)) return;
+          e.preventDefault();
+          e.stopPropagation();
+          if (!item) return;
+          selectedReasoningCache.clear();
+          selectedReasoningCache.set(item.id, mode.level as any);
+          setLastUsedReasoningLevel(mode.level as any);
+          setFloatingMenuOpen(reasoningMenu, REASONING_MENU_OPEN_CLASS, false);
+          updateReasoningButton();
+        };
+        option.addEventListener("pointerdown", applyMode);
+        option.addEventListener("click", applyMode);
+        reasoningMenu.appendChild(option);
+      }
+      return;
+    }
+
     appendDropdownInstruction(
       reasoningMenu,
       t("Reasoning level"),
@@ -6315,12 +6571,279 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     }
   };
 
+  // [webchat] Apply webchat-specific UI changes. Safe to call any time —
+  // only modifies UI when actually in webchat mode, restores defaults otherwise.
+  const applyWebChatModeUI = () => {
+    let isWebChat = false;
+    try {
+      const { selectedEntry } = getSelectedModelInfo();
+      isWebChat = selectedEntry?.authMode === "webchat";
+    } catch {
+      // getSelectedModelInfo may not be ready during initial render
+      return;
+    }
+
+    // Mode chip: show "chatgpt.com" with connection dot, or restore original
+    if (modeChipBtn) {
+      if (isWebChat) {
+        let dot = modeChipBtn.querySelector(".llm-webchat-dot") as HTMLElement | null;
+        if (!dot) {
+          dot = (modeChipBtn.ownerDocument as Document).createElement("span");
+          dot.className = "llm-webchat-dot llm-webchat-dot-disconnected";
+        }
+        modeChipBtn.textContent = "";
+        modeChipBtn.appendChild(dot);
+        modeChipBtn.appendChild(
+          (modeChipBtn.ownerDocument as Document).createTextNode(" chatgpt.com"),
+        );
+        modeChipBtn.title = "ChatGPT Web Sync";
+        modeChipBtn.style.cursor = "default";
+        startWebChatConnectionCheck(dot);
+      } else {
+        const oldDot = modeChipBtn.querySelector(".llm-webchat-dot");
+        if (oldDot) oldDot.remove();
+        stopWebChatConnectionCheck();
+        modeChipBtn.style.cursor = "";
+        // Don't overwrite text here — the normal render sync already sets it
+      }
+    }
+
+    // Model dropdown: disabled in webchat (model is ChatGPT, use Exit to change)
+    if (modelBtn) {
+      (modelBtn as HTMLButtonElement).disabled = isWebChat;
+      modelBtn.style.opacity = isWebChat ? "0.5" : "";
+      modelBtn.style.cursor = isWebChat ? "default" : "";
+    }
+
+    // [webchat] Pre-fetch history in background so it's ready when user clicks
+    if (isWebChat) {
+      void warmUpWebChatHistory();
+    }
+
+    // Clear button → "Exit" in webchat, restore "Clear" otherwise
+    if (clearBtn) {
+      if (isWebChat) {
+        clearBtn.textContent = "Exit";
+        (clearBtn as HTMLButtonElement).disabled = false;
+        clearBtn.style.opacity = "";
+        clearBtn.title = "Exit webchat and return to previous model";
+      } else {
+        clearBtn.textContent = "Clear";
+        clearBtn.title = "";
+      }
+    }
+
+    // [webchat] Re-render paper chips to reflect forced PDF content source
+    if (isWebChat) {
+      updatePaperPreviewPreservingScroll();
+    }
+  };
+
+  // [webchat] Pre-fetch history in background — triggers a scrape command then polls
+  let historyWarmUpRunning = false;
+  const warmUpWebChatHistory = async () => {
+    if (historyWarmUpRunning) return;
+    historyWarmUpRunning = true;
+    try {
+      // Tell the extension to scrape history NOW via a relay command
+      const { relaySetCommand } = await import("../../webchat/relayServer");
+      relaySetCommand({ type: "SCRAPE_HISTORY" });
+
+      const { fetchChatHistory } = await import("../../webchat/client");
+      // Poll up to 15 seconds for history to arrive from the extension
+      for (let i = 0; i < 10; i++) {
+        const sessions = await fetchChatHistory("");
+        if (sessions.length > 0) {
+          ztoolkit.log(`[webchat] History warmed up: ${sessions.length} conversations`);
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 1500));
+      }
+    } catch { /* ignore */ }
+    historyWarmUpRunning = false;
+  };
+
+  // [webchat] Render ChatGPT conversation history in the history menu
+  const renderWebChatHistoryMenu = async () => {
+    if (!historyMenu) return;
+    historyMenu.innerHTML = "";
+
+    const doc = body.ownerDocument as Document;
+
+    // Section header
+    const header = createElement(doc, "div", "llm-history-menu-section-block", {});
+    const title = createElement(doc, "div", "llm-history-menu-section", {
+      textContent: "ChatGPT Conversations",
+    });
+    title.style.padding = "6px 10px";
+    title.style.fontSize = "10px";
+    title.style.fontWeight = "600";
+    title.style.textTransform = "uppercase";
+    title.style.letterSpacing = "0.5px";
+    title.style.opacity = "0.6";
+    header.appendChild(title);
+
+    // Show loading indicator while fetching
+    const loadingEl = createElement(doc, "div", "", {
+      textContent: "Fetching chat history…",
+    });
+    loadingEl.style.padding = "12px 10px";
+    loadingEl.style.fontSize = "11px";
+    loadingEl.style.opacity = "0.5";
+    header.appendChild(loadingEl);
+    historyMenu.appendChild(header);
+
+    // Trigger a fresh history scrape from the extension, then poll for results
+    const { getRelayBaseUrl: getHost } = await import("../../webchat/relayServer");
+    const host = getHost();
+    const { relaySetCommand } = await import("../../webchat/relayServer");
+    const { fetchChatHistory } = await import("../../webchat/client");
+
+    // Tell the extension to scrape history NOW
+    relaySetCommand({ type: "SCRAPE_HISTORY" });
+
+    // Poll for results — the extension scrapes ChatGPT sidebar and pushes via HISTORY_UPDATE
+    let sessions: Array<{ id: string; title: string; chatUrl: string | null }> = [];
+    for (let i = 0; i < 10; i++) {
+      try {
+        sessions = await fetchChatHistory(host);
+      } catch { /* relay not reachable */ }
+      if (sessions.length > 0) break;
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+
+    // Remove loading indicator
+    loadingEl.remove();
+
+    if (!sessions.length) {
+      const empty = createElement(doc, "div", "", {
+        textContent: "No conversations yet",
+      });
+      empty.style.padding = "12px 10px";
+      empty.style.fontSize = "11px";
+      empty.style.opacity = "0.5";
+      header.appendChild(empty);
+      return;
+    }
+
+    await renderHistorySessions(doc, header, sessions, host);
+  };
+
+  // Helper: render session list into a history menu header container
+  const renderHistorySessions = async (
+    doc: Document,
+    container: HTMLElement,
+    sessions: Array<{ id: string; title: string; chatUrl: string | null }>,
+    host: string,
+  ) => {
+    // Scrollable viewport
+    const viewport = createElement(doc, "div", "llm-history-menu-section-viewport", {});
+    viewport.style.maxHeight = "300px";
+    viewport.style.overflowY = "auto";
+
+    const rows = createElement(doc, "div", "llm-history-menu-section-rows", {});
+
+    for (const session of sessions) {
+      const row = createElement(doc, "div", "llm-history-menu-row", {});
+      const btn = createElement(doc, "button", "llm-history-menu-row-main", {
+        type: "button",
+      });
+      const titleDiv = createElement(doc, "div", "llm-history-menu-row-title", {
+        textContent: session.title || "Untitled",
+      });
+      titleDiv.title = session.title || "";
+      const subtitle = createElement(doc, "div", "llm-history-menu-row-subtitle", {
+        textContent: "chatgpt.com",
+      });
+      btn.appendChild(titleDiv);
+      btn.appendChild(subtitle);
+
+      btn.addEventListener("click", () => {
+        closeHistoryMenu();
+        if (!item) return;
+        // Navigate ChatGPT to this conversation and load messages
+        void (async () => {
+          try {
+            // Clear current chat and show loading indicator in the chat panel
+            const key = getConversationKey(item);
+            chatHistory.set(key, [{
+              role: "assistant" as const,
+              text: `Loading conversation: **${session.title || "Untitled"}**\n\nFetching messages from ChatGPT…`,
+              timestamp: Date.now(),
+              modelName: "chatgpt.com",
+              modelProviderLabel: "ChatGPT",
+              streaming: true,
+            }]);
+            refreshChatPreservingScroll();
+            if (status) setStatus(status, "Loading conversation from ChatGPT…", "sending");
+
+            const { loadChatSession } = await import("../../webchat/client");
+            resetWebChatPdfUploadedForCurrentConversation();
+            clearNextWebChatNewChatIntent();
+            const result = await loadChatSession(host, session.id);
+            // The embedded relay now waits for the extension to confirm the
+            // ChatGPT thread is loaded, transcript-stable, and composer-ready.
+
+            const messages: Message[] = [];
+
+            if (result?.messages && Array.isArray(result.messages) && result.messages.length > 0) {
+              for (const m of result.messages) {
+                messages.push({
+                  role: m.kind === "user" ? "user" : "assistant",
+                  text: m.text || "",
+                  timestamp: m.timestamp ? new Date(m.timestamp).getTime() : Date.now(),
+                  modelName: m.kind === "bot" ? "chatgpt.com" : undefined,
+                  modelProviderLabel: m.kind === "bot" ? "ChatGPT" : undefined,
+                  reasoningDetails: m.thinking || undefined,
+                });
+              }
+              if (status) setStatus(status, `Loaded ${result.messages.length} messages`, "ready");
+            } else {
+              if (status) {
+                setStatus(
+                  status,
+                  "No messages found in the selected ChatGPT conversation",
+                  "ready",
+                );
+              }
+            }
+
+            chatHistory.set(key, messages);
+
+            // [webchat] Restore thinking mode from loaded conversation
+            const lastAssistant = messages.filter((m: { role: string; reasoningDetails?: string }) => m.role === "assistant").pop();
+            if (lastAssistant?.reasoningDetails) {
+              // Conversation used thinking — default to "high" (Extended)
+              selectedReasoningCache.set(item.id, "high");
+            } else {
+              selectedReasoningCache.set(item.id, "none");
+            }
+            updateReasoningButton();
+
+            refreshChatPreservingScroll();
+          } catch (err) {
+            ztoolkit.log("[webchat] Failed to load chat:", err);
+            if (status) setStatus(status, `Error loading chat: ${(err as Error).message || "Unknown error"}`, "error");
+          }
+        })();
+      });
+
+      row.appendChild(btn);
+      rows.appendChild(row);
+    }
+
+    viewport.appendChild(rows);
+    container.appendChild(viewport);
+    if (!container.parentElement) historyMenu?.appendChild(container);
+  };
+
   // Initialize preview state
   updatePaperPreviewPreservingScroll();
   updateFilePreviewPreservingScroll();
   updateImagePreviewPreservingScroll();
   updateSelectedTextPreviewPreservingScroll();
   syncModelFromPrefs();
+  applyWebChatModeUI();
   restoreDraftInputForCurrentConversation();
   if (isNoteSession()) {
     void refreshGlobalHistoryHeader();
@@ -7944,6 +8467,10 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       getEffectiveFullTextPaperContexts(currentItem, selectedPaperContexts),
     getPdfModePaperContexts: (currentItem, selectedPaperContexts) =>
       getEffectivePdfModePaperContexts(currentItem, selectedPaperContexts),
+    hasActivePdfFullTextPapers: (currentItem: Zotero.Item, selectedPaperContexts?: any[]) =>
+      hasActivePdfFullTextPapers(currentItem, selectedPaperContexts),
+    hasUploadedPdfInCurrentWebChatConversation,
+    markWebChatPdfUploadedForCurrentConversation,
     resolvePdfPaperAttachments: async (paperContexts) => {
       const results: import("./types").ChatAttachment[] = [];
       for (const pc of paperContexts) {
@@ -8060,6 +8587,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     retainPinnedImageState,
     retainPaperState,
     consumePaperModeState,
+    consumeWebChatForceNewChatIntent,
     retainPinnedFileState,
     retainPinnedTextState,
     updatePaperPreviewPreservingScroll,
@@ -8133,6 +8661,16 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     logError: (message, err) => {
       ztoolkit.log(message, err);
     },
+    // [webchat] Check if the currently selected model uses webchat auth
+    isWebChatActive: () => {
+      const { selectedEntry } = getSelectedModelInfo();
+      return selectedEntry?.authMode === "webchat";
+    },
+    getWebChatHost: () => {
+      const port = Zotero.Prefs.get("httpServer.port") || 23119;
+      return `http://127.0.0.1:${port}/llm-for-zotero/webchat`;
+    },
+    markNextWebChatSendAsNewChat,
   });
   const executeSend = async () => {
     // If the inline edit widget is active, route through editUserTurnAndRetry
@@ -8366,7 +8904,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       setInlineEditSavedDraft("");
       setInlineEditTarget(null);
       if (newText) {
-        consumePaperModeState(currentItem.id);
+        consumePaperModeState(currentItem.id, { webchatGreyOut: isWebChatMode() });
         retainPaperState(currentItem.id);
         updatePaperPreviewPreservingScroll();
         void editUserTurnAndRetry({
@@ -9854,9 +10392,9 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       if (!paperContext) return;
       e.preventDefault();
       e.stopPropagation();
-      // PDF mode sends binary — retrieval/full toggle does not apply
+      // PDF mode sends binary — retrieval/full toggle does not apply (except webchat)
       const contentSource = resolvePaperContentSourceMode(item.id, paperContext);
-      if (contentSource === "pdf") {
+      if (contentSource === "pdf" && !isWebChatMode()) {
         if (status) {
           setStatus(status, t("PDF mode always sends the full file. Switch to TXT/MD for retrieval mode."), "warning");
         }
@@ -9867,13 +10405,13 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
         ? "retrieval"
         : "full-sticky";
       setPaperModeOverride(item.id, paperContext, nextMode);
-      paperChip.dataset.fullText = isPaperContextFullTextMode(nextMode)
-        ? "true"
-        : "false";
-      paperChip.classList.toggle(
-        "llm-paper-context-chip-full",
-        isPaperContextFullTextMode(nextMode),
-      );
+      const nextIsFullText = isPaperContextFullTextMode(nextMode);
+      paperChip.dataset.fullText = nextIsFullText ? "true" : "false";
+      paperChip.classList.toggle("llm-paper-context-chip-full", nextIsFullText);
+      // [webchat] Also toggle the PDF class so the chip visually greys out
+      if (contentSource === "pdf") {
+        paperChip.classList.toggle("llm-paper-context-chip-pdf", nextIsFullText);
+      }
       closePaperChipMenu();
       if (status) {
         const sourceTag = contentSource === "mineru" ? ` ${t("(MinerU)")}` : "";
@@ -9964,6 +10502,13 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
             if (status) setStatus(status, t("Could not open PDF"), "error");
           }
         })();
+        return;
+      }
+      // [webchat] Content source is always PDF — no cycling
+      if (isWebChatMode()) {
+        if (status) {
+          setStatus(status, t("WebChat mode always uses PDF. Right-click to toggle send/skip."), "ready");
+        }
         return;
       }
       const currentSource = resolvePaperContentSourceMode(item.id, paperContext);
@@ -10505,6 +11050,32 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       closeHistoryMenu();
       activeEditSession = null;
       if (!item) return;
+
+      // [webchat] "Exit" button → restore previous model and leave webchat mode
+      if (isWebChatMode()) {
+        stopWebChatConnectionCheck();
+        clearNextWebChatNewChatIntent();
+        resetWebChatPdfUploadedForCurrentConversation();
+        // Restore previous model, or fall back to first non-webchat model
+        const restoreId = previousNonWebchatModelId
+          || getAvailableModelEntries().find((e) => e.authMode !== "webchat")?.entryId
+          || null;
+        if (restoreId) {
+          setSelectedModelEntryForItem(item.id, restoreId);
+        }
+        previousNonWebchatModelId = null;
+        // Refresh UI back to normal mode
+        updateModelButton();
+        updateReasoningButton();
+        applyWebChatModeUI();
+        if (isGlobalMode()) {
+          void createAndSwitchGlobalConversation();
+        } else {
+          void createAndSwitchPaperConversation();
+        }
+        return;
+      }
+
       void clearCurrentConversation();
     });
   }

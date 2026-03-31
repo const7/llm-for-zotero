@@ -920,7 +920,7 @@ export async function fetchCopilotModelList(params: {
     }));
 }
 
-async function readLocalFileBytes(path: string): Promise<Uint8Array> {
+export async function readLocalFileBytes(path: string): Promise<Uint8Array> {
   const normalizedPath = (path || "").trim();
   if (!normalizedPath) {
     throw new Error("Attachment file path is empty");
