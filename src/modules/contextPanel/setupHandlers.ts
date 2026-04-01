@@ -46,6 +46,7 @@ import {
   pinnedImageKeys,
   pinnedFileKeys,
   setCancelledRequestId,
+  setPendingRequestId,
   currentAbortController,
   panelFontScalePercent,
   setPanelFontScalePercent,
@@ -11109,6 +11110,8 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
         } catch { /* relay may not be loaded */ }
       }
       setCancelledRequestId(currentRequestId);
+      // Reset global pending state so other tabs don't show the Cancel button
+      setPendingRequestId(0);
       if (status) setStatus(status, t("Cancelled"), "ready");
       // Immediately mark the last assistant message as not streaming so any
       // queued refresh won't bring back the loading dots.
