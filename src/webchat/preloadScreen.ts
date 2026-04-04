@@ -41,11 +41,11 @@ const STEPS: PreloadStep[] = [
     failHint: "Install the Sync for Zotero Chrome extension and reload the page.",
   },
   {
-    key: "chatgpt",
-    label: "ChatGPT tab",
+    key: "chatsite",
+    label: "Chat site tab",
     check: () => relayGetExtensionStatus()?.chatTabAlive === true,
     maxAttempts: 30, // 15 seconds — needs to wait for extension's next heartbeat (every 10s) to POST status
-    failHint: "Open chatgpt.com in your Chrome browser.",
+    failHint: "Open chatgpt.com or chat.deepseek.com in your Chrome browser.",
   },
 ];
 
@@ -77,8 +77,10 @@ function sleep(ms: number): Promise<void> {
 export async function showWebChatPreloadScreen(
   chatShell: HTMLElement,
   signal?: { aborted: boolean },
+  targetLabel?: string,
 ): Promise<void> {
   const doc = chatShell.ownerDocument!;
+  const siteName = targetLabel || "ChatGPT";
 
   // Remove any leftover preload overlay
   chatShell.querySelector(".llm-webchat-preload")?.remove();
@@ -87,7 +89,7 @@ export async function showWebChatPreloadScreen(
   const overlay = el(doc, "div", "llm-webchat-preload");
   const content = el(doc, "div", "llm-webchat-preload-content");
   const title = el(doc, "div", "llm-webchat-preload-title", {
-    textContent: "Connecting to ChatGPT\u2026",
+    textContent: `Connecting to ${siteName}\u2026`,
   });
 
   const stepsContainer = el(doc, "div", "llm-webchat-preload-steps");

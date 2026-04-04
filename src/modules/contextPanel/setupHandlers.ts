@@ -6198,7 +6198,13 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
                   const token = { aborted: false };
                   webchatPreloadAbort = token;
                   const { showWebChatPreloadScreen } = await import("../../webchat/preloadScreen");
-                  await showWebChatPreloadScreen(chatShellEl, token);
+                  const { getWebChatTargetByModelName } = await import("../../webchat/types");
+                  const { relaySetActiveTarget } = await import("../../webchat/relayServer");
+                  const webchatProfile = getSelectedProfile();
+                  const webchatTargetEntry = getWebChatTargetByModelName(webchatProfile?.model || "");
+                  // Tell the relay (and thereby the extension) which site to use
+                  if (webchatTargetEntry?.id) relaySetActiveTarget(webchatTargetEntry.id);
+                  await showWebChatPreloadScreen(chatShellEl, token, webchatTargetEntry?.label);
                 } catch {
                   // Preload failed or was aborted — still apply UI (dot will show status)
                 } finally {
@@ -6488,7 +6494,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       reasoningMenu.innerHTML = "";
       appendDropdownInstruction(
         reasoningMenu,
-        "ChatGPT mode",
+        "Webchat mode",
         "llm-reasoning-menu-section",
       );
       const currentSel = selectedReasoningCache.get(item.id) || "none";
@@ -6623,9 +6629,22 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       }
     }
 
-    // Mode chip: show "chatgpt.com" with connection dot, or restore original
+    // Mode chip: show target site name with connection dot, or restore original
     if (modeChipBtn) {
       if (isWebChat) {
+        // Resolve the target label from the current model name
+        let webchatChipLabel = "chatgpt.com";
+        let webchatChipTitle = "WebChat Sync";
+        try {
+          const { currentModel } = getSelectedModelInfo();
+          const { getWebChatTargetByModelName } = require("../../webchat/types") as typeof import("../../webchat/types");
+          const entry = getWebChatTargetByModelName(currentModel || "");
+          if (entry) {
+            webchatChipLabel = entry.modelName;
+            webchatChipTitle = `${entry.label} Web Sync`;
+          }
+        } catch { /* fallback to defaults */ }
+
         let dot = modeChipBtn.querySelector(".llm-webchat-dot") as HTMLElement | null;
         if (!dot) {
           dot = (modeChipBtn.ownerDocument as Document).createElement("span");
@@ -6634,9 +6653,9 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
         modeChipBtn.textContent = "";
         modeChipBtn.appendChild(dot);
         modeChipBtn.appendChild(
-          (modeChipBtn.ownerDocument as Document).createTextNode(" chatgpt.com"),
+          (modeChipBtn.ownerDocument as Document).createTextNode(` ${webchatChipLabel}`),
         );
-        modeChipBtn.title = "ChatGPT Web Sync";
+        modeChipBtn.title = webchatChipTitle;
         modeChipBtn.style.cursor = "default";
         startWebChatConnectionCheck(dot);
       } else {
@@ -6726,7 +6745,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     // Section header
     const header = createElement(doc, "div", "llm-history-menu-section-block", {});
     const title = createElement(doc, "div", "llm-history-menu-section", {
-      textContent: "ChatGPT Conversations",
+      textContent: "WebChat Conversations",
     });
     title.style.padding = "6px 10px";
     title.style.fontSize = "10px";
@@ -6755,11 +6774,25 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     // Tell the extension to scrape history NOW
     relaySetCommand({ type: "SCRAPE_HISTORY" });
 
-    // Poll for results — the extension scrapes ChatGPT sidebar and pushes via HISTORY_UPDATE
+    // Resolve active webchat target for filtering
+    const { getWebChatTargetByModelName } = await import("../../webchat/types");
+    const { currentModel: historyModel } = getSelectedModelInfo();
+    const historyTargetEntry = getWebChatTargetByModelName(historyModel || "");
+    const targetHostname = historyTargetEntry?.modelName || null; // e.g. "chatgpt.com" or "chat.deepseek.com"
+
+    // Poll for results — the extension scrapes the sidebar and pushes via HISTORY_UPDATE
     let sessions: Array<{ id: string; title: string; chatUrl: string | null }> = [];
     for (let i = 0; i < 10; i++) {
       try {
-        sessions = await fetchChatHistory(host);
+        let allSessions = await fetchChatHistory(host);
+        // Filter to only show conversations from the active target site
+        if (targetHostname) {
+          allSessions = allSessions.filter((s) => {
+            try { return s.chatUrl ? new URL(s.chatUrl).hostname === targetHostname : false; }
+            catch { return false; }
+          });
+        }
+        sessions = allSessions;
       } catch { /* relay not reachable */ }
       if (sessions.length > 0) break;
       await new Promise((r) => setTimeout(r, 1000));
@@ -6805,8 +6838,16 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
         textContent: session.title || "Untitled",
       });
       titleDiv.title = session.title || "";
+      // Determine site label from the chat URL
+      let siteLabel = "webchat";
+      try {
+        if (session.chatUrl) {
+          const url = new URL(session.chatUrl);
+          siteLabel = url.hostname;
+        }
+      } catch { /* use default */ }
       const subtitle = createElement(doc, "div", "llm-history-menu-row-subtitle", {
-        textContent: "chatgpt.com",
+        textContent: siteLabel,
       });
       btn.appendChild(titleDiv);
       btn.appendChild(subtitle);
@@ -6819,16 +6860,24 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
           try {
             // Clear current chat and show loading indicator in the chat panel
             const key = getConversationKey(item);
+            // Derive model name from the session's chat URL
+            let loadModelName = "chatgpt.com";
+            try {
+              if (session.chatUrl) {
+                const loadUrl = new URL(session.chatUrl);
+                if (loadUrl.hostname === "chat.deepseek.com") loadModelName = "chat.deepseek.com";
+              }
+            } catch { /* default */ }
             chatHistory.set(key, [{
               role: "assistant" as const,
-              text: `Loading conversation: **${session.title || "Untitled"}**\n\nFetching messages from ChatGPT…`,
+              text: `Loading conversation: **${session.title || "Untitled"}**\n\nFetching messages…`,
               timestamp: Date.now(),
-              modelName: "chatgpt.com",
-              modelProviderLabel: "ChatGPT",
+              modelName: loadModelName,
+              modelProviderLabel: "WebChat",
               streaming: true,
             }]);
             refreshChatPreservingScroll();
-            if (status) setStatus(status, "Loading conversation from ChatGPT…", "sending");
+            if (status) setStatus(status, "Loading conversation…", "sending");
 
             const { loadChatSession } = await import("../../webchat/client");
             resetWebChatPdfUploadedForCurrentConversation();
@@ -6845,8 +6894,8 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
                   role: m.kind === "user" ? "user" : "assistant",
                   text: m.text || "",
                   timestamp: m.timestamp ? new Date(m.timestamp).getTime() : Date.now(),
-                  modelName: m.kind === "bot" ? "chatgpt.com" : undefined,
-                  modelProviderLabel: m.kind === "bot" ? "ChatGPT" : undefined,
+                  modelName: m.kind === "bot" ? loadModelName : undefined,
+                  modelProviderLabel: m.kind === "bot" ? "WebChat" : undefined,
                   reasoningDetails: m.thinking || undefined,
                 });
               }
@@ -6855,7 +6904,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
               if (status) {
                 setStatus(
                   status,
-                  "No messages found in the selected ChatGPT conversation",
+                  "No messages found in the selected conversation",
                   "ready",
                 );
               }
@@ -6911,7 +6960,12 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
             const token = { aborted: false };
             webchatPreloadAbort = token;
             const { showWebChatPreloadScreen } = await import("../../webchat/preloadScreen");
-            await showWebChatPreloadScreen(chatShellEl, token);
+            const { getWebChatTargetByModelName } = await import("../../webchat/types");
+            const { relaySetActiveTarget: relaySetTarget2 } = await import("../../webchat/relayServer");
+            const { currentModel: coldModel } = getSelectedModelInfo();
+            const coldTargetEntry = getWebChatTargetByModelName(coldModel || "");
+            if (coldTargetEntry?.id) relaySetTarget2(coldTargetEntry.id);
+            await showWebChatPreloadScreen(chatShellEl, token, coldTargetEntry?.label);
           } catch {
             // Preload failed or was aborted — dot will show connection status
           } finally {

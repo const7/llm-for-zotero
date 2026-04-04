@@ -338,15 +338,17 @@ export function t(en: string): string {
  * Returns the welcome screen HTML, translated if needed.
  * Centralized here to keep the full welcome text in one place.
  */
-export function getWebChatWelcomeHtml(): string {
+export function getWebChatWelcomeHtml(targetLabel?: string, targetDomain?: string): string {
+  const label = targetLabel || "WebChat";
+  const domain = targetDomain || "the chat site";
   if (getEffectiveLocale().startsWith("zh")) {
     return `
       <div class="llm-welcome">
         <div class="llm-welcome-icon">🌐</div>
         <div class="llm-welcome-text">
-          <div class="llm-welcome-title">ChatGPT Web Sync 模式</div>
+          <div class="llm-welcome-title">${label} Web Sync 模式</div>
           <ul class="llm-welcome-list">
-            <li>你的问题将通过浏览器扩展直接发送到 <strong>chatgpt.com</strong>。请确保扩展已安装并且 ChatGPT 标签页已打开。</li>
+            <li>你的问题将通过浏览器扩展直接发送到 <strong>${domain}</strong>。请确保扩展已安装并且对应的标签页已打开。</li>
             <li>右键点击论文标签可切换是否发送 <strong>PDF 全文</strong>。紫色 = 发送，灰色 = 跳过。</li>
             <li>使用截图按钮可附加<strong>图片上下文</strong>到你的消息中。</li>
             <li>点击 <strong>Exit</strong> 按钮可退出 WebChat 模式，恢复到常规 API 模式。</li>
@@ -359,9 +361,9 @@ export function getWebChatWelcomeHtml(): string {
     <div class="llm-welcome">
       <div class="llm-welcome-icon">🌐</div>
       <div class="llm-welcome-text">
-        <div class="llm-welcome-title">ChatGPT Web Sync mode</div>
+        <div class="llm-welcome-title">${label} Web Sync mode</div>
         <ul class="llm-welcome-list">
-          <li>Your questions are sent directly to <strong>chatgpt.com</strong> via the browser extension. Make sure the extension is installed and a ChatGPT tab is open.</li>
+          <li>Your questions are sent directly to <strong>${domain}</strong> via the browser extension. Make sure the extension is installed and a ${label} tab is open.</li>
           <li>Right-click a paper chip to toggle sending its <strong>full PDF</strong>. Purple = send, grey = skip.</li>
           <li>Use the screenshot button to attach <strong>figure context</strong> to your message.</li>
           <li>Click the <strong>Exit</strong> button to leave WebChat mode and return to regular API mode.</li>

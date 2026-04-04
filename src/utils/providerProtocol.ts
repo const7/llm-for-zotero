@@ -80,9 +80,9 @@ export const PROVIDER_PROTOCOL_SPECS: ProviderProtocolSpec[] = [
   },
   {
     id: "web_sync",
-    label: "Web Sync (ChatGPT)",
+    label: "Web Sync (ChatGPT / DeepSeek)",
     helperText:
-      "Relay questions to ChatGPT via the browser extension web-sync bridge.",
+      "Relay questions to ChatGPT or DeepSeek via the browser extension web-sync bridge.",
     streaming: false,
     toolCalls: false,
     multimodal: true,

@@ -1513,7 +1513,7 @@ function getWebChatRunStateLabel(message: Message): string | null {
   if (message.webchatRunState === "incomplete") {
     switch (message.webchatCompletionReason) {
       case "forced_cancel":
-        return "Partial only — ChatGPT stayed busy and needed a forced stop";
+        return "Partial only — chat stayed busy and needed a forced stop";
       case "timeout":
         return "Partial only — final answer was not verified before timeout";
       case "error":
@@ -2933,7 +2933,12 @@ export async function sendQuestion(opts: import("./types").SendQuestionOptions) 
   if (effectiveRequestConfig.providerProtocol === "web_sync") {
     const webChatQueueRefresh = createQueuedRefresh(refreshChatSafely);
     try {
-      setStatusSafely("Sending to ChatGPT…", "sending");
+      // Determine webchat target from the model name (e.g., "chatgpt.com" → "chatgpt", "chat.deepseek.com" → "deepseek")
+      const { getWebChatTargetByModelName } = await import("../../webchat/types");
+      const webchatTargetEntry = getWebChatTargetByModelName(effectiveRequestConfig.model || "");
+      const webchatTarget = webchatTargetEntry?.id || "chatgpt";
+      const webchatLabel = webchatTargetEntry?.label || "ChatGPT";
+      setStatusSafely(`Sending to ${webchatLabel}…`, "sending");
       const { sendWebChatQuestion } = await import("../../webchat/pipeline");
 
       // Note: `question` already includes selected text context via
@@ -2953,6 +2958,7 @@ export async function sendQuestion(opts: import("./types").SendQuestionOptions) 
         forceNewChat: opts.webchatForceNewChat === true,
         images: screenshotImagesForMessage.length > 0 ? screenshotImagesForMessage : undefined,
         chatgptMode,
+        target: webchatTarget,
         signal: currentAbortController?.signal,
         onAnswerSnapshot: (text, snapshot) => {
           applyWebChatAnswerSnapshot(assistantMessage, text, snapshot);
@@ -3391,10 +3397,14 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
 
   if (history.length === 0) {
     // [webchat] Show webchat-specific welcome instead of generic instructions
-    const protocol = resolveEffectiveRequestConfig({ item }).providerProtocol;
-    chatBox.innerHTML = protocol === "web_sync"
-      ? getWebChatWelcomeHtml()
-      : getWelcomeHtml();
+    const effectiveConfig = resolveEffectiveRequestConfig({ item });
+    if (effectiveConfig.providerProtocol === "web_sync") {
+      const { getWebChatTargetByModelName } = require("../../webchat/types") as typeof import("../../webchat/types");
+      const targetEntry = getWebChatTargetByModelName(effectiveConfig.model || "");
+      chatBox.innerHTML = getWebChatWelcomeHtml(targetEntry?.label, targetEntry?.modelName);
+    } else {
+      chatBox.innerHTML = getWelcomeHtml();
+    }
     return;
   }
 
@@ -4275,7 +4285,7 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
         const refreshBtn = doc.createElement("button") as HTMLButtonElement;
         refreshBtn.className = "llm-message-webchat-refresh";
         refreshBtn.textContent = "\u21BB";
-        refreshBtn.title = "Re-fetch this conversation from ChatGPT";
+        refreshBtn.title = "Re-fetch this conversation from webchat";
         refreshBtn.addEventListener("click", async () => {
           refreshBtn.disabled = true;
           try {
@@ -4291,19 +4301,19 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
                 role: (m.kind === "user" ? "user" : "assistant") as "user" | "assistant",
                 text: m.text || "",
                 timestamp: Date.now(),
-                modelName: m.kind === "bot" ? "chatgpt.com" : undefined,
-                modelProviderLabel: m.kind === "bot" ? "ChatGPT" : undefined,
+                modelName: m.kind === "bot" ? (msg.modelName || "chatgpt.com") : undefined,
+                modelProviderLabel: m.kind === "bot" ? "WebChat" : undefined,
                 reasoningDetails: m.thinking || undefined,
               }));
               chatHistory.set(conversationKey, refreshed);
               refreshChat(body, item);
             } else {
-              refreshBtn.title = "No messages found — ChatGPT may be on a different page";
-              setTimeout(() => { refreshBtn.title = "Re-fetch this conversation from ChatGPT"; refreshBtn.disabled = false; }, 2000);
+              refreshBtn.title = "No messages found — chat site may be on a different page";
+              setTimeout(() => { refreshBtn.title = "Re-fetch this conversation from webchat"; refreshBtn.disabled = false; }, 2000);
             }
           } catch {
             refreshBtn.title = "Refresh failed";
-            setTimeout(() => { refreshBtn.title = "Re-fetch this conversation from ChatGPT"; refreshBtn.disabled = false; }, 2000);
+            setTimeout(() => { refreshBtn.title = "Re-fetch this conversation from webchat"; refreshBtn.disabled = false; }, 2000);
           }
         });
         webchatStatusRow.appendChild(refreshBtn);

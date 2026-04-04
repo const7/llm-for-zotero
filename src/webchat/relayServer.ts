@@ -40,9 +40,10 @@ export function getRelayBaseUrl(): string {
 // ---------------------------------------------------------------------------
 
 interface PendingCommand {
-  type: "NEW_CHAT" | "LOAD_CHAT" | "DELETE_CHAT";
+  type: "NEW_CHAT" | "LOAD_CHAT" | "DELETE_CHAT" | "SCRAPE_HISTORY";
   chatUrl?: string;
   chatId?: string;
+  target?: string;
 }
 
 export interface ScrapedChatMessage {
@@ -102,6 +103,8 @@ export interface RelayState {
     pdf_filename: string | null;
     images: string[] | null;
     chatgpt_mode: string | null;
+    /** Which webchat site to target: "chatgpt" | "deepseek". */
+    target: string | null;
     force_new_chat: boolean;
     seq: number;
     attempt: number;
@@ -143,6 +146,8 @@ export interface RelayState {
   reported_mode: string | null;
   /** [webchat] Set by cancel button — polled separately so it works during active pipeline. */
   stopRequested: boolean;
+  /** [webchat] Active target site: "chatgpt" | "deepseek". Set by the plugin when submitting queries. */
+  active_target: string | null;
 }
 
 // Use Zotero object as shared namespace — guaranteed same across all contexts
@@ -180,6 +185,7 @@ if (!Z._webchatRelay) {
         pdf_filename: null,
         images: null,
         chatgpt_mode: null,
+        target: null,
         force_new_chat: false,
         seq: 0,
         attempt: 0,
@@ -200,6 +206,7 @@ if (!Z._webchatRelay) {
       pendingCommand: null,
       reported_mode: null,
       stopRequested: false,
+      active_target: null,
     },
     mirroredHistory: [],
     scrapedMessages: null,
@@ -249,6 +256,7 @@ function resetState() {
     pdf_filename: null,
     images: null,
     chatgpt_mode: null,
+    target: null,
     force_new_chat: false,
     seq: prevSeq,
     attempt: 0,
@@ -860,7 +868,7 @@ const SubmitResponseEndpoint = createEndpoint(["POST"], (opts) => {
 // GET /heartbeat — lightweight connectivity check for the extension
 const HeartbeatEndpoint = createEndpoint(["GET"], () => {
   _store().lastExtensionContact = Date.now();
-  return jsonReply({ ok: true, ts: Date.now(), seq: S().query.seq });
+  return jsonReply({ ok: true, ts: Date.now(), seq: S().query.seq, active_target: S().active_target || null });
 });
 
 // GET /debug — minimal endpoint used by the browser extension for port discovery
@@ -873,9 +881,9 @@ const PollCommandEndpoint = createEndpoint(["GET"], () => {
   const cmd = S().pendingCommand;
   if (cmd) {
     S().pendingCommand = null;
-    return jsonReply({ command: cmd });
+    return jsonReply({ command: cmd, active_target: S().active_target || null });
   }
-  return jsonReply({ command: null });
+  return jsonReply({ command: null, active_target: S().active_target || null });
 });
 
 // GET /poll_stop — lightweight endpoint polled during active pipeline
@@ -1025,6 +1033,7 @@ export function relaySubmitQuery(opts: {
   pdf_filename?: string | null;
   images?: string[] | null;
   chatgpt_mode?: string | null;
+  target?: string | null;
   force_new_chat?: boolean;
 }): { ok: boolean; seq: number; error?: string } {
   expireStaleClaimIfNeeded();
@@ -1048,6 +1057,8 @@ export function relaySubmitQuery(opts: {
   S().query.pdf_filename = opts.pdf_filename || null;
   S().query.images = opts.images || null;
   S().query.chatgpt_mode = opts.chatgpt_mode || null;
+  S().query.target = opts.target || null;
+  S().active_target = opts.target || null;
   S().query.force_new_chat = opts.force_new_chat === true;
   S().query.attempt = 0;
   S().query.phase = "pending";
@@ -1214,10 +1225,16 @@ export function relayPollResponse(): {
 }
 
 /** Send new chat command directly (no HTTP). */
-export function relayNewChat(): void {
+export function relayNewChat(target?: string): void {
   resetState();
+  if (target) S().active_target = target;
   S().turn_status = "navigating";
   S().pendingCommand = { type: "NEW_CHAT" };
+}
+
+/** Set the active webchat target without sending a command. */
+export function relaySetActiveTarget(target: string): void {
+  S().active_target = target;
 }
 
 /** Set a pending command directly (no HTTP). */

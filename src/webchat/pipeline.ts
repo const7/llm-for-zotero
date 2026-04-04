@@ -83,14 +83,16 @@ export type WebChatSendOptions = {
   item: Zotero.Item;
   question: string;
   host: string;
-  /** When true, attach the paper PDF to the ChatGPT query. */
+  /** When true, attach the paper PDF to the query. */
   sendPdf?: boolean;
-  /** When true, force the next query into a fresh ChatGPT conversation. */
+  /** When true, force the next query into a fresh conversation. */
   forceNewChat?: boolean;
-  /** Screenshot images as base64 data URLs to attach to ChatGPT. */
+  /** Screenshot images as base64 data URLs to attach. */
   images?: string[];
   /** ChatGPT mode: "instant", "thinking_standard", or "thinking_extended". */
   chatgptMode?: string;
+  /** Which webchat target to use: "chatgpt" | "deepseek". */
+  target?: string;
   signal?: AbortSignal;
   onAnswerSnapshot: (text: string, snapshot: WebChatAnswerSnapshot) => void;
   onThinkingSnapshot?: (
@@ -117,6 +119,7 @@ export async function sendWebChatQuestion(
     forceNewChat,
     images,
     chatgptMode,
+    target,
     signal,
     onAnswerSnapshot,
     onThinkingSnapshot,
@@ -156,6 +159,7 @@ export async function sendWebChatQuestion(
     images,
     chatgptMode,
     forceNewChat,
+    target,
   );
 
   // --- Poll for streaming response ---

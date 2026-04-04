@@ -73,6 +73,7 @@ export async function submitQuery(
   images?: string[],
   chatgptMode?: string,
   forceNewChat?: boolean,
+  target?: string,
 ): Promise<SubmitQueryResult> {
   if (signal?.aborted) throw createAbortError();
 
@@ -82,13 +83,14 @@ export async function submitQuery(
     pdf_filename: pdfFilename,
     images: images || null,
     chatgpt_mode: chatgptMode || null,
+    target: target || null,
     force_new_chat: forceNewChat === true,
   });
 
   if (!result.ok) {
     if (result.error === "pipeline_busy") {
       throw new Error(
-        "ChatGPT pipeline is busy. Please wait for the current query to finish.",
+        "Webchat pipeline is busy. Please wait for the current query to finish.",
       );
     }
     throw new Error(result.error || "submit_query failed");
@@ -204,7 +206,7 @@ export async function waitForRemoteReady(
     const state = buildRemoteState();
 
     if (state.turnStatus === "error" || state.turnStatus === "incomplete") {
-      throw new Error("ChatGPT conversation did not reach a ready state.");
+      throw new Error("Chat conversation did not reach a ready state.");
     }
 
     const urlMatches =
@@ -217,7 +219,7 @@ export async function waitForRemoteReady(
     await new Promise((r) => setTimeout(r, REMOTE_READY_POLL_INTERVAL_MS));
   }
 
-  throw new Error("Timed out waiting for ChatGPT conversation to load.");
+  throw new Error("Timed out waiting for chat conversation to load.");
 }
 
 export async function waitForRemoteReadyIfNavigating(
@@ -429,7 +431,7 @@ export async function pollForResponse(
           });
         }
         if (!finalText.trim()) {
-          throw new Error("ChatGPT finished without a visible final answer.");
+          throw new Error("Chat finished without a visible final answer.");
         }
         return withRemoteState({
           text: finalText,
@@ -552,7 +554,7 @@ export async function pollForResponse(
         });
       }
       if (!finalText.trim()) {
-        throw new Error("ChatGPT finished without a visible final answer.");
+        throw new Error("Chat finished without a visible final answer.");
       }
       return withRemoteState({
         text: finalText,
@@ -586,13 +588,13 @@ export async function pollForResponse(
     }
 
     if (data.status === "error") {
-      throw new Error("ChatGPT pipeline encountered an error.");
+      throw new Error("Webchat pipeline encountered an error.");
     }
 
     await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
   }
 
-  throw new Error("Timed out waiting for ChatGPT response (5 min).");
+  throw new Error("Timed out waiting for webchat response (5 min).");
 }
 
 // ---------------------------------------------------------------------------

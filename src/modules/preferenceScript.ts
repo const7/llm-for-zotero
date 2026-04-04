@@ -644,8 +644,10 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
         group.authMode = nextAuthMode;
         if (nextAuthMode === "webchat") {
           group.providerProtocol = "web_sync";
-          // Force model to chatgpt.com and collapse to single entry
-          group.models = [{ ...group.models[0], model: "chatgpt.com" }];
+          // Set default webchat model to chatgpt.com (user can change it)
+          if (!group.models[0]?.model || !["chatgpt.com", "chat.deepseek.com"].includes(group.models[0].model)) {
+            group.models = [{ ...group.models[0], model: "chatgpt.com" }];
+          }
         } else if (nextAuthMode === "codex_auth") {
           group.providerProtocol = "codex_responses";
         } else if (nextAuthMode === "copilot_auth") {
@@ -665,10 +667,11 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
       });
       const authModeHelperText =
         group.authMode === "webchat"
-          ? t("Relay questions to ChatGPT via the Sync for Zotero browser extension. "
+          ? t("Relay questions to ChatGPT or DeepSeek via the Sync for Zotero browser extension. "
             + "Download extension: github.com/yilewang/sync-for-zotero → Releases. "
             + "Unzip, open chrome://extensions, enable Developer Mode, click \"Load unpacked\", select the extension folder. "
-            + "Keep a ChatGPT tab open while using WebChat mode.")
+            + "Keep a ChatGPT or DeepSeek tab open while using WebChat mode. "
+            + "Model name: chatgpt.com or chat.deepseek.com.")
           : group.authMode === "copilot_auth"
             ? t(COPILOT_API_HELPER_TEXT)
             : t("codex auth reuses local `codex login` credentials from ~/.codex/auth.json");
@@ -1150,14 +1153,7 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
           " box-sizing: border-box; background: Field; color: FieldText;",
         ) as HTMLInputElement;
         modelInput.type = "text";
-        // [webchat] Force model name to "chatgpt.com" and lock it
-        if (group.authMode === "webchat") {
-          modelEntry.model = "chatgpt.com";
-          modelInput.value = "chatgpt.com";
-          modelInput.readOnly = true;
-          modelInput.style.opacity = "0.6";
-          modelInput.style.cursor = "default";
-        } else {
+        if (group.authMode !== "webchat") {
           modelInput.value = modelEntry.model;
         }
         modelInput.placeholder = modelIndex === 0 ? profile.modelPlaceholder : "";
@@ -1167,12 +1163,40 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
 
         const advGearBtn = iconBtn(doc, "⚙", t("Advanced options"));
 
-        mainRow.append(modelInput, testBtn, advGearBtn);
-
-        // [webchat] Hide test and gear buttons — not applicable for webchat
+        // [webchat] Replace text input with a dropdown for webchat model selection
         if (group.authMode === "webchat") {
+          const validWebchatModels = [
+            { value: "chatgpt.com", label: "chatgpt.com (ChatGPT)" },
+            { value: "chat.deepseek.com", label: "chat.deepseek.com (DeepSeek)" },
+          ];
+          if (!validWebchatModels.some((m) => m.value === modelEntry.model)) {
+            modelEntry.model = "chatgpt.com";
+          }
+          modelInput.style.display = "none";
           testBtn.style.display = "none";
           advGearBtn.style.display = "none";
+
+          const modelSelect = el(
+            doc,
+            "select",
+            "flex: 1; min-width: 0; padding: 6px 10px; font-size: 13px;" +
+            " border: 1px solid var(--stroke-secondary, #c8c8c8); border-radius: 6px;" +
+            " box-sizing: border-box; background: Field; color: FieldText;",
+          ) as HTMLSelectElement;
+          for (const opt of validWebchatModels) {
+            const option = doc.createElement("option");
+            option.value = opt.value;
+            option.textContent = opt.label;
+            if (opt.value === modelEntry.model) option.selected = true;
+            modelSelect.appendChild(option);
+          }
+          modelSelect.addEventListener("change", () => {
+            modelEntry.model = modelSelect.value;
+            persistGroups(groups);
+          });
+          mainRow.append(modelInput, modelSelect);
+        } else {
+          mainRow.append(modelInput, testBtn, advGearBtn);
         }
 
         if (group.models.length > 1) {
@@ -1388,7 +1412,7 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
         "border: none; border-top: 1px solid var(--stroke-secondary, #c8c8c8); margin: 0;",
       );
       if (group.authMode === "webchat") {
-        // [webchat] Minimal layout: only auth mode + model names (locked to "chatgpt.com")
+        // [webchat] Minimal layout: only auth mode + model names (webchat target selector)
         cardBody.append(
           authModeWrap,
           divider,
