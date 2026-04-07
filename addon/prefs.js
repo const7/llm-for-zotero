@@ -18,4 +18,7 @@ pref("maxTokensTertiary", "4096");
 pref("temperatureQuaternary", "0.3");
 pref("maxTokensQuaternary", "4096");
 pref("enableAgentMode", false);
+pref("obsidianVaultPath", "");
+pref("obsidianTargetFolder", "Zotero Notes");
+pref("obsidianNoteTemplate", "");
 pref("locale", "auto");

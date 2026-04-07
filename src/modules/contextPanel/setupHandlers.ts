@@ -6208,6 +6208,14 @@ export function setupHandlers(
               selectedImageCache.delete(item.id);
               updateImagePreviewPreservingScroll();
             }
+            // Set active target BEFORE applyWebChatModeUI so the hook's
+            // renderWebChatSidebar() reads the correct target for filtering.
+            try {
+              const { getWebChatTargetByModelName: getEntryTarget } = require("../../webchat/types") as typeof import("../../webchat/types");
+              const { relaySetActiveTarget: setTarget } = require("../../webchat/relayServer") as typeof import("../../webchat/relayServer");
+              const earlyTargetEntry = getEntryTarget(entry.model || "");
+              if (earlyTargetEntry?.id) setTarget(earlyTargetEntry.id);
+            } catch { /* modules not yet loaded — async path below will handle it */ }
             // Apply webchat UI immediately so model button is disabled during preload
             applyWebChatModeUI();
             void (async () => {
@@ -6980,6 +6988,16 @@ export function setupHandlers(
   updateImagePreviewPreservingScroll();
   updateSelectedTextPreviewPreservingScroll();
   syncModelFromPrefs();
+  // Set active_target before applyWebChatModeUI so sidebar filters by the correct site
+  try {
+    if (isWebChatMode()) {
+      const { getWebChatTargetByModelName: getColdTarget } = require("../../webchat/types") as typeof import("../../webchat/types");
+      const { relaySetActiveTarget: setColdTarget } = require("../../webchat/relayServer") as typeof import("../../webchat/relayServer");
+      const { currentModel: coldStartModel } = getSelectedModelInfo();
+      const coldEntry = getColdTarget(coldStartModel || "");
+      if (coldEntry?.id) setColdTarget(coldEntry.id);
+    }
+  } catch { /* isWebChatMode may not be ready */ }
   applyWebChatModeUI();
   // [webchat] Cold startup → show preload screen so user knows they're in webchat mode
   try {

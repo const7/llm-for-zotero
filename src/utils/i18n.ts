@@ -244,6 +244,21 @@ const zhCN: Record<string, string> = {
   "Enter an API key first": "请先输入 API 密钥",
   "Testing…": "测试中…",
   "✓ Connection successful": "✓ 连接成功",
+  // Obsidian integration
+  "Obsidian Integration": "Obsidian 集成",
+  "Write notes from your Zotero papers directly to your Obsidian vault. Configure the vault path and target folder below.":
+    "将 Zotero 论文笔记直接写入 Obsidian 知识库。在下方配置知识库路径和目标文件夹。",
+  "Vault Path": "知识库路径",
+  "Absolute path to your Obsidian vault folder": "Obsidian 知识库文件夹的绝对路径",
+  "Target Folder": "目标文件夹",
+  "Subfolder within the vault for Zotero notes": "知识库内用于存放 Zotero 笔记的子文件夹",
+  "Note Template": "笔记模板",
+  "Customize the template used when writing notes to Obsidian. Use {{title}}, {{date}}, {{content}} as placeholders.":
+    "自定义写入 Obsidian 时使用的笔记模板。使用 {{title}}、{{date}}、{{content}} 作为占位符。",
+  "Reset to Default": "恢复默认",
+  "Test Write Access": "测试写入权限",
+  "Write access verified": "✓ 写入权限已验证",
+  "Enter a vault path first": "请先输入知识库路径",
   "Each provider has an auth mode, API URL, and one or more model variants.": "每个服务商有一个认证模式、API URL 和一个或多个模型变体。",
   "Choose a preset above, or switch to Customized to enter a full base URL or endpoint manually.": '选择上方的预设，或切换到"自定义"以手动输入完整的基础 URL 或端点。',
   "codex auth usually uses https://chatgpt.com/backend-api/codex/responses": "codex 认证通常使用 https://chatgpt.com/backend-api/codex/responses",
@@ -453,7 +468,7 @@ export function getStandaloneLibraryChatStartPageHtml(): string {
             <li><strong>偏好设置 → MinerU</strong>：将 PDF 解析为 Markdown + 图片<span class="llm-rec-reason">（MD 是 LLM 的语言；可以利用解析出的图片写出更好的笔记；节省 token）</span></li>
             <li>启用 <strong>Agent 模式</strong>，让助手自主完成研究任务</li>
             <li>使用<strong>高智能模型</strong>：如 Codex、GPT-5.4 等</li>
-            <li>在偏好设置中配置 <strong>Obsidian 路径</strong><em>（即将推出）</em></li>
+            <li>在偏好设置中配置 <strong>Obsidian 路径</strong>（设置 → Agent 标签页）</li>
           </ol>
         </div>
       </div>
@@ -469,7 +484,7 @@ export function getStandaloneLibraryChatStartPageHtml(): string {
           <li><strong>Preferences → MinerU</strong>: parse your PDFs to Markdown + images<span class="llm-rec-reason"> (MD is the language of LLMs; enables better notes with parsed images; saves tokens)</span></li>
           <li>Activate <strong>Agent mode</strong> for autonomous research</li>
           <li>Use an <strong>intelligent model</strong>: Codex, GPT-5.4, or similar high-intelligence models</li>
-          <li>Set up <strong>Obsidian path</strong> in Preferences <em>(coming soon)</em></li>
+          <li>Set up <strong>Obsidian path</strong> in Preferences (Settings → Agent tab)</li>
         </ol>
       </div>
     </div>

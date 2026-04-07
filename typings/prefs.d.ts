@@ -27,6 +27,9 @@ declare namespace _ZoteroTypes {
       "temperatureQuaternary": string;
       "maxTokensQuaternary": string;
       "enableAgentMode": boolean;
+      "obsidianVaultPath": string;
+      "obsidianTargetFolder": string;
+      "obsidianNoteTemplate": string;
       "locale": string;
     };
   }

@@ -24,6 +24,7 @@ import evidenceBasedQaRaw from "./evidence-based-qa.md";
 import noteFromPaperRaw from "./note-from-paper.md";
 import noteEditingRaw from "./note-editing.md";
 import literatureReviewRaw from "./literature-review.md";
+import writeToObsidianRaw from "./write-to-obsidian.md";
 
 export { matchesSkill } from "./skillLoader";
 export type { AgentSkill } from "./skillLoader";
@@ -38,6 +39,7 @@ const BUILTIN_SKILLS: AgentSkill[] = [
   parseSkill(noteFromPaperRaw),
   parseSkill(noteEditingRaw),
   parseSkill(literatureReviewRaw),
+  parseSkill(writeToObsidianRaw),
 ];
 
 /** User-defined skills loaded at runtime from the data directory. */

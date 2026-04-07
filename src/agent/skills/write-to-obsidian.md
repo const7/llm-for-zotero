@@ -1,0 +1,54 @@
+---
+id: write-to-obsidian
+match: /\b(write|save|export|send)\b.*\bobsidian\b/i
+match: /\bobsidian\b.*\b(note|write|save|export)\b/i
+match: /\bto\s+obsidian\b/i
+match: /\bobsidian\b.*\bvault\b/i
+---
+
+## Writing Notes to Obsidian
+
+When the user asks to write, save, or export content to Obsidian, follow this workflow.
+This skill is content-agnostic — it works for any note type: single paper summary, literature review, multi-paper comparison, research notes, or free-form writing.
+
+### Prerequisites
+- The user's Obsidian vault path and target folder are provided in the system prompt under "Obsidian configuration". If missing, tell the user to configure Obsidian in the plugin preferences (Settings > Agent tab).
+
+### Recipe
+
+**Step 1 — Gather content:**
+- For a single paper: read via `file_io(read, '{mineruCacheDir}/full.md')` if MinerU available, otherwise `read_paper`.
+- For multi-paper notes (reviews, comparisons): use `query_library` + `read_paper`/`file_io` for each paper.
+- For free-form notes: use whatever the user provides or requests.
+
+**Step 2 — Look up citation keys (if citing papers):**
+- Use `read_library(sections:['metadata'])` to get the `citationKey` (or `citekey`) for each referenced paper.
+- In the note body, cite papers using **Pandoc citation syntax**: `[@citekey]` (e.g., `[@smith2024deep]`).
+- This renders as proper citations in Obsidian via Zotero Integration or Pandoc plugins.
+- Optionally add a `## References` section at the end listing full citations.
+
+**Step 3 — Compose the Obsidian note:**
+- Use the note template from the system prompt as the skeleton.
+- Fill in `{{title}}` with the note title (paper title, review topic, or user-provided title).
+- Fill in `{{date}}` with today's date in YYYY-MM-DD format.
+- Fill in `{{content}}` with the full note body.
+- Add extra YAML frontmatter fields as appropriate for the content type (e.g., `authors`, `doi`, `journal` for paper notes; nothing extra for free-form).
+- Use standard Markdown formatting compatible with Obsidian.
+
+**Step 4 — Copy figures (if MinerU cache has images and content uses them):**
+- Use `run_command` to copy image files from `{mineruCacheDir}/images/` to `{obsidianTargetPath}/assets/` or a subfolder.
+- Reference copied images in the note using relative paths: `![Figure 1](assets/fig1.png)`.
+
+**Step 5 — Write the note file:**
+- Construct the file path: `{vaultPath}/{targetFolder}/{sanitized-title}.md`.
+- Sanitize the title for filesystem use: replace special characters with hyphens, limit to 80 chars.
+- Call `file_io(write, filePath, noteContent)`.
+
+### Key rules
+- Always use `file_io` for writing — never output the full note text in chat.
+- Use the user's configured template. If no template is configured, use sensible defaults with YAML frontmatter.
+- Use `[@citekey]` Pandoc syntax when referencing papers — look up citekeys from Zotero metadata.
+- If writing fails, report the error clearly with the attempted path.
+
+### Budget
+Total tool calls: 2–5 (read content, optionally look up citekeys, optionally copy images, write note file).

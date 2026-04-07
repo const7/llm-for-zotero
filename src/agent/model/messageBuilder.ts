@@ -8,6 +8,13 @@ import { buildAgentMemoryBlock } from "../store/conversationMemory";
 import { getAllSkills, matchesSkill } from "../skills";
 
 import { isTextOnlyModel } from "../../providers";
+import {
+  isObsidianConfigured,
+  getObsidianVaultPath,
+  getObsidianTargetFolder,
+  getObsidianNoteTemplate,
+  getDefaultObsidianNoteTemplate,
+} from "../../utils/obsidianConfig";
 
 export function isMultimodalRequestSupported(
   request: AgentRuntimeRequest,
@@ -225,6 +232,26 @@ function buildAutoReadInstruction(request: AgentRuntimeRequest): string {
   );
 }
 
+function buildObsidianConfigSection(): string {
+  if (!isObsidianConfigured()) return "";
+  const vaultPath = getObsidianVaultPath();
+  const targetFolder = getObsidianTargetFolder();
+  const template =
+    getObsidianNoteTemplate() || getDefaultObsidianNoteTemplate();
+  return [
+    "Obsidian configuration (user-configured):",
+    `- Vault path: ${vaultPath}`,
+    `- Target folder: ${targetFolder}`,
+    `- Full target path: ${vaultPath}/${targetFolder}`,
+    "- Note template:",
+    "```",
+    template,
+    "```",
+    "When writing to Obsidian, use Pandoc citation syntax [@citekey] for paper references. " +
+      "Look up citation keys from Zotero item metadata via read_library.",
+  ].join("\n");
+}
+
 export async function buildAgentInitialMessages(
   request: AgentRuntimeRequest,
   tools: AgentToolDefinition<any, any>[],
@@ -244,6 +271,10 @@ export async function buildAgentInitialMessages(
     {
       id: "custom-instructions",
       lines: [(request.customInstructions || "").trim()],
+    },
+    {
+      id: "obsidian-config",
+      lines: [buildObsidianConfigSection()],
     },
     {
       id: "tool-guidance",

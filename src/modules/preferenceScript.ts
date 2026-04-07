@@ -47,6 +47,15 @@ import {
   setMineruEnabled,
   setMineruApiKey,
 } from "../utils/mineruConfig";
+import {
+  getObsidianVaultPath,
+  setObsidianVaultPath,
+  getObsidianTargetFolder,
+  setObsidianTargetFolder,
+  getObsidianNoteTemplate,
+  setObsidianNoteTemplate,
+  getDefaultObsidianNoteTemplate,
+} from "../utils/obsidianConfig";
 import { testMineruConnection } from "../utils/mineruClient";
 import { registerMineruManagerScript } from "./mineruManagerScript";
 
@@ -1557,6 +1566,97 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
         true,
       );
     });
+  }
+
+  // ── Obsidian settings ────────────────────────────────────────────
+  {
+    const obsVaultPathInput = doc.querySelector(
+      `#${config.addonRef}-obsidian-vault-path`,
+    ) as HTMLInputElement | null;
+    const obsTargetFolderInput = doc.querySelector(
+      `#${config.addonRef}-obsidian-target-folder`,
+    ) as HTMLInputElement | null;
+    const obsTemplateInput = doc.querySelector(
+      `#${config.addonRef}-obsidian-note-template`,
+    ) as HTMLTextAreaElement | null;
+    const obsTestBtn = doc.querySelector(
+      `#${config.addonRef}-obsidian-test`,
+    ) as HTMLButtonElement | null;
+    const obsTestStatus = doc.querySelector(
+      `#${config.addonRef}-obsidian-test-status`,
+    ) as HTMLSpanElement | null;
+    const obsResetTemplateBtn = doc.querySelector(
+      `#${config.addonRef}-obsidian-reset-template`,
+    ) as HTMLButtonElement | null;
+
+    if (obsVaultPathInput) {
+      obsVaultPathInput.value = getObsidianVaultPath();
+      obsVaultPathInput.addEventListener("input", () => {
+        setObsidianVaultPath(obsVaultPathInput.value);
+      });
+    }
+    if (obsTargetFolderInput) {
+      obsTargetFolderInput.value = getObsidianTargetFolder();
+      obsTargetFolderInput.addEventListener("input", () => {
+        setObsidianTargetFolder(obsTargetFolderInput.value);
+      });
+    }
+    if (obsTemplateInput) {
+      const stored = getObsidianNoteTemplate();
+      obsTemplateInput.value = stored || getDefaultObsidianNoteTemplate();
+      obsTemplateInput.addEventListener("input", () => {
+        setObsidianNoteTemplate(obsTemplateInput.value);
+      });
+    }
+    if (obsResetTemplateBtn && obsTemplateInput) {
+      obsResetTemplateBtn.addEventListener("click", () => {
+        setObsidianNoteTemplate("");
+        obsTemplateInput.value = getDefaultObsidianNoteTemplate();
+      });
+    }
+    if (obsTestBtn && obsTestStatus) {
+      obsTestBtn.addEventListener("click", async () => {
+        const vaultPath = (obsVaultPathInput?.value || "").trim();
+        if (!vaultPath) {
+          obsTestStatus.style.display = "inline";
+          obsTestStatus.style.color = "#dc2626";
+          obsTestStatus.textContent = t("Enter a vault path first");
+          return;
+        }
+        const targetFolder = (obsTargetFolderInput?.value || "").trim();
+        const fullPath = targetFolder
+          ? `${vaultPath}/${targetFolder}`
+          : vaultPath;
+
+        obsTestBtn.disabled = true;
+        obsTestStatus.style.display = "inline";
+        obsTestStatus.style.color = "var(--fill-secondary, #888)";
+        obsTestStatus.textContent = "Testing...";
+
+        try {
+          const IOUtils = (globalThis as any).IOUtils;
+          if (!IOUtils?.exists || !IOUtils?.write || !IOUtils?.remove) {
+            throw new Error("File I/O not available");
+          }
+          const exists = await IOUtils.exists(fullPath);
+          if (!exists) {
+            throw new Error(`Directory not found: ${fullPath}`);
+          }
+          const testFile = `${fullPath}/.llm-for-zotero-test`;
+          const bytes = new TextEncoder().encode("test");
+          await IOUtils.write(testFile, bytes);
+          await IOUtils.remove(testFile);
+          obsTestStatus.style.color = "#16a34a";
+          obsTestStatus.textContent = t("Write access verified");
+        } catch (err) {
+          obsTestStatus.style.color = "#dc2626";
+          obsTestStatus.textContent =
+            err instanceof Error ? err.message : String(err);
+        } finally {
+          obsTestBtn.disabled = false;
+        }
+      });
+    }
   }
 
   if (enableQueryRewriteInput) {
