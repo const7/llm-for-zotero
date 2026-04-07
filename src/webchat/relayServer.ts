@@ -931,10 +931,32 @@ const ChatHistoryEndpoint = createEndpoint(["GET", "POST"], (opts) => {
 });
 
 // POST /update_chat_history
+// Merges history per-site: incoming sessions replace only entries from the same
+// hostname(s), preserving entries from other sites.  This prevents ChatGPT
+// scrapes from wiping DeepSeek history (and vice-versa).
 const UpdateChatHistoryEndpoint = createEndpoint(["POST"], (opts) => {
   const body = parseBody(opts.data);
   if (Array.isArray(body.sessions)) {
-    setMirroredHistory(body.sessions as Array<{ id: string; title: string; chatUrl: string }>);
+    const incoming = body.sessions as Array<{ id: string; title: string; chatUrl: string }>;
+    // Determine which site(s) the incoming sessions belong to
+    const incomingSites = new Set<string>();
+    for (const s of incoming) {
+      try { incomingSites.add(new URL(s.chatUrl).hostname); } catch { /* skip */ }
+    }
+    // Also accept explicit siteHostname for empty-array case (site has no history)
+    if (typeof body.siteHostname === "string" && body.siteHostname) {
+      incomingSites.add(body.siteHostname as string);
+    }
+    if (incomingSites.size > 0) {
+      // Keep entries from OTHER sites, replace entries from THIS site
+      const kept = getMirroredHistory().filter((s) => {
+        try { return !incomingSites.has(new URL(s.chatUrl).hostname); } catch { return true; }
+      });
+      setMirroredHistory([...kept, ...incoming]);
+    } else {
+      // Fallback: full replace (backward compat with older extensions)
+      setMirroredHistory(incoming);
+    }
   }
   return jsonReply({ success: true });
 });

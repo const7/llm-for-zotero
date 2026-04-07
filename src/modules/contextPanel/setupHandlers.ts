@@ -338,6 +338,7 @@ let setupHandlersGeneration = 0;
 
 export type SetupHandlersHooks = {
   onConversationHistoryChanged?: () => void;
+  onWebChatModeChanged?: (isWebChat: boolean) => void;
 };
 
 export function setupHandlers(
@@ -6735,6 +6736,9 @@ export function setupHandlers(
     }
 
     updateRuntimeModeButton();
+
+    // Notify standalone window (or other listeners) of webchat mode change
+    hooks?.onWebChatModeChanged?.(isWebChat);
   };
 
   // [webchat] Pre-fetch history in background — triggers a scrape command then polls

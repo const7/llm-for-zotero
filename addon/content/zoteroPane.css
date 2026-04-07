@@ -769,6 +769,20 @@
   -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='3 6 5 6 21 6'/%3E%3Cpath d='M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2'/%3E%3C/svg%3E");
 }
 
+/* Exit button — webchat mode override for clear icon */
+.llm-standalone-icon-exit::before {
+  display: none;
+}
+.llm-standalone-icon-exit {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  width: auto;
+  padding: 4px 8px;
+  height: auto;
+  min-height: 28px;
+}
+
 /* History popup — floating conversation list from collapsed icon strip */
 .llm-standalone-history-popup {
   display: none;
