@@ -10764,14 +10764,24 @@ export function setupHandlers(
       }
       closePaperChipMenu();
       if (status) {
-        const sourceTag = contentSource === "mineru" ? ` ${t("(MinerU)")}` : "";
-        setStatus(
-          status,
-          nextMode === "full-sticky"
-            ? `${t("Paper set to always send full text.")}${sourceTag}`
-            : `${t("Paper set to retrieval mode.")}${sourceTag}`,
-          "ready",
-        );
+        if (isWebChatMode() && contentSource === "pdf") {
+          setStatus(
+            status,
+            nextIsFullText
+              ? t("WebChat only requires uploading PDF once per session. If already uploaded, no need to send again.")
+              : t("Next query will not attach PDF."),
+            "ready",
+          );
+        } else {
+          const sourceTag = contentSource === "mineru" ? ` ${t("(MinerU)")}` : "";
+          setStatus(
+            status,
+            nextMode === "full-sticky"
+              ? `${t("Paper set to always send full text.")}${sourceTag}`
+              : `${t("Paper set to retrieval mode.")}${sourceTag}`,
+            "ready",
+          );
+        }
       }
     });
     paperPreview.addEventListener("click", (e: Event) => {
