@@ -46,6 +46,8 @@ import {
   getMineruApiKey,
   setMineruEnabled,
   setMineruApiKey,
+  isGlobalAutoParseEnabled,
+  setGlobalAutoParseEnabled,
 } from "../utils/mineruConfig";
 import {
   getObsidianVaultPath,
@@ -82,7 +84,8 @@ const COPILOT_API_HELPER_TEXT =
 const DEFAULT_COPILOT_API_BASE = "https://api.githubcopilot.com";
 const MAX_PROVIDER_COUNT = 10;
 const INITIAL_PROVIDER_COUNT = 4;
-const DEFAULT_CODEX_API_BASE = "https://chatgpt.com/backend-api/codex/responses";
+const DEFAULT_CODEX_API_BASE =
+  "https://chatgpt.com/backend-api/codex/responses";
 
 type ProviderProfile = {
   label: string;
@@ -91,10 +94,18 @@ type ProviderProfile = {
 };
 
 const PROVIDER_PROFILES: ProviderProfile[] = [
-  { label: "Provider A", modelPlaceholder: "gpt-4o-mini", defaultModel: "gpt-4o-mini" },
+  {
+    label: "Provider A",
+    modelPlaceholder: "gpt-4o-mini",
+    defaultModel: "gpt-4o-mini",
+  },
   { label: "Provider B", modelPlaceholder: "gpt-4o", defaultModel: "" },
   { label: "Provider C", modelPlaceholder: "gemini-2.5-pro", defaultModel: "" },
-  { label: "Provider D", modelPlaceholder: "deepseek-reasoner", defaultModel: "" },
+  {
+    label: "Provider D",
+    modelPlaceholder: "deepseek-reasoner",
+    defaultModel: "",
+  },
 ];
 
 function getProviderProfile(index: number): ProviderProfile {
@@ -103,12 +114,17 @@ function getProviderProfile(index: number): ProviderProfile {
     return { ...p, label: t(p.label) };
   }
   const letter = String.fromCharCode("A".charCodeAt(0) + index);
-  return { label: t(`Provider ${letter}`), modelPlaceholder: "", defaultModel: "" };
+  return {
+    label: t(`Provider ${letter}`),
+    modelPlaceholder: "",
+    defaultModel: "",
+  };
 }
 
 function normalizeProviderPresetId(value: unknown): ProviderPresetId {
   if (typeof value !== "string") return "customized";
-  return value === "customized" || PROVIDER_PRESETS.some((preset) => preset.id === value)
+  return value === "customized" ||
+    PROVIDER_PRESETS.some((preset) => preset.id === value)
     ? (value as ProviderPresetId)
     : "customized";
 }
@@ -126,7 +142,8 @@ function getProtocolOptions(
 ): ProviderProtocol[] {
   if (authMode === "webchat") return ["web_sync"]; // [webchat]
   if (authMode === "codex_auth") return ["codex_responses"];
-  if (authMode === "copilot_auth") return ["openai_chat_compat", "responses_api"];
+  if (authMode === "copilot_auth")
+    return ["openai_chat_compat", "responses_api"];
   if (presetId !== "customized") {
     return getProviderPreset(presetId).supportedProtocols.filter(
       (protocol) => protocol !== "codex_responses",
@@ -171,14 +188,18 @@ function el<K extends keyof HTMLElementTagNameMap>(
   return node;
 }
 
-function iconBtn(doc: Document, label: string, title: string): HTMLButtonElement {
+function iconBtn(
+  doc: Document,
+  label: string,
+  title: string,
+): HTMLButtonElement {
   const btn = el(
     doc,
     "button",
     "padding: 0; width: 22px; height: 22px; border: none; background: transparent;" +
-    " color: var(--fill-secondary, #888); font-size: 16px; font-weight: 500;" +
-    " display: inline-flex; align-items: center; justify-content: center;" +
-    " cursor: pointer; flex-shrink: 0; border-radius: 4px; line-height: 1;",
+      " color: var(--fill-secondary, #888); font-size: 16px; font-weight: 500;" +
+      " display: inline-flex; align-items: center; justify-content: center;" +
+      " cursor: pointer; flex-shrink: 0; border-radius: 4px; line-height: 1;",
     label,
   ) as HTMLButtonElement;
   btn.type = "button";
@@ -225,7 +246,10 @@ function normalizeAuthMode(value: unknown): ModelProviderAuthMode {
 }
 
 type ProcessLike = { env?: Record<string, string | undefined> };
-type PathUtilsLike = { homeDir?: string; join?: (...parts: string[]) => string };
+type PathUtilsLike = {
+  homeDir?: string;
+  join?: (...parts: string[]) => string;
+};
 type ServicesLike = {
   dirsvc?: {
     get?: (key: string, iface?: unknown) => { path?: string } | undefined;
@@ -267,9 +291,11 @@ function getOS(): OSLike | undefined {
 function getNsIFile(): unknown {
   const ci = (globalThis as { Ci?: { nsIFile?: unknown } }).Ci;
   if (ci?.nsIFile) return ci.nsIFile;
-  const components = (globalThis as {
-    Components?: { interfaces?: { nsIFile?: unknown } };
-  }).Components;
+  const components = (
+    globalThis as {
+      Components?: { interfaces?: { nsIFile?: unknown } };
+    }
+  ).Components;
   return components?.interfaces?.nsIFile;
 }
 
@@ -317,7 +343,9 @@ async function readCodexAccessToken(): Promise<string> {
   };
   const token = parsed?.tokens?.access_token?.trim() || "";
   if (!token) {
-    throw new Error("No access token found in ~/.codex/auth.json. Run `codex login` first.");
+    throw new Error(
+      "No access token found in ~/.codex/auth.json. Run `codex login` first.",
+    );
   }
   return token;
 }
@@ -406,7 +434,7 @@ const OUTLINE_BTN_STYLE =
 const CARD_STYLE =
   "border: 1px solid var(--stroke-secondary, #c8c8c8); border-radius: 8px; overflow: hidden;";
 
-  const CARD_HEADER_STYLE =
+const CARD_HEADER_STYLE =
   "display: flex; align-items: center; justify-content: space-between; padding: 8px 12px;" +
   " background: Field; color: FieldText;" +
   " border-bottom: 1px solid var(--stroke-secondary, #c8c8c8);";
@@ -450,7 +478,12 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
       // For labels with inputs, translate the text node after the input
       if (el.tagName.toLowerCase() === "label" && el.querySelector("input")) {
         for (const child of Array.from(el.childNodes)) {
-          if (child && child.nodeType === 3 /* TEXT_NODE */ && child.textContent && child.textContent.trim()) {
+          if (
+            child &&
+            child.nodeType === 3 /* TEXT_NODE */ &&
+            child.textContent &&
+            child.textContent.trim()
+          ) {
             const original = normalizeWs(child.textContent);
             const translated = t(original);
             if (translated !== original) {
@@ -474,7 +507,12 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
       // For elements with inline children (e.g., <a>, <br>, <strong>) —
       // translate each text node individually
       for (const child of Array.from(el.childNodes)) {
-        if (child && child.nodeType === 3 /* TEXT_NODE */ && child.textContent && child.textContent.trim()) {
+        if (
+          child &&
+          child.nodeType === 3 /* TEXT_NODE */ &&
+          child.textContent &&
+          child.textContent.trim()
+        ) {
           const original = normalizeWs(child.textContent);
           const translated = t(original);
           if (translated !== original) {
@@ -489,26 +527,39 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
     translateTextNodes(prefPanels[i]);
   }
   // Translate textarea placeholder
-  const systemPrompt = doc.querySelector(`#${config.addonRef}-system-prompt`) as HTMLTextAreaElement | null;
+  const systemPrompt = doc.querySelector(
+    `#${config.addonRef}-system-prompt`,
+  ) as HTMLTextAreaElement | null;
   if (systemPrompt?.placeholder) {
     systemPrompt.placeholder = t(systemPrompt.placeholder);
   }
-  const mineruApiKeyEl = doc.querySelector(`#${config.addonRef}-mineru-api-key`) as HTMLInputElement | null;
+  const mineruApiKeyEl = doc.querySelector(
+    `#${config.addonRef}-mineru-api-key`,
+  ) as HTMLInputElement | null;
   if (mineruApiKeyEl?.placeholder) {
     mineruApiKeyEl.placeholder = t(mineruApiKeyEl.placeholder);
   }
   // Translate language dropdown options
-  const localeSelectEl = doc.querySelector(`#${config.addonRef}-locale-select`) as HTMLSelectElement | null;
+  const localeSelectEl = doc.querySelector(
+    `#${config.addonRef}-locale-select`,
+  ) as HTMLSelectElement | null;
   if (localeSelectEl) {
-    const autoOption = localeSelectEl.querySelector('option[value="auto"]') as HTMLOptionElement | null;
+    const autoOption = localeSelectEl.querySelector(
+      'option[value="auto"]',
+    ) as HTMLOptionElement | null;
     if (autoOption) autoOption.textContent = t("Auto (follow Zotero)");
   }
   // Translate restart hint
-  const restartHint = doc.querySelector(`#${config.addonRef}-locale-restart-hint`) as HTMLElement | null;
-  if (restartHint) restartHint.textContent = t("Restart Zotero to apply language change.");
+  const restartHint = doc.querySelector(
+    `#${config.addonRef}-locale-restart-hint`,
+  ) as HTMLElement | null;
+  if (restartHint)
+    restartHint.textContent = t("Restart Zotero to apply language change.");
 
   // ── Tab bar switching ───────────────────────────────────────────
-  const tabBar = doc.querySelector(`#${config.addonRef}-pref-tab-bar`) as HTMLElement | null;
+  const tabBar = doc.querySelector(
+    `#${config.addonRef}-pref-tab-bar`,
+  ) as HTMLElement | null;
   if (tabBar) {
     const switchTab = (tabId: string) => {
       // Hide all panels
@@ -517,7 +568,9 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
         (panels[i] as HTMLElement).style.display = "none";
       }
       // Show target panel
-      const target = doc.querySelector(`[data-pref-panel="${tabId}"]`) as HTMLElement | null;
+      const target = doc.querySelector(
+        `[data-pref-panel="${tabId}"]`,
+      ) as HTMLElement | null;
       if (target) target.style.display = "flex";
       // Update tab button styles
       const tabs = tabBar.querySelectorAll("[data-pref-tab]");
@@ -577,7 +630,8 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
     const parsed = getModelProviderGroups();
     if (hasStoredConfig) return parsed;
     const result = [...parsed];
-    while (result.length < INITIAL_PROVIDER_COUNT) result.push(createEmptyProviderGroup());
+    while (result.length < INITIAL_PROVIDER_COUNT)
+      result.push(createEmptyProviderGroup());
     return result;
   })();
 
@@ -590,17 +644,32 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
   const rerender = () => {
     modelSections.innerHTML = "";
 
-    const wrap = el(doc, "div", "display: flex; flex-direction: column; gap: 10px;");
+    const wrap = el(
+      doc,
+      "div",
+      "display: flex; flex-direction: column; gap: 10px;",
+    );
 
     // Section heading
-    const headingLeft = el(doc, "div", "display: flex; flex-direction: column; gap: 2px; margin-bottom: 2px;");
+    const headingLeft = el(
+      doc,
+      "div",
+      "display: flex; flex-direction: column; gap: 2px; margin-bottom: 2px;",
+    );
     headingLeft.append(
-      el(doc, "span", "font-size: 14px; font-weight: 800; color: var(--fill-primary, inherit);", t("AI Providers")),
+      el(
+        doc,
+        "span",
+        "font-size: 14px; font-weight: 800; color: var(--fill-primary, inherit);",
+        t("AI Providers"),
+      ),
       el(
         doc,
         "span",
         "font-size: 11.5px; color: var(--fill-secondary, #888);",
-        t("Each provider has an auth mode, API URL, and one or more model variants."),
+        t(
+          "Each provider has an auth mode, API URL, and one or more model variants.",
+        ),
       ),
     );
     wrap.appendChild(headingLeft);
@@ -631,9 +700,17 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
       const cardBody = el(doc, "div", CARD_BODY_STYLE);
 
       // ── Auth mode ────────────────────────────────────────────────
-      const authModeWrap = el(doc, "div", "display: flex; flex-direction: column;");
+      const authModeWrap = el(
+        doc,
+        "div",
+        "display: flex; flex-direction: column;",
+      );
       const authModeLabel = el(doc, "label", LABEL_STYLE, t("Auth Mode"));
-      const authModeSelect = el(doc, "select", INPUT_STYLE) as HTMLSelectElement;
+      const authModeSelect = el(
+        doc,
+        "select",
+        INPUT_STYLE,
+      ) as HTMLSelectElement;
       authModeSelect.id = `${config.addonRef}-auth-mode-${group.id}`;
       authModeLabel.setAttribute("for", authModeSelect.id);
       const apiKeyOption = el(doc, "option") as HTMLOptionElement;
@@ -649,7 +726,12 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
       const webchatOption = el(doc, "option") as HTMLOptionElement;
       webchatOption.value = "webchat";
       webchatOption.textContent = t("WebChat");
-      authModeSelect.append(apiKeyOption, codexOption, copilotOption, webchatOption);
+      authModeSelect.append(
+        apiKeyOption,
+        codexOption,
+        copilotOption,
+        webchatOption,
+      );
       authModeSelect.value = group.authMode;
       authModeSelect.addEventListener("change", () => {
         const nextAuthMode = normalizeAuthMode(authModeSelect.value);
@@ -665,7 +747,10 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
           group.providerProtocol = "codex_responses";
         } else if (nextAuthMode === "copilot_auth") {
           group.providerProtocol = "openai_chat_compat";
-        } else if (group.providerProtocol === "codex_responses" || group.providerProtocol === "web_sync") {
+        } else if (
+          group.providerProtocol === "codex_responses" ||
+          group.providerProtocol === "web_sync"
+        ) {
           group.providerProtocol =
             selectedPreset?.defaultProtocol || "openai_chat_compat";
         }
@@ -686,7 +771,9 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
             + "Keep the corresponding chat tab open while using WebChat mode.")
           : group.authMode === "copilot_auth"
             ? t(COPILOT_API_HELPER_TEXT)
-            : t("codex auth reuses local `codex login` credentials from ~/.codex/auth.json");
+            : t(
+                "codex auth reuses local `codex login` credentials from ~/.codex/auth.json",
+              );
       authModeWrap.append(
         authModeLabel,
         authModeSelect,
@@ -713,8 +800,16 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
         "div",
         "display: flex; flex-direction: column;",
       );
-      if (group.authMode !== "codex_auth" && group.authMode !== "copilot_auth") {
-        const providerPresetLabel = el(doc, "label", LABEL_STYLE, t("Provider"));
+      if (
+        group.authMode !== "codex_auth" &&
+        group.authMode !== "copilot_auth"
+      ) {
+        const providerPresetLabel = el(
+          doc,
+          "label",
+          LABEL_STYLE,
+          t("Provider"),
+        );
         const providerPresetSelect = el(
           doc,
           "select",
@@ -738,14 +833,17 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
 
         providerPresetSelect.value = selectedPresetId;
         providerPresetSelect.addEventListener("change", () => {
-          const nextPresetId = normalizeProviderPresetId(providerPresetSelect.value);
+          const nextPresetId = normalizeProviderPresetId(
+            providerPresetSelect.value,
+          );
           if (nextPresetId === "customized") {
             group.presetIdOverride = "customized";
             // Keep existing apiBase so user can edit it
           } else {
             group.presetIdOverride = undefined;
             group.apiBase = getProviderPreset(nextPresetId).defaultApiBase;
-            group.providerProtocol = getProviderPreset(nextPresetId).defaultProtocol;
+            group.providerProtocol =
+              getProviderPreset(nextPresetId).defaultProtocol;
           }
           persistGroups(groups);
           // Defer rerender so the browser can close the dropdown before we replace the DOM
@@ -763,10 +861,17 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
         "display: flex; flex-direction: column;",
       );
       const protocolLabel = el(doc, "label", LABEL_STYLE, t("Protocol"));
-      const protocolSelect = el(doc, "select", INPUT_STYLE) as HTMLSelectElement;
+      const protocolSelect = el(
+        doc,
+        "select",
+        INPUT_STYLE,
+      ) as HTMLSelectElement;
       protocolSelect.id = `${config.addonRef}-provider-protocol-${group.id}`;
       protocolLabel.setAttribute("for", protocolSelect.id);
-      const protocolOptions = getProtocolOptions(group.authMode, selectedPresetId);
+      const protocolOptions = getProtocolOptions(
+        group.authMode,
+        selectedPresetId,
+      );
       for (const protocol of protocolOptions) {
         const option = el(doc, "option") as HTMLOptionElement;
         option.value = protocol;
@@ -798,7 +903,11 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
       );
 
       // ── API URL ──────────────────────────────────────────────────
-      const apiUrlWrap = el(doc, "div", "display: flex; flex-direction: column;");
+      const apiUrlWrap = el(
+        doc,
+        "div",
+        "display: flex; flex-direction: column;",
+      );
       const apiUrlLabel = el(doc, "label", LABEL_STYLE, t("API URL"));
       const apiUrlInput = el(doc, "input", INPUT_STYLE) as HTMLInputElement;
       apiUrlInput.id = `${config.addonRef}-api-base-${group.id}`;
@@ -836,14 +945,14 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
             ? t(COPILOT_API_HELPER_TEXT)
             : getPresetSelectHelperText(selectedPresetId),
       );
-      apiUrlWrap.append(
-        apiUrlLabel,
-        apiUrlInput,
-        apiUrlHelper,
-      );
+      apiUrlWrap.append(apiUrlLabel, apiUrlInput, apiUrlHelper);
 
       // ── API Key ──────────────────────────────────────────────────
-      const apiKeyWrap = el(doc, "div", "display: flex; flex-direction: column;");
+      const apiKeyWrap = el(
+        doc,
+        "div",
+        "display: flex; flex-direction: column;",
+      );
       const apiKeyLabel = el(doc, "label", LABEL_STYLE, t("API Key"));
       const apiKeyInput = el(doc, "input", INPUT_STYLE) as HTMLInputElement;
       apiKeyInput.id = `${config.addonRef}-api-key-${group.id}`;
@@ -857,12 +966,19 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
         syncAddProviderBtn();
       });
       apiKeyWrap.append(apiKeyLabel, apiKeyInput);
-      if (group.authMode === "codex_auth" || group.authMode === "copilot_auth") {
+      if (
+        group.authMode === "codex_auth" ||
+        group.authMode === "copilot_auth"
+      ) {
         apiKeyWrap.style.display = "none";
       }
 
       // ── Copilot Login ────────────────────────────────────────────
-      const copilotLoginWrap = el(doc, "div", "display: flex; flex-direction: column; gap: 6px;");
+      const copilotLoginWrap = el(
+        doc,
+        "div",
+        "display: flex; flex-direction: column; gap: 6px;",
+      );
       if (group.authMode === "copilot_auth") {
         const isLoggedIn = group.apiKey.startsWith("ghu_");
         const copilotStatus = el(
@@ -881,8 +997,14 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
         copilotLoginBtn.type = "button";
 
         const AbortControllerCtor =
-          (ztoolkit.getGlobal("AbortController") as (new () => AbortController) | undefined) ||
-          (globalThis as typeof globalThis & { AbortController?: new () => AbortController }).AbortController;
+          (ztoolkit.getGlobal("AbortController") as
+            | (new () => AbortController)
+            | undefined) ||
+          (
+            globalThis as typeof globalThis & {
+              AbortController?: new () => AbortController;
+            }
+          ).AbortController;
         let loginAbort: AbortController | null = null;
 
         copilotLoginBtn.addEventListener("click", async () => {
@@ -907,42 +1029,51 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
               doc,
               "div",
               "position: fixed; inset: 0; z-index: 10000;" +
-              " background: rgba(0,0,0,0.5);" +
-              " display: flex; align-items: center; justify-content: center;",
+                " background: rgba(0,0,0,0.5);" +
+                " display: flex; align-items: center; justify-content: center;",
             );
             const dialogBox = el(
               doc,
               "div",
               "background: var(--material-background, #fff); color: var(--fill-primary, #222);" +
-              " border-radius: 12px; padding: 28px 36px; min-width: 340px; max-width: 420px;" +
-              " box-shadow: 0 8px 32px rgba(0,0,0,0.25); text-align: center;" +
-              " display: flex; flex-direction: column; gap: 16px; position: relative;",
+                " border-radius: 12px; padding: 28px 36px; min-width: 340px; max-width: 420px;" +
+                " box-shadow: 0 8px 32px rgba(0,0,0,0.25); text-align: center;" +
+                " display: flex; flex-direction: column; gap: 16px; position: relative;",
             );
             const closeBtn = el(
               doc,
               "button",
               "position: absolute; top: 10px; right: 14px; background: none; border: none;" +
-              " font-size: 20px; cursor: pointer; color: var(--fill-secondary, #888);" +
-              " line-height: 1; padding: 2px 6px;",
+                " font-size: 20px; cursor: pointer; color: var(--fill-secondary, #888);" +
+                " line-height: 1; padding: 2px 6px;",
               "\u00D7",
             ) as HTMLButtonElement;
             closeBtn.type = "button";
             closeBtn.title = t("Close");
             closeBtn.addEventListener("click", () => {
-              try { dialogOverlay.remove(); } catch (_e) { /* ignore */ }
+              try {
+                dialogOverlay.remove();
+              } catch (_e) {
+                /* ignore */
+              }
             });
             dialogBox.appendChild(closeBtn);
             dialogBox.appendChild(
-              el(doc, "div", "font-size: 15px; font-weight: 600;", t("Enter this code on GitHub:")),
+              el(
+                doc,
+                "div",
+                "font-size: 15px; font-weight: 600;",
+                t("Enter this code on GitHub:"),
+              ),
             );
             const codeDisplay = el(
               doc,
               "div",
               "font-size: 32px; font-weight: 700;" +
-              " font-family: monospace; padding: 12px 0;" +
-              " background: var(--material-sidepane, #f4f4f4); border-radius: 8px;" +
-              " user-select: all; cursor: text;" +
-              " display: flex; justify-content: center;",
+                " font-family: monospace; padding: 12px 0;" +
+                " background: var(--material-sidepane, #f4f4f4); border-radius: 8px;" +
+                " user-select: all; cursor: text;" +
+                " display: flex; justify-content: center;",
             );
             codeDisplay.textContent = device.user_code;
             dialogBox.appendChild(codeDisplay);
@@ -951,8 +1082,8 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
               doc,
               "button",
               PRIMARY_BTN_STYLE +
-              " font-size: 13px; padding: 8px 20px; align-self: center;" +
-              " display: flex; align-items: center; justify-content: center; line-height: 1.4;",
+                " font-size: 13px; padding: 8px 20px; align-self: center;" +
+                " display: flex; align-items: center; justify-content: center; line-height: 1.4;",
               t("Copy code & open GitHub"),
             ) as HTMLButtonElement;
             copyBtn.type = "button";
@@ -961,22 +1092,37 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
                 const clipHelper = (
                   globalThis as typeof globalThis & {
                     Components?: {
-                      classes?: Record<string, { getService?: (iface: unknown) => { kSuppressClearClipboard?: unknown; copyString?: (text: string, ctx?: unknown) => void } }>;
+                      classes?: Record<
+                        string,
+                        {
+                          getService?: (iface: unknown) => {
+                            kSuppressClearClipboard?: unknown;
+                            copyString?: (text: string, ctx?: unknown) => void;
+                          };
+                        }
+                      >;
                       interfaces?: Record<string, unknown>;
                     };
                   }
                 ).Components;
-                const svc = clipHelper?.classes?.["@mozilla.org/widget/clipboardhelper;1"]?.getService?.(
-                  clipHelper?.interfaces?.nsIClipboardHelper,
-                );
+                const svc = clipHelper?.classes?.[
+                  "@mozilla.org/widget/clipboardhelper;1"
+                ]?.getService?.(clipHelper?.interfaces?.nsIClipboardHelper);
                 if (svc?.copyString) {
                   svc.copyString(device.user_code, svc.kSuppressClearClipboard);
                 }
-              } catch (_e) { /* ignore */ }
+              } catch (_e) {
+                /* ignore */
+              }
               try {
-                const launch = (Zotero as unknown as { launchURL?: (url: string) => void }).launchURL;
-                if (typeof launch === "function") launch(device.verification_uri);
-              } catch (_e) { /* ignore */ }
+                const launch = (
+                  Zotero as unknown as { launchURL?: (url: string) => void }
+                ).launchURL;
+                if (typeof launch === "function")
+                  launch(device.verification_uri);
+              } catch (_e) {
+                /* ignore */
+              }
             });
             dialogBox.appendChild(copyBtn);
 
@@ -990,7 +1136,11 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
 
             dialogOverlay.addEventListener("click", (e) => {
               if (e.target === dialogOverlay) {
-                try { dialogOverlay.remove(); } catch (_e) { /* ignore */ }
+                try {
+                  dialogOverlay.remove();
+                } catch (_e) {
+                  /* ignore */
+                }
               }
             });
             dialogOverlay.appendChild(dialogBox);
@@ -999,15 +1149,23 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
 
             // Also open browser automatically
             try {
-              const launch = (Zotero as unknown as { launchURL?: (url: string) => void }).launchURL;
+              const launch = (
+                Zotero as unknown as { launchURL?: (url: string) => void }
+              ).launchURL;
               if (typeof launch === "function") launch(device.verification_uri);
-            } catch (_err) { /* ignore */ }
+            } catch (_err) {
+              /* ignore */
+            }
 
             let dialogDismissed = false;
             const dismissDialog = (msg?: string, color?: string) => {
               if (dialogDismissed) return;
               dialogDismissed = true;
-              try { dialogOverlay.remove(); } catch (_e) { /* ignore */ }
+              try {
+                dialogOverlay.remove();
+              } catch (_e) {
+                /* ignore */
+              }
               if (msg) {
                 copilotStatus.textContent = msg;
                 copilotStatus.style.color = color || "green";
@@ -1055,7 +1213,11 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
           rerender();
         });
 
-        const copilotBtnRow = el(doc, "div", "display: flex; gap: 8px; align-items: center;");
+        const copilotBtnRow = el(
+          doc,
+          "div",
+          "display: flex; gap: 8px; align-items: center;",
+        );
         copilotBtnRow.append(copilotLoginBtn, copilotLogoutBtn);
 
         // ── Fetch models button ──
@@ -1092,12 +1254,21 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
               const existing = existingAdvanced.get(m.id.toLowerCase());
               return createProviderModelEntry(
                 m.id,
-                existing ? { temperature: existing.temperature, maxTokens: existing.maxTokens, inputTokenCap: existing.inputTokenCap } : undefined,
+                existing
+                  ? {
+                      temperature: existing.temperature,
+                      maxTokens: existing.maxTokens,
+                      inputTokenCap: existing.inputTokenCap,
+                    }
+                  : undefined,
                 m.protocol,
               );
             });
             persistGroups(groups);
-            fetchModelsStatus.textContent = t("Synced %n models").replace("%n", String(models.length));
+            fetchModelsStatus.textContent = t("Synced %n models").replace(
+              "%n",
+              String(models.length),
+            );
             fetchModelsStatus.style.color = "green";
             setTimeout(() => rerender(), 300);
           } catch (err) {
@@ -1108,21 +1279,31 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
           }
         });
 
-        const fetchModelsRow = el(doc, "div", "display: flex; gap: 8px; align-items: center;");
+        const fetchModelsRow = el(
+          doc,
+          "div",
+          "display: flex; gap: 8px; align-items: center;",
+        );
         fetchModelsRow.append(fetchModelsBtn, fetchModelsStatus);
 
         copilotLoginWrap.append(copilotBtnRow, copilotStatus, fetchModelsRow);
       }
 
       // ── Models list ──────────────────────────────────────────────
-      const modelsWrap = el(doc, "div", "display: flex; flex-direction: column; gap: 6px;");
+      const modelsWrap = el(
+        doc,
+        "div",
+        "display: flex; flex-direction: column; gap: 6px;",
+      );
 
       const modelsHeaderRow = el(
         doc,
         "div",
         "display: flex; align-items: center; justify-content: space-between; margin-bottom: 2px;",
       );
-      modelsHeaderRow.appendChild(el(doc, "span", SECTION_LABEL_STYLE, t("Model names")));
+      modelsHeaderRow.appendChild(
+        el(doc, "span", SECTION_LABEL_STYLE, t("Model names")),
+      );
 
       const addModelBtn = iconBtn(doc, "+", t("Add model"));
       addModelBtn.style.color = "var(--color-accent, #2563eb)";
@@ -1172,25 +1353,39 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
 
       // ── Per-model rows ───────────────────────────────────────────
       group.models.forEach((modelEntry, modelIndex) => {
-        const rowWrap = el(doc, "div", "display: flex; flex-direction: column; gap: 0;");
+        const rowWrap = el(
+          doc,
+          "div",
+          "display: flex; flex-direction: column; gap: 0;",
+        );
 
         // Main row: [model input] [Test] [⚙] [×?]
-        const mainRow = el(doc, "div", "display: flex; align-items: center; gap: 5px;");
+        const mainRow = el(
+          doc,
+          "div",
+          "display: flex; align-items: center; gap: 5px;",
+        );
 
         const modelInput = el(
           doc,
           "input",
           "flex: 1; min-width: 0; padding: 6px 10px; font-size: 13px;" +
-          " border: 1px solid var(--stroke-secondary, #c8c8c8); border-radius: 6px;" +
-          " box-sizing: border-box; background: Field; color: FieldText;",
+            " border: 1px solid var(--stroke-secondary, #c8c8c8); border-radius: 6px;" +
+            " box-sizing: border-box; background: Field; color: FieldText;",
         ) as HTMLInputElement;
         modelInput.type = "text";
         if (group.authMode !== "webchat") {
           modelInput.value = modelEntry.model;
         }
-        modelInput.placeholder = modelIndex === 0 ? profile.modelPlaceholder : "";
+        modelInput.placeholder =
+          modelIndex === 0 ? profile.modelPlaceholder : "";
 
-        const testBtn = el(doc, "button", OUTLINE_BTN_STYLE, t("Test")) as HTMLButtonElement;
+        const testBtn = el(
+          doc,
+          "button",
+          OUTLINE_BTN_STYLE,
+          t("Test"),
+        ) as HTMLButtonElement;
         testBtn.type = "button";
 
         const advGearBtn = iconBtn(doc, "⚙", t("Advanced options"));
@@ -1260,8 +1455,16 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
           "display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end;",
         );
 
-        const makeCompactField = (labelText: string, value: string, placeholder: string) => {
-          const fieldWrap = el(doc, "div", "display: flex; flex-direction: column; gap: 3px;");
+        const makeCompactField = (
+          labelText: string,
+          value: string,
+          placeholder: string,
+        ) => {
+          const fieldWrap = el(
+            doc,
+            "div",
+            "display: flex; flex-direction: column; gap: 3px;",
+          );
           const lbl = el(
             doc,
             "label",
@@ -1288,24 +1491,37 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
         );
         const inputCapField = makeCompactField(
           t("Input cap"),
-          modelEntry.inputTokenCap !== undefined ? `${modelEntry.inputTokenCap}` : "",
+          modelEntry.inputTokenCap !== undefined
+            ? `${modelEntry.inputTokenCap}`
+            : "",
           "optional",
         );
 
         // ── Per-model protocol override ──
-        const protocolFieldWrap = el(doc, "div", "display: flex; flex-direction: column; gap: 3px;");
+        const protocolFieldWrap = el(
+          doc,
+          "div",
+          "display: flex; flex-direction: column; gap: 3px;",
+        );
         const protocolFieldLabel = el(
           doc,
           "label",
           "font-size: 10.5px; font-weight: 600; color: var(--fill-primary, inherit);",
           t("Protocol"),
         );
-        const protocolFieldSelect = el(doc, "select", INPUT_SM_STYLE + " width: 120px;") as HTMLSelectElement;
+        const protocolFieldSelect = el(
+          doc,
+          "select",
+          INPUT_SM_STYLE + " width: 120px;",
+        ) as HTMLSelectElement;
         const autoOption = el(doc, "option") as HTMLOptionElement;
         autoOption.value = "";
         autoOption.textContent = t("auto");
         protocolFieldSelect.appendChild(autoOption);
-        const allowedProtocols = getProtocolOptions(group.authMode, selectedPresetId);
+        const allowedProtocols = getProtocolOptions(
+          group.authMode,
+          selectedPresetId,
+        );
         for (const proto of allowedProtocols) {
           const opt = el(doc, "option") as HTMLOptionElement;
           opt.value = proto;
@@ -1315,28 +1531,41 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
         protocolFieldSelect.value = modelEntry.providerProtocol || "";
         protocolFieldWrap.append(protocolFieldLabel, protocolFieldSelect);
 
-        advFields.append(tempField.wrap, maxTokField.wrap, inputCapField.wrap, protocolFieldWrap);
+        advFields.append(
+          tempField.wrap,
+          maxTokField.wrap,
+          inputCapField.wrap,
+          protocolFieldWrap,
+        );
         advRow.append(
           advFields,
           el(
             doc,
             "span",
             "font-size: 10.5px; color: var(--fill-secondary, #888); margin-top: 2px; display: block;",
-            t("Temperature: randomness (0–2)  ·  Max tokens: output limit  ·  Input cap: context limit (optional)"),
+            t(
+              "Temperature: randomness (0–2)  ·  Max tokens: output limit  ·  Input cap: context limit (optional)",
+            ),
           ),
         );
 
         const commitAdvanced = () => {
           modelEntry.temperature = normalizeTemperature(tempField.input.value);
           modelEntry.maxTokens = normalizeMaxTokens(maxTokField.input.value);
-          modelEntry.inputTokenCap = normalizeOptionalInputTokenCap(inputCapField.input.value);
-          modelEntry.providerProtocol = isProviderProtocol(protocolFieldSelect.value)
+          modelEntry.inputTokenCap = normalizeOptionalInputTokenCap(
+            inputCapField.input.value,
+          );
+          modelEntry.providerProtocol = isProviderProtocol(
+            protocolFieldSelect.value,
+          )
             ? protocolFieldSelect.value
             : undefined;
           tempField.input.value = `${modelEntry.temperature}`;
           maxTokField.input.value = `${modelEntry.maxTokens}`;
           inputCapField.input.value =
-            modelEntry.inputTokenCap !== undefined ? `${modelEntry.inputTokenCap}` : "";
+            modelEntry.inputTokenCap !== undefined
+              ? `${modelEntry.inputTokenCap}`
+              : "";
           persistGroups(groups);
         };
         for (const f of [tempField, maxTokField, inputCapField]) {
@@ -1349,7 +1578,8 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
           const hasModel = Boolean(modelEntry.model.trim());
           advRow.style.opacity = hasModel ? "1" : "0.45";
           advRow.style.pointerEvents = hasModel ? "" : "none";
-          for (const f of [tempField, maxTokField, inputCapField]) f.input.disabled = !hasModel;
+          for (const f of [tempField, maxTokField, inputCapField])
+            f.input.disabled = !hasModel;
           protocolFieldSelect.disabled = !hasModel;
         };
         syncAdvAvailability();
@@ -1392,12 +1622,19 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
               authMode === "codex_auth"
                 ? await readCodexAccessToken()
                 : authMode === "copilot_auth"
-                  ? await resolveCopilotAccessToken({ githubToken: group.apiKey.trim() })
+                  ? await resolveCopilotAccessToken({
+                      githubToken: group.apiKey.trim(),
+                    })
                   : group.apiKey.trim();
             const modelName = (
-              modelEntry.model || profile.defaultModel || "gpt-5.4"
+              modelEntry.model ||
+              profile.defaultModel ||
+              "gpt-5.4"
             ).trim();
-            const providerProtocol = resolveSelectedProtocol(group, selectedPresetId);
+            const providerProtocol = resolveSelectedProtocol(
+              group,
+              selectedPresetId,
+            );
 
             if (!apiBase) throw new Error(t("API URL is required"));
             if (!apiKey) {
@@ -1488,7 +1725,8 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
     const addProviderBtn = el(
       doc,
       "button",
-      PRIMARY_BTN_STYLE + " margin-top: 2px; font-size: 12.5px; text-align: center;",
+      PRIMARY_BTN_STYLE +
+        " margin-top: 2px; font-size: 12.5px; text-align: center;",
       t("+ Add Provider"),
     ) as HTMLButtonElement;
     addProviderBtn.type = "button";
@@ -1719,12 +1957,21 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
     });
   }
 
+  const mineruGlobalAutoParseInput = doc.querySelector(
+    `#${config.addonRef}-mineru-global-auto-parse`,
+  ) as HTMLInputElement | null;
+  if (mineruGlobalAutoParseInput) {
+    mineruGlobalAutoParseInput.checked = isGlobalAutoParseEnabled();
+    mineruGlobalAutoParseInput.addEventListener("change", () => {
+      setGlobalAutoParseEnabled(mineruGlobalAutoParseInput.checked);
+    });
+  }
+
   if (mineruApiKeyInput) {
     mineruApiKeyInput.value = getMineruApiKey();
     mineruApiKeyInput.addEventListener("input", () => {
       setMineruApiKey(mineruApiKeyInput.value);
     });
-
   }
 
   if (mineruTestBtn && mineruTestStatus) {
@@ -1764,7 +2011,8 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
   ) as HTMLSpanElement | null;
   if (localeSelect) {
     const prefsPrefix = config.prefsPrefix;
-    const currentLocale = Zotero.Prefs.get(`${prefsPrefix}.locale`, true) as string || "auto";
+    const currentLocale =
+      (Zotero.Prefs.get(`${prefsPrefix}.locale`, true) as string) || "auto";
     localeSelect.value = currentLocale;
     localeSelect.addEventListener("change", () => {
       Zotero.Prefs.set(`${prefsPrefix}.locale`, localeSelect.value, true);
