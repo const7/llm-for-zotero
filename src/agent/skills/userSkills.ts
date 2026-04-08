@@ -74,9 +74,31 @@ export function getUserSkillsDir(): string {
 // Initialization — copy missing built-in skills to user folder
 // ---------------------------------------------------------------------------
 
+const SEEDED_PREF_KEY = "extensions.zotero.llmForZotero.seededBuiltinSkills";
+
+/** Read the set of built-in skill filenames that have already been seeded. */
+function getSeededSkills(): Set<string> {
+  try {
+    const raw = Zotero.Prefs?.get(SEEDED_PREF_KEY, true);
+    if (typeof raw === "string" && raw) return new Set(JSON.parse(raw));
+  } catch { /* */ }
+  return new Set();
+}
+
+/** Persist the set of seeded filenames. */
+function setSeededSkills(seeded: Set<string>): void {
+  try {
+    Zotero.Prefs?.set(SEEDED_PREF_KEY, JSON.stringify([...seeded]), true);
+  } catch { /* */ }
+}
+
 /**
- * Ensure the user skills directory exists and contains all built-in skills.
- * Missing built-in files are copied; existing files are never overwritten.
+ * Ensure the user skills directory exists and seed built-in skills.
+ *
+ * Only skills that have **never been seeded** are copied. This means:
+ * - New built-in skills from plugin updates auto-appear.
+ * - If a user deletes a built-in skill, it stays deleted across restarts.
+ *
  * Call this before loadUserSkills().
  */
 export async function initUserSkills(): Promise<void> {
@@ -97,9 +119,11 @@ export async function initUserSkills(): Promise<void> {
     return;
   }
 
+  const seeded = getSeededSkills();
   const encoder = new TextEncoder();
 
   for (const [filename, content] of Object.entries(BUILTIN_SKILL_FILES)) {
+    if (seeded.has(filename)) continue; // already seeded once — respect user deletions
     const filePath = joinPath(dir, filename);
     try {
       const exists = await io.exists(filePath);
@@ -109,12 +133,15 @@ export async function initUserSkills(): Promise<void> {
           `[llm-for-zotero] Copied built-in skill to user folder: ${filename}`,
         );
       }
+      seeded.add(filename);
     } catch (err) {
       Zotero.debug?.(
         `[llm-for-zotero] Failed to copy built-in skill ${filename}: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
   }
+
+  setSeededSkills(seeded);
 }
 
 // ---------------------------------------------------------------------------
@@ -191,7 +218,7 @@ export async function loadUserSkills(): Promise<AgentSkill[]> {
 // Skill file management (used by the skills popup UI)
 // ---------------------------------------------------------------------------
 
-/** List all .md filenames in the user skills directory. */
+/** List all .md file paths (full absolute paths) in the user skills directory. */
 export async function listSkillFiles(): Promise<string[]> {
   const io = getIOUtils();
   if (!io?.exists || !io?.getChildren) return [];
@@ -229,9 +256,17 @@ export async function deleteSkillFile(filePath: string): Promise<boolean> {
  */
 export async function createSkillTemplate(): Promise<string | null> {
   const io = getIOUtils();
-  if (!io?.exists || !io?.write) return null;
+  if (!io?.exists || !io?.write || !io?.makeDirectory) return null;
 
   const dir = getUserSkillsDir();
+
+  // Ensure directory exists (user may have deleted it after startup)
+  try {
+    await io.makeDirectory(dir, {
+      createAncestors: true,
+      ignoreExisting: true,
+    });
+  } catch { /* */ }
   const encoder = new TextEncoder();
   const template = `---
 id: my-custom-skill

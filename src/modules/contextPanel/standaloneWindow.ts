@@ -1334,12 +1334,17 @@ export function openStandaloneChat(options?: {
     // ----------------------------------------------------------------
     let skillCtxFilePath = ""; // tracks which file the context menu targets
 
+    /** Reload the in-memory skill list from disk (call after create/delete). */
+    const reloadRuntimeSkills = async () => {
+      const { loadUserSkills } = await import("../../agent/skills/userSkills");
+      const { setUserSkills } = await import("../../agent/skills");
+      const skills = await loadUserSkills();
+      setUserSkills(skills);
+    };
+
     const renderSkillGrid = async () => {
-      const { listSkillFiles, getUserSkillsDir } = await import(
-        "../../agent/skills/userSkills"
-      );
+      const { listSkillFiles } = await import("../../agent/skills/userSkills");
       const files = await listSkillFiles();
-      const dir = getUserSkillsDir();
       skillGrid.textContent = "";
 
       // "+" add button — first grid item
@@ -1359,12 +1364,12 @@ export function openStandaloneChat(options?: {
         );
         const filePath = await createSkillTemplate();
         if (filePath) {
-          const launch = (
-            Zotero as unknown as { launchURL?: (url: string) => void }
-          ).launchURL;
-          if (typeof launch === "function") {
-            launch("file://" + filePath);
-          }
+          try {
+            (
+              Zotero as unknown as { launchFile?: (p: string) => void }
+            ).launchFile?.(filePath);
+          } catch { /* */ }
+          await reloadRuntimeSkills();
           void renderSkillGrid();
         }
       });
@@ -1389,12 +1394,11 @@ export function openStandaloneChat(options?: {
 
         // Left click — open in system editor
         item.addEventListener("click", () => {
-          const launch = (
-            Zotero as unknown as { launchURL?: (url: string) => void }
-          ).launchURL;
-          if (typeof launch === "function") {
-            launch("file://" + fullPath);
-          }
+          try {
+            (
+              Zotero as unknown as { launchFile?: (p: string) => void }
+            ).launchFile?.(fullPath);
+          } catch { /* */ }
         });
 
         // Right click — context menu
@@ -1445,8 +1449,9 @@ export function openStandaloneChat(options?: {
       if (e.target === skillOverlay) closeSkillPopup();
     });
 
-    // Escape key closes skill popup
-    skillPopup.addEventListener("keydown", (e: Event) => {
+    // Escape key — attached at document level so it works regardless of focus
+    doc.addEventListener("keydown", (e: Event) => {
+      if (skillOverlay.style.display === "none") return;
       if ((e as KeyboardEvent).key === "Escape") {
         e.preventDefault();
         closeSkillPopup();
@@ -1465,13 +1470,14 @@ export function openStandaloneChat(options?: {
       } catch { /* */ }
     });
 
-    // Context menu: Delete
+    // Context menu: Delete (+ reload runtime skills)
     skillCtxDelete.addEventListener("click", async () => {
       skillCtxMenu.style.display = "none";
       if (!skillCtxFilePath) return;
       const { deleteSkillFile } = await import("../../agent/skills/userSkills");
       await deleteSkillFile(skillCtxFilePath);
       skillCtxFilePath = "";
+      await reloadRuntimeSkills();
       void renderSkillGrid();
     });
 
