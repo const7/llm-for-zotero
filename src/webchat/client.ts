@@ -13,12 +13,15 @@ import {
   relayNewChat,
   relayLoadChat,
   relayGetHistorySnapshot,
+  relayGetScrapedTranscriptSnapshot,
   relayGetScrapedMessages,
   relayGetStateSnapshot,
   relayGetReportedMode,
+  type RelayHistorySiteSyncEntry,
   type RelayCompletionReason,
   type RelayRunState,
   type RelayTurnStatus,
+  type ScrapedTranscriptSnapshot,
 } from "./relayServer";
 
 const POLL_INTERVAL_MS = 500;
@@ -210,7 +213,9 @@ export type WebChatPollResult = WebChatTurnMetadata & {
 export type WebChatRemoteState = WebChatTurnMetadata;
 
 function normalizeChatUrl(url: string | null | undefined): string {
-  return String(url || "").replace(/\/+$/, "");
+  return String(url || "")
+    .replace(/#.*$/, "")
+    .replace(/\/+$/, "");
 }
 
 function buildRemoteState(): WebChatRemoteState {
@@ -529,8 +534,10 @@ export type WebChatHistorySession = {
 
 export type WebChatHistorySnapshot = {
   sessions: WebChatHistorySession[];
-  siteSync: Record<string, { lastUpdatedAt: number }>;
+  siteSync: Record<string, RelayHistorySiteSyncEntry>;
 };
+
+export type WebChatScrapedTranscriptSnapshot = ScrapedTranscriptSnapshot;
 
 export async function fetchChatHistory(
   host: string,
@@ -546,6 +553,36 @@ export async function fetchChatHistorySnapshot(
     sessions: snapshot.sessions,
     siteSync: snapshot.siteSync,
   };
+}
+
+export function getWebChatHistorySiteSyncEntry(
+  snapshot: WebChatHistorySnapshot,
+  siteHostname: string | null | undefined,
+): RelayHistorySiteSyncEntry | null {
+  const normalizedHostname = normalizeHistoryHostname(siteHostname);
+  if (!normalizedHostname) return null;
+  return Object.entries(snapshot.siteSync).find(
+    ([hostname]) => normalizeHistoryHostname(hostname) === normalizedHostname,
+  )?.[1] || null;
+}
+
+export function getWebChatHistorySiteStatus(
+  snapshot: WebChatHistorySnapshot,
+  siteHostname: string | null | undefined,
+): RelayHistorySiteSyncEntry["status"] | null {
+  return getWebChatHistorySiteSyncEntry(snapshot, siteHostname)?.status || null;
+}
+
+export function isWebChatHistorySiteFailure(
+  entry: RelayHistorySiteSyncEntry | null | undefined,
+): boolean {
+  return entry?.status === "invalid_source" || entry?.status === "timeout";
+}
+
+export async function fetchScrapedTranscriptSnapshot(
+  _host: string,
+): Promise<WebChatScrapedTranscriptSnapshot | null> {
+  return relayGetScrapedTranscriptSnapshot();
 }
 
 export function filterWebChatHistorySessionsForHostname(
@@ -564,6 +601,169 @@ export function filterWebChatHistorySessionsForHostname(
   });
 }
 
+function getScrapedTranscriptSnapshotHostname(
+  snapshot: WebChatScrapedTranscriptSnapshot | null | undefined,
+): string {
+  if (!snapshot) return "";
+  if (snapshot.siteHostname) {
+    return normalizeHistoryHostname(snapshot.siteHostname);
+  }
+  if (!snapshot.chatUrl) return "";
+  try {
+    return normalizeHistoryHostname(new URL(snapshot.chatUrl).hostname);
+  } catch {
+    return "";
+  }
+}
+
+function scrapedTranscriptSnapshotMatches(
+  snapshot: WebChatScrapedTranscriptSnapshot | null | undefined,
+  options: {
+    expectedChatUrl?: string | null;
+    expectedChatId?: string | null;
+    siteHostname?: string | null;
+    minCapturedAt?: number;
+  },
+): boolean {
+  if (!snapshot) return false;
+  const minCapturedAt = Number(options.minCapturedAt) || 0;
+  if ((snapshot.capturedAt || 0) < minCapturedAt) return false;
+
+  const expectedChatId = String(options.expectedChatId || "").trim();
+  const actualChatId = String(snapshot.chatId || "").trim();
+  if (expectedChatId) {
+    if (actualChatId) {
+      if (actualChatId !== expectedChatId) {
+        return false;
+      }
+    } else {
+      const expectedChatUrl = normalizeChatUrl(options.expectedChatUrl);
+      if (
+        expectedChatUrl &&
+        normalizeChatUrl(snapshot.chatUrl) !== expectedChatUrl
+      ) {
+        return false;
+      }
+    }
+  } else {
+    const expectedChatUrl = normalizeChatUrl(options.expectedChatUrl);
+    if (
+      expectedChatUrl &&
+      normalizeChatUrl(snapshot.chatUrl) !== expectedChatUrl
+    ) {
+      return false;
+    }
+  }
+
+  const expectedSiteHostname = normalizeHistoryHostname(options.siteHostname);
+  if (
+    expectedSiteHostname &&
+    getScrapedTranscriptSnapshotHostname(snapshot) !== expectedSiteHostname
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+export async function waitForFreshScrapedTranscriptSnapshot(
+  host: string,
+  options: {
+    expectedChatUrl?: string | null;
+    expectedChatId?: string | null;
+    siteHostname?: string | null;
+    minCapturedAt?: number;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+  },
+): Promise<WebChatScrapedTranscriptSnapshot | null> {
+  const timeoutMs = Number(options.timeoutMs) || HISTORY_REFRESH_TIMEOUT_MS;
+  const deadline = Date.now() + timeoutMs;
+  let latest = await fetchScrapedTranscriptSnapshot(host);
+
+  while (true) {
+    if (scrapedTranscriptSnapshotMatches(latest, options)) {
+      return latest;
+    }
+    if (Date.now() >= deadline) {
+      return fetchLatestMatchingScrapedTranscriptSnapshot(host, {
+        expectedChatUrl: options.expectedChatUrl,
+        expectedChatId: options.expectedChatId,
+        siteHostname: options.siteHostname,
+      });
+    }
+    if (options.signal?.aborted) throw createAbortError();
+    await new Promise((r) => setTimeout(r, REMOTE_READY_POLL_INTERVAL_MS));
+    latest = await fetchScrapedTranscriptSnapshot(host);
+  }
+}
+
+async function fetchLatestMatchingScrapedTranscriptSnapshot(
+  host: string,
+  options: {
+    expectedChatUrl?: string | null;
+    expectedChatId?: string | null;
+    siteHostname?: string | null;
+  },
+): Promise<WebChatScrapedTranscriptSnapshot | null> {
+  const latest = await fetchScrapedTranscriptSnapshot(host);
+  return scrapedTranscriptSnapshotMatches(latest, {
+    ...options,
+    minCapturedAt: 0,
+  })
+    ? latest
+    : null;
+}
+
+async function waitForFreshScrapedMessagesForChat(
+  host: string,
+  options: {
+    expectedChatUrl?: string | null;
+    expectedChatId?: string | null;
+    minCapturedAt: number;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+  },
+): Promise<RefreshResult> {
+  const siteHostname = options.expectedChatUrl
+    ? (() => {
+      try {
+        return new URL(options.expectedChatUrl).hostname;
+      } catch {
+        return null;
+      }
+    })()
+    : null;
+  const snapshot = await waitForFreshScrapedTranscriptSnapshot(host, {
+    expectedChatUrl: options.expectedChatUrl,
+    expectedChatId: options.expectedChatId,
+    siteHostname,
+    minCapturedAt: options.minCapturedAt,
+    timeoutMs: options.timeoutMs || REMOTE_READY_TIMEOUT_MS,
+    signal: options.signal,
+  });
+
+  const fallbackSnapshot = async () =>
+    fetchLatestMatchingScrapedTranscriptSnapshot(host, {
+      expectedChatUrl: options.expectedChatUrl,
+      expectedChatId: options.expectedChatId,
+      siteHostname,
+    });
+
+  const matchedSnapshot = snapshot || (await fallbackSnapshot());
+  if (!matchedSnapshot) {
+    throw new Error("Timed out waiting for a fresh scraped chat transcript.");
+  }
+  if (!matchedSnapshot.messages.length) {
+    const fallback = await fallbackSnapshot();
+    if (fallback?.messages.length) {
+      return fallback.messages.map(mapScrapedMessage);
+    }
+    throw new Error("Selected chat loaded, but no transcript messages were captured.");
+  }
+  return matchedSnapshot.messages.map(mapScrapedMessage);
+}
+
 export async function waitForFreshChatHistorySnapshot(
   host: string,
   siteHostname: string | null | undefined,
@@ -580,9 +780,7 @@ export async function waitForFreshChatHistorySnapshot(
   }
 
   while (true) {
-    const siteSyncEntry = Object.entries(latest.siteSync).find(
-      ([hostname]) => normalizeHistoryHostname(hostname) === normalizedHostname,
-    )?.[1];
+    const siteSyncEntry = getWebChatHistorySiteSyncEntry(latest, normalizedHostname);
     if ((siteSyncEntry?.lastUpdatedAt || 0) >= minLastUpdatedAt) {
       return latest;
     }
@@ -607,29 +805,24 @@ export async function loadChatSession(
     timestamp?: string;
   }>;
 } | null> {
+  const loadStartedAt = Date.now();
   const result = relayLoadChat(sessionId);
   if (!result.ok) return null;
 
-  await waitForRemoteReady(
-    _host,
-    REMOTE_READY_TIMEOUT_MS,
-    undefined,
-    result.session.chatUrl || null,
-  );
+  const scraped = await waitForFreshScrapedMessagesForChat(_host, {
+    expectedChatUrl: result.session.chatUrl || null,
+    expectedChatId: result.session.id || null,
+    minCapturedAt: loadStartedAt,
+  });
 
-  const scraped = relayGetScrapedMessages() || [];
-  if (scraped.length > 0) {
-    return {
-      messages: scraped.map((message) => ({
-        speaker: message.role === "user" ? "user" : "assistant",
-        text: message.text || "",
-        kind: message.role === "user" ? "user" : "bot",
-        thinking: message.thinking,
-      })),
-    };
-  }
-
-  return { messages: result.session.messages as any };
+  return {
+    messages: scraped.map((message) => ({
+      speaker: message.speaker,
+      text: message.text || "",
+      kind: message.kind,
+      thinking: message.thinking,
+    })),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -670,24 +863,30 @@ export async function refreshCurrentConversation(
   }
 
   // Strategy 2: relay state's current URL
+  const refreshStartedAt = Date.now();
   const result = relayRefreshChat();
   if (result.ok) {
     try {
-      await waitForRemoteReady(_host, REMOTE_READY_TIMEOUT_MS, undefined, result.chatUrl);
-      const scraped = relayGetScrapedMessages() || [];
-      if (scraped.length > 0) return scraped.map(mapScrapedMessage);
+      return await waitForFreshScrapedMessagesForChat(_host, {
+        expectedChatUrl: result.chatUrl || null,
+        expectedChatId: chatId || relayGetStateSnapshot().remote_chat_id || null,
+        minCapturedAt: refreshStartedAt,
+      });
     } catch { /* fall through */ }
   }
 
   // Strategy 3: mirrored history lookup
   const fallbackId = chatId || relayGetStateSnapshot().remote_chat_id;
   if (fallbackId) {
+    const fallbackStartedAt = Date.now();
     const loaded = relayLoadChatFn(fallbackId);
     if (loaded.ok && loaded.session.chatUrl) {
       try {
-        await waitForRemoteReady(_host, REMOTE_READY_TIMEOUT_MS, undefined, loaded.session.chatUrl);
-        const scraped = relayGetScrapedMessages() || [];
-        if (scraped.length > 0) return scraped.map(mapScrapedMessage);
+        return await waitForFreshScrapedMessagesForChat(_host, {
+          expectedChatUrl: loaded.session.chatUrl || null,
+          expectedChatId: fallbackId || null,
+          minCapturedAt: fallbackStartedAt,
+        });
       } catch { /* exhausted */ }
     }
   }
@@ -702,12 +901,15 @@ async function navigateAndScrape(
   relaySetCommandFn: typeof import("./relayServer").relaySetCommand,
   relayUpdateTurnStateFn: typeof import("./relayServer").relayUpdateTurnState,
 ): Promise<RefreshResult> {
+  const startedAt = Date.now();
   relayUpdateTurnStateFn({ turn_status: "navigating" });
   relaySetCommandFn({ type: "LOAD_CHAT", chatUrl, chatId });
   try {
-    await waitForRemoteReady(host, REMOTE_READY_TIMEOUT_MS, undefined, chatUrl);
-    const scraped = relayGetScrapedMessages() || [];
-    if (scraped.length > 0) return scraped.map(mapScrapedMessage);
+    return await waitForFreshScrapedMessagesForChat(host, {
+      expectedChatUrl: chatUrl || null,
+      expectedChatId: chatId || null,
+      minCapturedAt: startedAt,
+    });
   } catch { /* navigation failed */ }
   return [];
 }
@@ -732,7 +934,7 @@ export async function fetchScrapedMessages(
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {
-    const messages = relayGetScrapedMessages();
+    const messages = relayGetScrapedTranscriptSnapshot()?.messages || relayGetScrapedMessages();
     if (messages && messages.length > 0) {
       return messages;
     }

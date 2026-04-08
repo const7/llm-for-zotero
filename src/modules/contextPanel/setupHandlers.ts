@@ -48,7 +48,8 @@ import {
   pinnedFileKeys,
   setCancelledRequestId,
   setPendingRequestId,
-  currentAbortController,
+  getAbortController,
+  isRequestPending,
   panelFontScalePercent,
   setPanelFontScalePercent,
   responseMenuTarget,
@@ -58,7 +59,6 @@ import {
   chatHistory,
   loadedConversationKeys,
   currentRequestId,
-  pendingRequestId,
   activeGlobalConversationByLibrary,
   activeConversationModeByLibrary,
   activePaperConversationByPaper,
@@ -73,8 +73,9 @@ import {
   setInlineEditInputSection,
   setInlineEditSavedDraft,
   pdfTextCache,
-  autoLockedGlobalConversationKey,
-  setAutoLockedGlobalConversationKey,
+  addAutoLockedGlobalConversationKey,
+  removeAutoLockedGlobalConversationKey,
+  isAutoLockedGlobalConversation,
 } from "./state";
 import {
   sanitizeText,
@@ -475,9 +476,9 @@ export function setupHandlers(
   // navigation), which destroys the cancel/send button DOM mid-stream.
   // Re-apply the generating state immediately so the user never sees a stale
   // idle UI while a request is still running in the background.
-  // pendingRequestId is set at the very start of doSend/retry, so it covers
-  // the full request lifecycle — not just streaming.
-  if (pendingRequestId > 0) {
+  // Only lock the UI if the CURRENT conversation has a pending request.
+  const earlyConversationKey = item ? getConversationKey(item) : null;
+  if (earlyConversationKey !== null && isRequestPending(earlyConversationKey)) {
     if (sendBtn) sendBtn.style.display = "none";
     if (cancelBtn) cancelBtn.style.display = "";
     if (inputBox) inputBox.disabled = true;
@@ -4335,11 +4336,7 @@ export function setupHandlers(
     assistantTimestamp: number;
   }) => {
     if (!item) return;
-    if (
-      currentAbortController ||
-      historyToggleBtn?.disabled ||
-      inputBox?.disabled
-    ) {
+    if (isRequestPending(target.conversationKey)) {
       if (status) {
         setStatus(status, t("Cannot delete while generating"), "ready");
       }
@@ -4506,11 +4503,7 @@ export function setupHandlers(
   const renameHistoryEntry = async (
     entry: ConversationHistoryEntry,
   ): Promise<void> => {
-    if (
-      currentAbortController ||
-      historyToggleBtn?.disabled ||
-      inputBox?.disabled
-    ) {
+    if (isRequestPending(entry.conversationKey)) {
       if (status) {
         setStatus(status, t("History is unavailable while generating"), "ready");
       }
@@ -4622,20 +4615,8 @@ export function setupHandlers(
 
   const createAndSwitchGlobalConversation = async () => {
     if (!item || isNoteSession()) return;
-    if (
-      currentAbortController ||
-      historyNewBtn?.disabled ||
-      inputBox?.disabled
-    ) {
-      if (status) {
-        setStatus(
-          status,
-          t("Wait for the current response to finish before starting a new chat"),
-          "ready",
-        );
-      }
-      return;
-    }
+    // Allow creating new conversations even if another is generating.
+    // The user wants to start a fresh conversation while the other runs.
     closeHistoryNewMenu();
     const libraryID = getCurrentLibraryID();
     if (!libraryID) {
@@ -4722,20 +4703,7 @@ export function setupHandlers(
 
   const createAndSwitchPaperConversation = async () => {
     if (!item || isNoteSession()) return;
-    if (
-      currentAbortController ||
-      historyNewBtn?.disabled ||
-      inputBox?.disabled
-    ) {
-      if (status) {
-        setStatus(
-          status,
-          t("Wait for the current response to finish before starting a new chat"),
-          "ready",
-        );
-      }
-      return;
-    }
+    // Allow creating new paper conversations even if another is generating.
     closeHistoryNewMenu();
     const paperItem = resolveCurrentPaperBaseItem();
     if (!paperItem) {
@@ -4854,20 +4822,7 @@ export function setupHandlers(
       e.preventDefault();
       e.stopPropagation();
       if (!item || isNoteSession()) return;
-      if (
-        currentAbortController ||
-        historyNewBtn.disabled ||
-        inputBox?.disabled
-      ) {
-        if (status) {
-          setStatus(
-            status,
-            t("Wait for the current response to finish before starting a new chat"),
-            "ready",
-          );
-        }
-        return;
-      }
+      // Allow creating new conversations even if another is generating.
       closeModelMenu();
       closeReasoningMenu();
       closeRetryModelMenu();
@@ -5004,8 +4959,8 @@ export function setupHandlers(
       if (!currentKey) return;
       const lockedKey = getLockedGlobalConversationKey(libraryID);
       const isLocked = lockedKey !== null && lockedKey === currentKey;
-      // Manual lock/unlock overrides any auto-lock
-      setAutoLockedGlobalConversationKey(null);
+      // Manual lock/unlock overrides any auto-lock on this conversation
+      if (currentKey) removeAutoLockedGlobalConversationKey(currentKey);
       if (isLocked) {
         setLockedGlobalConversationKey(libraryID, null);
       } else {
@@ -5021,18 +4976,7 @@ export function setupHandlers(
       e.preventDefault();
       e.stopPropagation();
       if (!item || isNoteSession()) return;
-      if (
-        currentAbortController ||
-        historyToggleBtn.disabled ||
-        inputBox?.disabled
-      ) {
-        closeHistoryNewMenu();
-        closeHistoryMenu();
-        if (status) {
-          setStatus(status, t("History is unavailable while generating"), "ready");
-        }
-        return;
-      }
+      // Allow history navigation even during generation.
       void (async () => {
         closeModelMenu();
         closeReasoningMenu();
@@ -5102,20 +5046,7 @@ export function setupHandlers(
     historyMenu.addEventListener("click", (e: Event) => {
       const target = e.target as Element | null;
       if (!target || !item) return;
-      if (
-        currentAbortController ||
-        historyToggleBtn?.disabled ||
-        inputBox?.disabled
-      ) {
-        e.preventDefault();
-        e.stopPropagation();
-        closeHistoryNewMenu();
-        closeHistoryMenu();
-        if (status) {
-          setStatus(status, t("History is unavailable while generating"), "ready");
-        }
-        return;
-      }
+      // Allow switching conversations even during generation.
       closeHistoryRowMenu();
 
       const searchTrigger = target.closest(
@@ -5189,19 +5120,7 @@ export function setupHandlers(
     historyMenu.addEventListener("contextmenu", (e: Event) => {
       const target = e.target as Element | null;
       if (!target || !item) return;
-      if (
-        currentAbortController ||
-        historyToggleBtn?.disabled ||
-        inputBox?.disabled
-      ) {
-        e.preventDefault();
-        e.stopPropagation();
-        closeHistoryRowMenu();
-        if (status) {
-          setStatus(status, t("History is unavailable while generating"), "ready");
-        }
-        return;
-      }
+      // Allow context menu even during generation.
       const row = target.closest(
         ".llm-history-item",
       ) as HTMLButtonElement | null;
@@ -6528,6 +6447,8 @@ export function setupHandlers(
 
       const {
         filterWebChatHistorySessionsForHostname,
+        getWebChatHistorySiteSyncEntry,
+        isWebChatHistorySiteFailure,
         waitForFreshChatHistorySnapshot,
       } = await import("../../webchat/client");
       const snapshot = await waitForFreshChatHistorySnapshot(
@@ -6540,8 +6461,16 @@ export function setupHandlers(
         snapshot.sessions,
         targetHostname,
       );
+      const siteSyncEntry = getWebChatHistorySiteSyncEntry(
+        snapshot,
+        targetHostname,
+      );
       if (sessions.length > 0) {
         ztoolkit.log(`[webchat] History warmed up: ${sessions.length} conversations`);
+      } else if (isWebChatHistorySiteFailure(siteSyncEntry)) {
+        ztoolkit.log(
+          `[webchat] History warm-up failed for ${targetHostname || "active site"}: ${siteSyncEntry?.status}`,
+        );
       }
     } catch { /* ignore */ }
     historyWarmUpRunning = false;
@@ -6583,6 +6512,8 @@ export function setupHandlers(
     const { relaySetCommand } = await import("../../webchat/relayServer");
     const {
       filterWebChatHistorySessionsForHostname,
+      getWebChatHistorySiteSyncEntry,
+      isWebChatHistorySiteFailure,
       waitForFreshChatHistorySnapshot,
     } = await import("../../webchat/client");
 
@@ -6599,6 +6530,7 @@ export function setupHandlers(
     // Wait for a fresh update for the active site before deciding the list is empty.
     let sessions: Array<{ id: string; title: string; chatUrl: string | null }> =
       [];
+    let historyFetchFailed = false;
     try {
       const snapshot = await waitForFreshChatHistorySnapshot(
         host,
@@ -6609,6 +6541,9 @@ export function setupHandlers(
         snapshot.sessions,
         targetHostname,
       );
+      historyFetchFailed = isWebChatHistorySiteFailure(
+        getWebChatHistorySiteSyncEntry(snapshot, targetHostname),
+      );
     } catch { /* relay not reachable */ }
 
     // Remove loading indicator
@@ -6616,7 +6551,9 @@ export function setupHandlers(
 
     if (!sessions.length) {
       const empty = createElement(doc, "div", "", {
-        textContent: "No conversations yet",
+        textContent: historyFetchFailed
+          ? "Failed to fetch history"
+          : "No conversations yet",
       });
       empty.style.padding = "12px 10px";
       empty.style.fontSize = "11px";
@@ -6670,9 +6607,12 @@ export function setupHandlers(
         if (!item) return;
         // Navigate ChatGPT to this conversation and load messages
         void (async () => {
+          const key = getConversationKey(item);
+          const isDeepSeekSession =
+            typeof session.chatUrl === "string" &&
+            /chat\.deepseek\.com/i.test(session.chatUrl);
           try {
             // Clear current chat and show loading indicator in the chat panel
-            const key = getConversationKey(item);
             // Derive model name from the session's chat URL
             let loadModelName = "chatgpt.com";
             try {
@@ -6743,7 +6683,24 @@ export function setupHandlers(
             refreshChatPreservingScroll();
           } catch (err) {
             ztoolkit.log("[webchat] Failed to load chat:", err);
-            if (status) setStatus(status, `Error loading chat: ${(err as Error).message || "Unknown error"}`, "error");
+            chatHistory.set(key, [{
+              role: "assistant" as const,
+              text: isDeepSeekSession
+                ? "Failed to load selected DeepSeek conversation"
+                : "Failed to load selected conversation",
+              timestamp: Date.now(),
+              modelProviderLabel: "WebChat",
+            }]);
+            refreshChatPreservingScroll();
+            if (status) {
+              setStatus(
+                status,
+                isDeepSeekSession
+                  ? "Failed to load selected DeepSeek conversation"
+                  : `Error loading chat: ${(err as Error).message || "Unknown error"}`,
+                "error",
+              );
+            }
           }
         })();
       });
@@ -8932,20 +8889,22 @@ export function setupHandlers(
     persistDraftInput: persistDraftInputForCurrentConversation,
     autoLockGlobalChat: () => {
       if (!item || !isGlobalMode() || isNoteSession()) return;
+      const ck = conversationKey;
+      if (ck === null) return;
       const libraryID = getCurrentLibraryID();
       const existingLock = getLockedGlobalConversationKey(libraryID);
       if (existingLock) return; // already manually locked — don't override
-      setLockedGlobalConversationKey(libraryID, conversationKey);
-      setAutoLockedGlobalConversationKey(conversationKey);
+      setLockedGlobalConversationKey(libraryID, ck);
+      addAutoLockedGlobalConversationKey(ck);
       syncConversationIdentity();
     },
     autoUnlockGlobalChat: () => {
-      const autoKey = autoLockedGlobalConversationKey;
-      if (autoKey === null) return;
-      setAutoLockedGlobalConversationKey(null);
+      const ck = conversationKey;
+      if (ck === null || !isAutoLockedGlobalConversation(ck)) return;
+      removeAutoLockedGlobalConversationKey(ck);
       const libraryID = getCurrentLibraryID();
       const currentLock = getLockedGlobalConversationKey(libraryID);
-      if (currentLock === autoKey) {
+      if (currentLock === ck) {
         setLockedGlobalConversationKey(libraryID, null);
         syncConversationIdentity();
       }
@@ -11404,8 +11363,10 @@ export function setupHandlers(
     cancelBtn.addEventListener("click", (e: Event) => {
       e.preventDefault();
       e.stopPropagation();
-      if (currentAbortController) {
-        currentAbortController.abort();
+      const cancelConvKey = item ? getConversationKey(item) : null;
+      if (cancelConvKey !== null) {
+        const ctrl = getAbortController(cancelConvKey);
+        if (ctrl) ctrl.abort();
       }
       // [webchat] Tell the browser extension to stop ChatGPT generation
       if (isWebChatMode()) {
@@ -11414,9 +11375,10 @@ export function setupHandlers(
           relayRequestStop();
         } catch { /* relay may not be loaded */ }
       }
-      setCancelledRequestId(currentRequestId);
-      // Reset global pending state so other tabs don't show the Cancel button
-      setPendingRequestId(0);
+      if (cancelConvKey !== null) {
+        setCancelledRequestId(cancelConvKey, currentRequestId);
+        setPendingRequestId(cancelConvKey, 0);
+      }
       if (status) setStatus(status, t("Cancelled"), "ready");
       // Immediately mark the last assistant message as not streaming so any
       // queued refresh won't bring back the loading dots.

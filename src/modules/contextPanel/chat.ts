@@ -59,11 +59,11 @@ import {
   paperContextModeOverrides,
   activeContextPanels,
   activeContextPanelStateSync,
-  cancelledRequestId,
-  currentAbortController,
-  setCurrentAbortController,
+  getCancelledRequestId,
+  getAbortController,
+  setAbortController,
   nextRequestId,
-  pendingRequestId,
+  isRequestPending,
   setPendingRequestId,
   setResponseMenuTarget,
   setPromptMenuTarget,
@@ -158,7 +158,7 @@ import {
 } from "./agentMode/agentEngine";
 
 /** Get AbortController constructor from global scope */
-function getAbortController(): new () => AbortController {
+function getAbortControllerCtor(): new () => AbortController {
   return (
     (ztoolkit.getGlobal("AbortController") as new () => AbortController) ||
     (
@@ -1129,7 +1129,7 @@ function restoreRequestUIIdle(
   conversationKey: number,
   requestId: number,
 ): void {
-  if (cancelledRequestId >= requestId) return;
+  if (getCancelledRequestId(conversationKey) >= requestId) return;
   // Re-query the DOM at restore time: buildUI() wipes body.textContent when the
   // user navigates to a new item while streaming, making any previously-captured
   // ui references point to detached (removed) elements.  Querying from the
@@ -2100,7 +2100,7 @@ export async function retryLatestAssistantResponse(
   }
 
   const thisRequestId = nextRequestId();
-  setPendingRequestId(thisRequestId);
+  setPendingRequestId(conversationKey, thisRequestId);
   setRequestUIBusy(body, ui, conversationKey, "Preparing retry...");
   const assistantMessage = retryPair.assistantMessage;
   const assistantSnapshot = takeAssistantSnapshot(assistantMessage);
@@ -2179,8 +2179,9 @@ export async function retryLatestAssistantResponse(
 
     // Create AbortController early so the signal is available during context
     // planning (e.g. for the retrieval query-rewrite LLM call).
-    const AbortControllerCtor = getAbortController();
-    setCurrentAbortController(
+    const AbortControllerCtor = getAbortControllerCtor();
+    setAbortController(
+      conversationKey,
       AbortControllerCtor ? new AbortControllerCtor() : null,
     );
 
@@ -2196,7 +2197,7 @@ export async function retryLatestAssistantResponse(
       effectiveRequestConfig,
       pdfModePaperKeys: retryPdfKeys.size > 0 ? retryPdfKeys : undefined,
       pdfUploadSystemMessages,
-      signal: currentAbortController?.signal,
+      signal: getAbortController(conversationKey)?.signal,
       setStatusSafely,
     });
     let combinedContext = contextPlan.combinedContext;
@@ -2228,15 +2229,15 @@ export async function retryLatestAssistantResponse(
       fullTextPaperContexts: retryPair.userMessage.fullTextPaperContexts,
       attachments: retryPair.userMessage.attachments,
     });
-    if (cancelledRequestId >= thisRequestId) {
-      currentAbortController?.abort();
+    if (getCancelledRequestId(conversationKey) >= thisRequestId) {
+      getAbortController(conversationKey)?.abort();
       await finalizeCancelledAssistant();
       return;
     }
 
     const queueRefresh = createQueuedRefresh(refreshChatSafely);
-    if (cancelledRequestId >= thisRequestId) {
-      currentAbortController?.abort();
+    if (getCancelledRequestId(conversationKey) >= thisRequestId) {
+      getAbortController(conversationKey)?.abort();
       await finalizeCancelledAssistant();
       return;
     }
@@ -2249,7 +2250,7 @@ export async function retryLatestAssistantResponse(
       prompt: question,
       context: combinedContext,
       history: llmHistory,
-      signal: currentAbortController?.signal,
+      signal: getAbortController(conversationKey)?.signal,
       images: allImages.length ? allImages : undefined,
       attachments: fileAttachments,
       model: effectiveRequestConfig.model,
@@ -2315,8 +2316,8 @@ export async function retryLatestAssistantResponse(
     );
 
     if (
-      cancelledRequestId >= thisRequestId ||
-      Boolean(currentAbortController?.signal.aborted)
+      getCancelledRequestId(conversationKey) >= thisRequestId ||
+      Boolean(getAbortController(conversationKey)?.signal.aborted)
     ) {
       await finalizeCancelledAssistant();
       return;
@@ -2350,8 +2351,8 @@ export async function retryLatestAssistantResponse(
     setStatusSafely("Ready", "ready");
   } catch (err) {
     const isCancelled =
-      cancelledRequestId >= thisRequestId ||
-      Boolean(currentAbortController?.signal.aborted) ||
+      getCancelledRequestId(conversationKey) >= thisRequestId ||
+      Boolean(getAbortController(conversationKey)?.signal.aborted) ||
       (err as { name?: string }).name === "AbortError";
     if (isCancelled) {
       await finalizeCancelledAssistant();
@@ -2371,8 +2372,8 @@ export async function retryLatestAssistantResponse(
   } finally {
     setHistoryControlsDisabled(body, false);
     restoreRequestUIIdle(body, conversationKey, thisRequestId);
-    setCurrentAbortController(null);
-    setPendingRequestId(0);
+    setAbortController(conversationKey, null);
+    setPendingRequestId(conversationKey, 0);
   }
 }
 
@@ -2688,10 +2689,10 @@ function buildAgentEngineDeps(): AgentEngineDeps {
   return {
     chatHistory,
     agentRunTraceCache,
-    cancelledRequestId: () => cancelledRequestId,
-    currentAbortController: () => currentAbortController,
-    setCurrentAbortController,
-    getAbortController,
+    cancelledRequestId: (ck: number) => getCancelledRequestId(ck),
+    currentAbortController: (ck: number) => getAbortController(ck),
+    setCurrentAbortController: (ck: number, ctrl: AbortController | null) => setAbortController(ck, ctrl),
+    getAbortControllerCtor,
     nextRequestId,
     setPendingRequestId,
     getPanelRequestUI,
@@ -2789,8 +2790,8 @@ export async function sendQuestion(opts: import("./types").SendQuestionOptions) 
 
   // Track this request
   const thisRequestId = nextRequestId();
-  setPendingRequestId(thisRequestId);
   const initialConversationKey = getConversationKey(item);
+  setPendingRequestId(initialConversationKey, thisRequestId);
 
   // Show cancel, hide send
   setRequestUIBusy(body, ui, initialConversationKey, "Preparing request...");
@@ -2990,7 +2991,7 @@ export async function sendQuestion(opts: import("./types").SendQuestionOptions) 
         images: screenshotImagesForMessage.length > 0 ? screenshotImagesForMessage : undefined,
         chatgptMode,
         target: webchatTarget,
-        signal: currentAbortController?.signal,
+        signal: getAbortController(conversationKey)?.signal,
         onAnswerSnapshot: (text, snapshot) => {
           applyWebChatAnswerSnapshot(assistantMessage, text, snapshot);
           webChatQueueRefresh();
@@ -3001,7 +3002,7 @@ export async function sendQuestion(opts: import("./types").SendQuestionOptions) 
         },
       });
 
-      if (cancelledRequestId >= thisRequestId || Boolean(currentAbortController?.signal.aborted)) {
+      if (getCancelledRequestId(conversationKey) >= thisRequestId || Boolean(getAbortController(conversationKey)?.signal.aborted)) {
         await markCancelled();
         return;
       }
@@ -3034,8 +3035,8 @@ export async function sendQuestion(opts: import("./types").SendQuestionOptions) 
       );
     } catch (err) {
       const isCancelled =
-        cancelledRequestId >= thisRequestId ||
-        Boolean(currentAbortController?.signal.aborted) ||
+        getCancelledRequestId(conversationKey) >= thisRequestId ||
+        Boolean(getAbortController(conversationKey)?.signal.aborted) ||
         (err as { name?: string }).name === "AbortError";
       if (isCancelled) {
         await markCancelled();
@@ -3072,8 +3073,9 @@ export async function sendQuestion(opts: import("./types").SendQuestionOptions) 
 
     // Create AbortController early so the signal is available during context
     // planning (e.g. for the retrieval query-rewrite LLM call).
-    const AbortControllerCtor = getAbortController();
-    setCurrentAbortController(
+    const AbortControllerCtor = getAbortControllerCtor();
+    setAbortController(
+      conversationKey,
       AbortControllerCtor ? new AbortControllerCtor() : null,
     );
 
@@ -3089,7 +3091,7 @@ export async function sendQuestion(opts: import("./types").SendQuestionOptions) 
       effectiveRequestConfig,
       pdfModePaperKeys,
       pdfUploadSystemMessages: opts.pdfUploadSystemMessages,
-      signal: currentAbortController?.signal,
+      signal: getAbortController(conversationKey)?.signal,
       setStatusSafely,
     });
     let combinedContext = contextPlan.combinedContext;
@@ -3121,16 +3123,16 @@ export async function sendQuestion(opts: import("./types").SendQuestionOptions) 
       attachments: userMessage.attachments,
     });
 
-    if (cancelledRequestId >= thisRequestId) {
-      currentAbortController?.abort();
+    if (getCancelledRequestId(conversationKey) >= thisRequestId) {
+      getAbortController(conversationKey)?.abort();
       await markCancelled();
       return;
     }
 
     const queueRefresh = createQueuedRefresh(refreshChatSafely);
 
-    if (cancelledRequestId >= thisRequestId) {
-      currentAbortController?.abort();
+    if (getCancelledRequestId(conversationKey) >= thisRequestId) {
+      getAbortController(conversationKey)?.abort();
       await markCancelled();
       return;
     }
@@ -3143,7 +3145,7 @@ export async function sendQuestion(opts: import("./types").SendQuestionOptions) 
       prompt: question,
       context: combinedContext,
       history: llmHistory,
-      signal: currentAbortController?.signal,
+      signal: getAbortController(conversationKey)?.signal,
       images: allSendImages.length ? allSendImages : undefined,
       attachments: requestFileAttachments,
       model: effectiveRequestConfig.model,
@@ -3204,8 +3206,8 @@ export async function sendQuestion(opts: import("./types").SendQuestionOptions) 
     );
 
     if (
-      cancelledRequestId >= thisRequestId ||
-      Boolean(currentAbortController?.signal.aborted)
+      getCancelledRequestId(conversationKey) >= thisRequestId ||
+      Boolean(getAbortController(conversationKey)?.signal.aborted)
     ) {
       await markCancelled();
       return;
@@ -3231,8 +3233,8 @@ export async function sendQuestion(opts: import("./types").SendQuestionOptions) 
     setStatusSafely("Ready", "ready");
   } catch (err) {
     const isCancelled =
-      cancelledRequestId >= thisRequestId ||
-      Boolean(currentAbortController?.signal.aborted) ||
+      getCancelledRequestId(conversationKey) >= thisRequestId ||
+      Boolean(getAbortController(conversationKey)?.signal.aborted) ||
       (err as { name?: string }).name === "AbortError";
     if (isCancelled) {
       await markCancelled();
@@ -3250,8 +3252,8 @@ export async function sendQuestion(opts: import("./types").SendQuestionOptions) 
   } finally {
     setHistoryControlsDisabled(body, false);
     restoreRequestUIIdle(body, conversationKey, thisRequestId);
-    setCurrentAbortController(null);
-    setPendingRequestId(0);
+    setAbortController(conversationKey, null);
+    setPendingRequestId(conversationKey, 0);
   }
 }
 

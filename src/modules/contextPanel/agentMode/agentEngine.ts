@@ -100,13 +100,13 @@ export type AgentEngineDeps = {
   // Agent trace cache
   agentRunTraceCache: Map<string, AgentRunEventRecord[]>;
 
-  // Request lifecycle
-  cancelledRequestId: () => number;
-  currentAbortController: () => AbortController | null;
-  setCurrentAbortController: (ctrl: AbortController | null) => void;
-  getAbortController: () => new () => AbortController;
+  // Request lifecycle (per-conversation)
+  cancelledRequestId: (conversationKey: number) => number;
+  currentAbortController: (conversationKey: number) => AbortController | null;
+  setCurrentAbortController: (conversationKey: number, ctrl: AbortController | null) => void;
+  getAbortControllerCtor: () => new () => AbortController;
   nextRequestId: () => number;
-  setPendingRequestId: (id: number) => void;
+  setPendingRequestId: (conversationKey: number, id: number) => void;
 
   // UI helpers
   getPanelRequestUI: (body: Element) => PanelRequestUIShape;
@@ -294,7 +294,7 @@ export async function sendAgentTurn(
 
   const ui = deps.getPanelRequestUI(body);
   const thisRequestId = deps.nextRequestId();
-  deps.setPendingRequestId(thisRequestId);
+  deps.setPendingRequestId(conversationKey, thisRequestId);
   const initialConversationKey = deps.getConversationKey(item);
   deps.setRequestUIBusy(body, ui, initialConversationKey, "Preparing agent...");
 
@@ -410,8 +410,9 @@ export async function sendAgentTurn(
   };
 
   try {
-    const AbortControllerCtor = deps.getAbortController();
+    const AbortControllerCtor = deps.getAbortControllerCtor();
     deps.setCurrentAbortController(
+      conversationKey,
       AbortControllerCtor ? new AbortControllerCtor() : null,
     );
     const queueRefresh = deps.createQueuedRefresh(refreshChatSafely);
@@ -430,7 +431,7 @@ export async function sendAgentTurn(
 
     const outcome = await agentRuntime.runTurn({
       request: runtimeRequest,
-      signal: deps.currentAbortController()?.signal,
+      signal: deps.currentAbortController(conversationKey)?.signal,
       onStart: async (runId) => {
         assistantMessage.agentRunId = runId;
         userMessage.agentRunId = runId;
@@ -492,8 +493,8 @@ export async function sendAgentTurn(
     });
 
     if (
-      deps.cancelledRequestId() >= thisRequestId ||
-      Boolean(deps.currentAbortController()?.signal.aborted)
+      deps.cancelledRequestId(conversationKey) >= thisRequestId ||
+      Boolean(deps.currentAbortController(conversationKey)?.signal.aborted)
     ) {
       await markCancelled();
       return;
@@ -513,8 +514,8 @@ export async function sendAgentTurn(
     setStatusSafely("Ready", "ready");
   } catch (err) {
     const isCancelled =
-      deps.cancelledRequestId() >= thisRequestId ||
-      Boolean(deps.currentAbortController()?.signal.aborted) ||
+      deps.cancelledRequestId(conversationKey) >= thisRequestId ||
+      Boolean(deps.currentAbortController(conversationKey)?.signal.aborted) ||
       (err as { name?: string }).name === "AbortError";
     if (isCancelled) {
       await markCancelled();
@@ -529,8 +530,8 @@ export async function sendAgentTurn(
   } finally {
     deps.setHistoryControlsDisabled(body, false);
     deps.restoreRequestUIIdle(body, conversationKey, thisRequestId);
-    deps.setCurrentAbortController(null);
-    deps.setPendingRequestId(0);
+    deps.setCurrentAbortController(conversationKey, null);
+    deps.setPendingRequestId(conversationKey, 0);
   }
 }
 
@@ -562,7 +563,7 @@ export async function retryAgentTurn(
   }
 
   const thisRequestId = deps.nextRequestId();
-  deps.setPendingRequestId(thisRequestId);
+  deps.setPendingRequestId(conversationKey, thisRequestId);
   deps.setRequestUIBusy(body, ui, conversationKey, "Preparing agent retry...");
 
   const assistantMessage = retryPair.assistantMessage;
@@ -658,8 +659,9 @@ export async function retryAgentTurn(
 
   const agentRuntime = deps.getAgentRuntime();
   try {
-    const AbortControllerCtor = deps.getAbortController();
+    const AbortControllerCtor = deps.getAbortControllerCtor();
     deps.setCurrentAbortController(
+      conversationKey,
       AbortControllerCtor ? new AbortControllerCtor() : null,
     );
     const queueRefresh = deps.createQueuedRefresh(refreshChatSafely);
@@ -678,7 +680,7 @@ export async function retryAgentTurn(
 
     const outcome = await agentRuntime.runTurn({
       request: runtimeRequest,
-      signal: deps.currentAbortController()?.signal,
+      signal: deps.currentAbortController(conversationKey)?.signal,
       onStart: async (runId) => {
         assistantMessage.agentRunId = runId;
         retryPair.userMessage.agentRunId = runId;
@@ -740,8 +742,8 @@ export async function retryAgentTurn(
     });
 
     if (
-      deps.cancelledRequestId() >= thisRequestId ||
-      Boolean(deps.currentAbortController()?.signal.aborted)
+      deps.cancelledRequestId(conversationKey) >= thisRequestId ||
+      Boolean(deps.currentAbortController(conversationKey)?.signal.aborted)
     ) {
       await markCancelled();
       return;
@@ -761,8 +763,8 @@ export async function retryAgentTurn(
     setStatusSafely("Ready", "ready");
   } catch (err) {
     const isCancelled =
-      deps.cancelledRequestId() >= thisRequestId ||
-      Boolean(deps.currentAbortController()?.signal.aborted) ||
+      deps.cancelledRequestId(conversationKey) >= thisRequestId ||
+      Boolean(deps.currentAbortController(conversationKey)?.signal.aborted) ||
       (err as { name?: string }).name === "AbortError";
     if (isCancelled) {
       await markCancelled();
@@ -777,7 +779,7 @@ export async function retryAgentTurn(
   } finally {
     deps.setHistoryControlsDisabled(body, false);
     deps.restoreRequestUIIdle(body, conversationKey, thisRequestId);
-    deps.setCurrentAbortController(null);
-    deps.setPendingRequestId(0);
+    deps.setCurrentAbortController(conversationKey, null);
+    deps.setPendingRequestId(conversationKey, 0);
   }
 }

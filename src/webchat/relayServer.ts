@@ -54,6 +54,15 @@ export interface ScrapedChatMessage {
   attachments?: string[];
 }
 
+export interface ScrapedTranscriptSnapshot {
+  messages: ScrapedChatMessage[];
+  chatUrl: string | null;
+  chatId: string | null;
+  siteHostname: string | null;
+  capturedAt: number;
+  source: "network" | "dom" | null;
+}
+
 export type RelayQueryPhase =
   | "pending"
   | "claimed"
@@ -158,14 +167,28 @@ interface ExtensionStatus {
   ts: number;
 }
 
-type HistorySiteSyncMap = Record<string, { lastUpdatedAt: number }>;
+export type RelayHistorySyncStatus =
+  | "ok"
+  | "empty"
+  | "invalid_source"
+  | "timeout";
+
+export type RelayHistorySyncSource = "network" | "dom" | null;
+
+export type RelayHistorySiteSyncEntry = {
+  lastUpdatedAt: number;
+  status: RelayHistorySyncStatus;
+  source: RelayHistorySyncSource;
+};
+
+type HistorySiteSyncMap = Record<string, RelayHistorySiteSyncEntry>;
 
 const Z = Zotero as unknown as {
   _webchatRelay?: {
     state: RelayState;
     mirroredHistory: Array<{ id: string; title: string; chatUrl: string }>;
     historySiteSync: HistorySiteSyncMap;
-    scrapedMessages: ScrapedChatMessage[] | null;
+    scrapedTranscript: ScrapedTranscriptSnapshot | null;
     lastExtensionContact: number;
     extensionStatus: ExtensionStatus | null;
   };
@@ -213,7 +236,7 @@ if (!Z._webchatRelay) {
     },
     mirroredHistory: [],
     historySiteSync: {},
-    scrapedMessages: null,
+    scrapedTranscript: null,
     lastExtensionContact: 0,
     extensionStatus: null,
   };
@@ -228,7 +251,7 @@ function _store(): {
   state: RelayState;
   mirroredHistory: Array<{ id: string; title: string; chatUrl: string }>;
   historySiteSync: HistorySiteSyncMap;
-  scrapedMessages: ScrapedChatMessage[] | null;
+  scrapedTranscript: ScrapedTranscriptSnapshot | null;
   lastExtensionContact: number;
   extensionStatus: ExtensionStatus | null;
 } {
@@ -243,8 +266,97 @@ function S(): RelayState { return _store().state; }
 function getMirroredHistory(): Array<{ id: string; title: string; chatUrl: string }> { return _store().mirroredHistory; }
 function setMirroredHistory(h: Array<{ id: string; title: string; chatUrl: string }>) { _store().mirroredHistory = h; }
 function getHistorySiteSync(): HistorySiteSyncMap { return _store().historySiteSync; }
-function getScrapedMessages(): ScrapedChatMessage[] | null { return _store().scrapedMessages; }
-function setScrapedMessages(m: ScrapedChatMessage[] | null) { _store().scrapedMessages = m; }
+function cloneScrapedTranscriptSnapshot(
+  snapshot: ScrapedTranscriptSnapshot | null,
+): ScrapedTranscriptSnapshot | null {
+  if (!snapshot) return null;
+  return {
+    messages: Array.isArray(snapshot.messages)
+      ? snapshot.messages.map((message) => ({
+        messageKey:
+          typeof message?.messageKey === "string" ? message.messageKey : undefined,
+        role: typeof message?.role === "string" ? message.role : "assistant",
+        text: typeof message?.text === "string" ? message.text : "",
+        thinking:
+          typeof message?.thinking === "string" ? message.thinking : undefined,
+        attachments: Array.isArray(message?.attachments)
+          ? message.attachments.filter(
+            (attachment): attachment is string => typeof attachment === "string",
+          )
+          : undefined,
+      }))
+      : [],
+    chatUrl: typeof snapshot.chatUrl === "string" ? snapshot.chatUrl : null,
+    chatId: typeof snapshot.chatId === "string" ? snapshot.chatId : null,
+    siteHostname:
+      typeof snapshot.siteHostname === "string" ? snapshot.siteHostname : null,
+    capturedAt:
+      Number.isFinite(snapshot.capturedAt) && snapshot.capturedAt > 0
+        ? Math.floor(snapshot.capturedAt)
+        : 0,
+    source:
+      snapshot.source === "network" || snapshot.source === "dom"
+        ? snapshot.source
+        : null,
+  };
+}
+
+function getScrapedTranscript(): ScrapedTranscriptSnapshot | null {
+  return _store().scrapedTranscript;
+}
+
+function setScrapedTranscript(snapshot: ScrapedTranscriptSnapshot | null) {
+  _store().scrapedTranscript = cloneScrapedTranscriptSnapshot(snapshot);
+}
+
+function normalizeScrapedTranscriptSnapshot(
+  body: Record<string, unknown>,
+): ScrapedTranscriptSnapshot {
+  const messages = Array.isArray(body.messages)
+    ? (body.messages as Array<Record<string, unknown>>).map((message) => ({
+      messageKey:
+        typeof message?.messageKey === "string" ? message.messageKey : undefined,
+      role: typeof message?.role === "string" ? message.role : "assistant",
+      text: typeof message?.text === "string" ? message.text : "",
+      thinking:
+        typeof message?.thinking === "string" ? message.thinking : undefined,
+      attachments: Array.isArray(message?.attachments)
+        ? message.attachments.filter(
+          (attachment): attachment is string => typeof attachment === "string",
+        )
+        : undefined,
+    }))
+    : [];
+  const chatUrl = typeof body.chatUrl === "string" ? body.chatUrl : null;
+  const chatId = typeof body.chatId === "string" ? body.chatId : null;
+  let siteHostname =
+    typeof body.siteHostname === "string" ? normalizeHistorySiteHostname(body.siteHostname) : "";
+  if (!siteHostname && chatUrl) {
+    try {
+      siteHostname = normalizeHistorySiteHostname(new URL(chatUrl).hostname);
+    } catch {
+      siteHostname = "";
+    }
+  }
+  const capturedAtRaw = Number(body.capturedAt);
+  const capturedAt =
+    Number.isFinite(capturedAtRaw) && capturedAtRaw > 0
+      ? Math.floor(capturedAtRaw)
+      : Date.now();
+  const source =
+    body.source === "network" || body.source === "dom"
+      ? body.source
+      : null;
+
+  return {
+    messages,
+    chatUrl,
+    chatId,
+    siteHostname: siteHostname || null,
+    capturedAt,
+    source,
+  };
+}
 
 function normalizeHistorySiteHostname(hostname: string | null | undefined): string {
   return String(hostname || "")
@@ -253,11 +365,31 @@ function normalizeHistorySiteHostname(hostname: string | null | undefined): stri
     .replace(/^www\./, "");
 }
 
+function normalizeHistorySyncStatus(
+  value: unknown,
+  fallback: RelayHistorySyncStatus,
+): RelayHistorySyncStatus {
+  return value === "ok" ||
+    value === "empty" ||
+    value === "invalid_source" ||
+    value === "timeout"
+    ? value
+    : fallback;
+}
+
+function normalizeHistorySyncSource(value: unknown): RelayHistorySyncSource {
+  return value === "network" || value === "dom" ? value : null;
+}
+
 function cloneHistorySiteSync(): HistorySiteSyncMap {
   return Object.fromEntries(
     Object.entries(getHistorySiteSync()).map(([hostname, value]) => [
       hostname,
-      { lastUpdatedAt: Number(value?.lastUpdatedAt) || 0 },
+      {
+        lastUpdatedAt: Number(value?.lastUpdatedAt) || 0,
+        status: normalizeHistorySyncStatus(value?.status, "empty"),
+        source: normalizeHistorySyncSource(value?.source),
+      },
     ]),
   );
 }
@@ -286,7 +418,20 @@ function applyChatHistoryUpdate(body: Record<string, unknown>): void {
     incomingSites.add(normalizeHistorySiteHostname(body.siteHostname));
   }
 
-  if (incomingSites.size > 0) {
+  const source = normalizeHistorySyncSource(body.source);
+  const status = normalizeHistorySyncStatus(
+    body.status,
+    incoming.length > 0 ? "ok" : "empty",
+  );
+  const trustedExistingHistory = Array.from(incomingSites).every((hostname) => {
+    const existing = getHistorySiteSync()[hostname];
+    return existing?.status === "ok" || existing?.status === "empty";
+  });
+  const shouldReplaceHistory =
+    incomingSites.size > 0 &&
+    (incoming.length > 0 || status === "empty" || !trustedExistingHistory);
+
+  if (shouldReplaceHistory) {
     const kept = getMirroredHistory().filter((session) => {
       try {
         return !incomingSites.has(
@@ -297,7 +442,7 @@ function applyChatHistoryUpdate(body: Record<string, unknown>): void {
       }
     });
     setMirroredHistory([...kept, ...incoming]);
-  } else {
+  } else if (incomingSites.size === 0) {
     setMirroredHistory(incoming);
   }
 
@@ -310,7 +455,11 @@ function applyChatHistoryUpdate(body: Record<string, unknown>): void {
       : Date.now();
   const siteSync = getHistorySiteSync();
   for (const hostname of incomingSites) {
-    siteSync[hostname] = { lastUpdatedAt };
+    siteSync[hostname] = {
+      lastUpdatedAt,
+      status,
+      source,
+    };
   }
 }
 
@@ -350,6 +499,7 @@ function resetState() {
   S().activeSessionId = null;
   S().pendingCommand = null;
   S().reported_mode = null;
+  setScrapedTranscript(null);
 }
 
 // ---------------------------------------------------------------------------
@@ -982,7 +1132,7 @@ const ChatHistoryEndpoint = createEndpoint(["GET", "POST"], (opts) => {
   if (opts.method === "POST") {
     const body = parseBody(opts.data);
     if (body.action === "submit_scraped") {
-      setScrapedMessages((body.messages as ScrapedChatMessage[]) || []);
+      setScrapedTranscript(normalizeScrapedTranscriptSnapshot(body));
       return jsonReply({ ok: true });
     }
     return jsonReply({ error: "Unknown action" }, 400);
@@ -990,9 +1140,15 @@ const ChatHistoryEndpoint = createEndpoint(["GET", "POST"], (opts) => {
 
   // GET
   if (opts.query?.action === "get_scraped") {
-    const messages = getScrapedMessages();
-    setScrapedMessages(null);
-    return jsonReply({ messages: messages as unknown as Record<string, unknown> });
+    const snapshot = cloneScrapedTranscriptSnapshot(getScrapedTranscript());
+    return jsonReply({
+      messages: snapshot?.messages || [],
+      chatUrl: snapshot?.chatUrl || null,
+      chatId: snapshot?.chatId || null,
+      siteHostname: snapshot?.siteHostname || null,
+      capturedAt: snapshot?.capturedAt || 0,
+      source: snapshot?.source || null,
+    });
   }
 
   return jsonReply({
@@ -1351,7 +1507,7 @@ export function relayRefreshChat(): { ok: boolean; chatUrl: string | null } {
   const chatUrl = S().remote_chat_url;
   const chatId = S().remote_chat_id;
   if (!chatUrl) return { ok: false, chatUrl: null };
-  setScrapedMessages(null);
+  setScrapedTranscript(null);
   S().turn_status = "navigating";
   S().pendingCommand = { type: "LOAD_CHAT", chatUrl, chatId: chatId || undefined } as any;
   return { ok: true, chatUrl };
@@ -1416,11 +1572,14 @@ export function relayGetReportedMode(): string | null {
   return S().reported_mode;
 }
 
-/** Get and clear scraped messages directly (no HTTP). */
+/** Get the latest scraped transcript snapshot directly (no HTTP). */
+export function relayGetScrapedTranscriptSnapshot(): ScrapedTranscriptSnapshot | null {
+  return cloneScrapedTranscriptSnapshot(getScrapedTranscript());
+}
+
+/** Get scraped messages directly (no HTTP). */
 export function relayGetScrapedMessages(): ScrapedChatMessage[] | null {
-  const msgs = getScrapedMessages();
-  setScrapedMessages(null);
-  return msgs;
+  return relayGetScrapedTranscriptSnapshot()?.messages || null;
 }
 
 /** Test-only visibility into the relay state. */
@@ -1452,7 +1611,7 @@ export function relayResetForTests(): void {
   resetState();
   setMirroredHistory([]);
   _store().historySiteSync = {};
-  setScrapedMessages(null);
+  setScrapedTranscript(null);
   _store().lastExtensionContact = 0;
   _store().extensionStatus = null;
 }

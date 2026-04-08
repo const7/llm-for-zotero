@@ -7,7 +7,7 @@
  */
 
 import { createElement } from "../utils/domHelpers";
-import { relayGetExtensionLiveness, relayGetExtensionStatus, relayClearExtensionStatus, relaySetCommand } from "./relayServer";
+import { relayGetExtensionLiveness, relayGetExtensionStatus, relayClearExtensionStatus } from "./relayServer";
 import { WEBCHAT_TARGETS } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -85,9 +85,6 @@ export async function showWebChatPreloadScreen(
 
   // Clear stale extension status so we wait for a fresh heartbeat
   relayClearExtensionStatus();
-
-  // Tell the extension to open the target site tab if none is open
-  relaySetCommand({ type: "ENSURE_TAB" });
 
   // Remove any leftover preload overlay
   chatShell.querySelector(".llm-webchat-preload")?.remove();

@@ -51,22 +51,54 @@ export let currentRequestId = 0;
 export function nextRequestId(): number {
   return ++currentRequestId;
 }
-/**
- * Set to the current request ID when a request starts and cleared back to 0
- * in the finally block. Unlike currentAbortController, this stays non-null for
- * the entire lifecycle of a request, including pre-stream work.
- */
-export let pendingRequestId = 0;
-export function setPendingRequestId(id: number): void {
-  pendingRequestId = id;
+// ── Per-conversation request lifecycle state ──────────────────────────────
+// Each conversation can independently generate a response. State is keyed by
+// conversationKey so concurrent generations don't block each other.
+
+const pendingRequestIds = new Map<number, number>();
+const cancelledRequestIds = new Map<number, number>();
+const abortControllers = new Map<number, AbortController | null>();
+
+export function getPendingRequestId(conversationKey: number): number {
+  return pendingRequestIds.get(conversationKey) || 0;
 }
-export let cancelledRequestId = -1;
-export function setCancelledRequestId(value: number) {
-  cancelledRequestId = value;
+export function setPendingRequestId(conversationKey: number, id: number): void {
+  if (id <= 0) {
+    pendingRequestIds.delete(conversationKey);
+  } else {
+    pendingRequestIds.set(conversationKey, id);
+  }
 }
-export let currentAbortController: AbortController | null = null;
-export function setCurrentAbortController(value: AbortController | null) {
-  currentAbortController = value;
+
+export function getCancelledRequestId(conversationKey: number): number {
+  return cancelledRequestIds.get(conversationKey) ?? -1;
+}
+export function setCancelledRequestId(conversationKey: number, value: number): void {
+  cancelledRequestIds.set(conversationKey, value);
+}
+
+export function getAbortController(conversationKey: number): AbortController | null {
+  return abortControllers.get(conversationKey) ?? null;
+}
+export function setAbortController(conversationKey: number, value: AbortController | null): void {
+  if (value === null) {
+    abortControllers.delete(conversationKey);
+  } else {
+    abortControllers.set(conversationKey, value);
+  }
+}
+
+/** Returns true if the given conversation has an in-flight request. */
+export function isRequestPending(conversationKey: number): boolean {
+  return (pendingRequestIds.get(conversationKey) || 0) > 0;
+}
+
+/** Returns true if ANY conversation has an in-flight request. */
+export function isAnyRequestPending(): boolean {
+  for (const id of pendingRequestIds.values()) {
+    if (id > 0) return true;
+  }
+  return false;
 }
 export let panelFontScalePercent = 120; // FONT_SCALE_DEFAULT_PERCENT — overwritten by initFontScale()
 export function setPanelFontScalePercent(value: number) {
@@ -141,9 +173,16 @@ export const recentReaderSelectionCache = new TTLMap<number, string>(5 * 60 * 10
 export const activePaperConversationByPaper = new Map<string, number>();
 
 // ── Auto-lock state (open chat locks during generation) ─────────────────────
-export let autoLockedGlobalConversationKey: number | null = null;
-export function setAutoLockedGlobalConversationKey(value: number | null): void {
-  autoLockedGlobalConversationKey = value;
+// Multiple conversations can be auto-locked simultaneously.
+const autoLockedGlobalConversationKeys = new Set<number>();
+export function addAutoLockedGlobalConversationKey(key: number): void {
+  autoLockedGlobalConversationKeys.add(key);
+}
+export function removeAutoLockedGlobalConversationKey(key: number): void {
+  autoLockedGlobalConversationKeys.delete(key);
+}
+export function isAutoLockedGlobalConversation(key: number): boolean {
+  return autoLockedGlobalConversationKeys.has(key);
 }
 
 // ── Inline edit state ───────────────────────────────────────────────────────
@@ -238,4 +277,8 @@ export function clearAllState(): void {
   pinnedPaperKeys.clear();
   recentReaderSelectionCache.clear();
   activePaperConversationByPaper.clear();
+  pendingRequestIds.clear();
+  cancelledRequestIds.clear();
+  abortControllers.clear();
+  autoLockedGlobalConversationKeys.clear();
 }

@@ -707,6 +707,8 @@ export function openStandaloneChat(options?: {
         const requestedAt = Date.now();
         const [{ relaySetCommand }, {
           filterWebChatHistorySessionsForHostname,
+          getWebChatHistorySiteSyncEntry,
+          isWebChatHistorySiteFailure,
           waitForFreshChatHistorySnapshot,
         }] = await Promise.all([
           import("../../webchat/relayServer"),
@@ -717,6 +719,7 @@ export function openStandaloneChat(options?: {
         relaySetCommand({ type: "SCRAPE_HISTORY" });
 
         let sessions: Array<{ id: string; title: string; chatUrl: string | null }> = [];
+        let historyFetchFailed = false;
         try {
           const snapshot = await waitForFreshChatHistorySnapshot(
             "",
@@ -726,6 +729,9 @@ export function openStandaloneChat(options?: {
           sessions = filterWebChatHistorySessionsForHostname(
             snapshot.sessions,
             targetHostname,
+          );
+          historyFetchFailed = isWebChatHistorySiteFailure(
+            getWebChatHistorySiteSyncEntry(snapshot, targetHostname),
           );
         } catch { /* relay not reachable */ }
 
@@ -737,7 +743,9 @@ export function openStandaloneChat(options?: {
         if (!sessions.length) {
           const emptyEl = doc.createElementNS(HTML_NS, "div") as HTMLDivElement;
           emptyEl.className = "llm-standalone-popup-empty";
-          emptyEl.textContent = t("No conversations yet");
+          emptyEl.textContent = historyFetchFailed
+            ? t("Failed to fetch history")
+            : t("No conversations yet");
           historyPopup.appendChild(emptyEl);
           return;
         }
@@ -755,8 +763,11 @@ export function openStandaloneChat(options?: {
             if (!activeItem) return;
             // Load the webchat conversation via the relay
             void (async () => {
+              const key = getConversationKey(activeItem);
+              const isDeepSeekSession =
+                typeof session.chatUrl === "string" &&
+                /chat\.deepseek\.com/i.test(session.chatUrl);
               try {
-                const key = getConversationKey(activeItem);
                 // Derive model name from the session's chat URL
                 let loadModelName = "chatgpt.com";
                 try {
@@ -816,6 +827,15 @@ export function openStandaloneChat(options?: {
                 refreshChat(contentArea, activeItem);
               } catch (err) {
                 ztoolkit.log("LLM: standalone webchat load failed", err);
+                chatHistory.set(key, [{
+                  role: "assistant" as const,
+                  text: isDeepSeekSession
+                    ? t("Failed to load selected DeepSeek conversation")
+                    : t("Failed to load selected conversation"),
+                  timestamp: Date.now(),
+                  modelProviderLabel: "WebChat",
+                }]);
+                refreshChat(contentArea, activeItem);
               }
             })();
           });
@@ -845,6 +865,8 @@ export function openStandaloneChat(options?: {
         const requestedAt = Date.now();
         const [{ relaySetCommand }, {
           filterWebChatHistorySessionsForHostname,
+          getWebChatHistorySiteSyncEntry,
+          isWebChatHistorySiteFailure,
           waitForFreshChatHistorySnapshot,
         }] = await Promise.all([
           import("../../webchat/relayServer"),
@@ -855,6 +877,7 @@ export function openStandaloneChat(options?: {
         relaySetCommand({ type: "SCRAPE_HISTORY" });
 
         let sessions: Array<{ id: string; title: string; chatUrl: string | null }> = [];
+        let historyFetchFailed = false;
         try {
           const snapshot = await waitForFreshChatHistorySnapshot(
             "",
@@ -865,6 +888,9 @@ export function openStandaloneChat(options?: {
             snapshot.sessions,
             targetHostname,
           );
+          historyFetchFailed = isWebChatHistorySiteFailure(
+            getWebChatHistorySiteSyncEntry(snapshot, targetHostname),
+          );
         } catch { /* relay not reachable */ }
 
         if (cancelled || !isInWebChatMode || mySeq !== webChatSidebarRenderSeq) return;
@@ -873,7 +899,9 @@ export function openStandaloneChat(options?: {
         if (!sessions.length) {
           const emptyEl = doc.createElementNS(HTML_NS, "div") as HTMLDivElement;
           emptyEl.className = "llm-standalone-sidebar-empty";
-          emptyEl.textContent = t("No conversations yet");
+          emptyEl.textContent = historyFetchFailed
+            ? t("Failed to fetch history")
+            : t("No conversations yet");
           sidebarList.appendChild(emptyEl);
           return;
         }
@@ -893,8 +921,11 @@ export function openStandaloneChat(options?: {
             if (!activeItem) return;
             // Load the webchat conversation
             void (async () => {
+              const key = getConversationKey(activeItem);
+              const isDeepSeekSession =
+                typeof session.chatUrl === "string" &&
+                /chat\.deepseek\.com/i.test(session.chatUrl);
               try {
-                const key = getConversationKey(activeItem);
                 let loadModelName = "chatgpt.com";
                 try {
                   if (session.chatUrl) {
@@ -952,6 +983,15 @@ export function openStandaloneChat(options?: {
                 refreshChat(contentArea, activeItem);
               } catch (err) {
                 ztoolkit.log("LLM: standalone webchat sidebar load failed", err);
+                chatHistory.set(key, [{
+                  role: "assistant" as const,
+                  text: isDeepSeekSession
+                    ? t("Failed to load selected DeepSeek conversation")
+                    : t("Failed to load selected conversation"),
+                  timestamp: Date.now(),
+                  modelProviderLabel: "WebChat",
+                }]);
+                refreshChat(contentArea, activeItem);
               }
             })();
           });
