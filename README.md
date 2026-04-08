@@ -24,10 +24,11 @@ Documentation:
 
 ### 📢 Recent Updates
 
+- **Standalone Window Mode** — Open the LLM Assistant in its own dedicated window, separate from the Zotero reader sidebar. See [Standalone Window Mode](#standalone-window-mode).
+- **Obsidian Integration** — Write notes from your Zotero papers directly to your Obsidian vault with customizable templates. See [Obsidian Integration](#obsidian-integration).
 - **Agent Mode (beta)** — LLM-for-Zotero can now act as an autonomous agent inside your Zotero library. See [Agent Mode](#agent-mode-beta) for details.
 - **Codex auth** — ChatGPT Plus subscribers can use their Codex quota to access Codex models (e.g. `gpt-5.4`) without an API key. See [Codex Auth Setup](#codex-auth-setup-chatgpt-plus-subscribers).
 - **MinerU PDF parsing** — High-fidelity PDF extraction that preserves tables, equations, and figures. See [MinerU PDF Parsing](#mineru-pdf-parsing).
-- **Renamed** — The plugin has been renamed from its earlier name to `llm-for-zotero`. See the [release notes](https://github.com/yilewang/llm-for-zotero/releases) for full history.
 
 ---
 
@@ -37,6 +38,7 @@ Documentation:
 - [Configuration](#configuration)
 - [Usage Guide](#usage-guide)
 - [Features](#features)
+- [Obsidian Integration](#obsidian-integration)
 - [Agent Mode (beta)](#agent-mode-beta)
 - [WebChat Setup](#webchat-setup-chatgpt-web-sync)
 - [Codex Auth Setup](#codex-auth-setup-chatgpt-plus-subscribers)
@@ -184,6 +186,63 @@ Local conversation history is automatically saved and associated with the paper 
 </p>
 
 Customize quick-action presets to match your research workflow — predefined prompts available at the tap of a button.
+
+---
+
+## Standalone Window Mode
+
+<p align="center">
+  <img src="./assets/standalone_window.png" alt="Screenshot of the LLM Assistant standalone window" width="1024" />
+</p>
+
+Open the LLM Assistant in its own dedicated window, separate from the Zotero reader sidebar. The standalone window gives you a full-sized chat interface with a collapsible conversation history panel on the left.
+
+- **Open via menu:** `Tools` → `LLM Chat Window`
+- **Keyboard shortcut:** `Ctrl+Shift+L` (macOS: `Cmd+Shift+L`)
+- **Paper chat & Library chat:** Switch between paper-specific and library-wide conversations using the tabs at the top.
+- **Conversation history:** Browse past conversations organized by date (Today, Yesterday, Last 7/30 days, Older) in the left sidebar.
+- **All features available:** Everything you can do in the reader sidebar — screenshots, file uploads, agent mode, quick-action presets — works identically in the standalone window.
+
+While the standalone window is open, the reader sidebar panels display a placeholder with options to focus the window or close it and return to the sidebar.
+
+---
+
+## Obsidian Integration
+
+The agent can write notes from your Zotero papers directly into your [Obsidian](https://obsidian.md/) vault — with full metadata, citations, and optionally extracted figures.
+
+### Configuration
+
+Open `Preferences` → `llm-for-zotero` and scroll to the **Obsidian Integration** section.
+
+<p align="center">
+  <img src="./assets/obsidian_setting.png" alt="Screenshot of Obsidian Integration settings" width="512" />
+</p>
+
+| Setting                | Description                                                                | Default          |
+| ---------------------- | -------------------------------------------------------------------------- | ---------------- |
+| **Vault Path**         | Absolute path to your Obsidian vault root                                  | _(required)_     |
+| **Default Folder**     | Subfolder for notes (created if it doesn't exist)                          | `Logs`           |
+| **Attachments Folder** | Subfolder for copied figures and images                                    | `imgs`           |
+| **Note Template**      | Markdown template with `{{title}}`, `{{date}}`, `{{content}}` placeholders | Built-in default |
+
+Click **Test Write Access** to verify the plugin can write to your vault.
+
+### How it works
+
+Ask the agent to write a note to Obsidian (e.g. _"Summarize this paper and save it to Obsidian"_). The agent will:
+
+1. Gather content from the paper (metadata, summary, key points, etc.).
+2. Compose a Markdown note using your configured template.
+3. Add YAML frontmatter with title, date, tags, authors, year, and citation key.
+4. Optionally copy figures from MinerU-parsed PDFs into the attachments folder.
+5. Write the note to `{vault_path}/{default_folder}/{title}.md`.
+
+<p align="center">
+  <img src="./assets/obsidian_example.png" alt="Screenshot of a Zotero paper note in Obsidian" width="1024" />
+</p>
+
+Notes use [Pandoc citation syntax](https://pandoc.org/MANUAL.html#citations) (`[@citekey]`), compatible with Obsidian's Zotero Integration and Pandoc plugins.
 
 ---
 
@@ -372,10 +431,10 @@ When a personal API key is provided, the plugin calls the MinerU API directly (`
 - [x] MinerU PDF parsing
 - [x] GitHub Copilot auth
 - [x] WebChat mode (ChatGPT web sync)
+- [x] Standalone window mode ([#78](https://github.com/yilewang/llm-for-zotero/issues/78))
+- [x] Obsidian integration
 - [ ] Local MinerU support
 - [ ] Customized skills
-- [ ] Agent mode between Zotero and Obsidian
-- [ ] Independent floating window ([#78](https://github.com/yilewang/llm-for-zotero/issues/78))
 - [ ] Cross-device synchronization
 
 ---
