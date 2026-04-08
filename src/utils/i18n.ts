@@ -216,6 +216,8 @@ const zhCN: Record<string, string> = {
   "Manage Files": "管理文件",
   "items failed": "个条目失败",
   "Failed": "失败",
+  "Auto-parse newly added items": "自动解析新加入文献",
+  "Processing": "解析中",
 
   // ── Preferences page ───────────────────────────────────────────────────
   "AI Providers": "AI 服务商",

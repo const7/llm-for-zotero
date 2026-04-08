@@ -23,3 +23,5 @@ pref("obsidianTargetFolder", "Zotero Notes");
 pref("obsidianAttachmentsFolder", "assets");
 pref("obsidianNoteTemplate", "");
 pref("locale", "auto");
+pref("mineruAutoWatchCollections", "");
+pref("mineruGlobalAutoParse", false);
