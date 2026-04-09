@@ -41,6 +41,30 @@ function fmtDate(d: string): string {
 
 type SortKey = "cached" | "title" | "firstCreator" | "year" | "dateAdded";
 type SortDir = "asc" | "desc";
+type ResizableColumnKey = "firstCreator" | "year" | "dateAdded";
+type ResizeBoundary =
+  | "title|firstCreator"
+  | "firstCreator|year"
+  | "year|dateAdded";
+type ResizeHandlePlacement = {
+  boundary: ResizeBoundary;
+  side: "left" | "right";
+};
+
+const DOT_COLUMN_WIDTH = 8;
+const CHECKBOX_SPACER_WIDTH = 13;
+const TITLE_CONTENT_OFFSET = 4;
+const DEFAULT_COLUMN_WIDTHS: Record<ResizableColumnKey, number> = {
+  firstCreator: 110,
+  year: 40,
+  dateAdded: 72,
+};
+const MIN_COLUMN_WIDTHS = {
+  title: 140,
+  firstCreator: 80,
+  year: 34,
+  dateAdded: 64,
+} as const;
 
 export async function registerMineruManagerScript(
   win: Window,
@@ -84,6 +108,10 @@ export async function registerMineruManagerScript(
   // Sorting
   let sortKey: SortKey = "dateAdded";
   let sortDir: SortDir = "desc";
+  const columnWidths: Record<ResizableColumnKey, number> = {
+    ...DEFAULT_COLUMN_WIDTHS,
+  };
+  let stopActiveResize: (() => void) | null = null;
 
   // Tree view collapse state
   const collapsedParents = new Set<number>();
@@ -336,12 +364,236 @@ export async function registerMineruManagerScript(
   }
 
   // ── Column header sorting ──────────────────────────────────────────────────
+  function setColumnWidthStyle(cell: HTMLElement, key: SortKey): void {
+    cell.setAttribute("data-mineru-column", key);
+    if (key === "cached") {
+      cell.style.flex = `0 0 ${DOT_COLUMN_WIDTH}px`;
+      cell.style.width = `${DOT_COLUMN_WIDTH}px`;
+      cell.style.minWidth = `${DOT_COLUMN_WIDTH}px`;
+      cell.style.maxWidth = `${DOT_COLUMN_WIDTH}px`;
+      return;
+    }
+    if (key === "title") {
+      cell.style.flex = "1 1 auto";
+      cell.style.minWidth = "0";
+      cell.style.width = "";
+      cell.style.maxWidth = "";
+      return;
+    }
+
+    const width = columnWidths[key];
+    cell.style.flex = `0 0 ${width}px`;
+    cell.style.width = `${width}px`;
+    cell.style.minWidth = `${width}px`;
+    cell.style.maxWidth = `${width}px`;
+  }
+
+  function applyColumnLayout(root: ParentNode | null = null): void {
+    const scope = root ?? colHeaders?.parentElement ?? itemsList ?? doc;
+    if (!("querySelectorAll" in scope)) return;
+    const cells = scope.querySelectorAll("[data-mineru-column]");
+    for (let i = 0; i < cells.length; i++) {
+      const cell = cells[i] as HTMLElement;
+      const key = cell.getAttribute("data-mineru-column") as SortKey | null;
+      if (!key) continue;
+      setColumnWidthStyle(cell, key);
+    }
+  }
+
+  function getHeaderContentWidth(): number {
+    if (!colHeaders) return 0;
+    const styles = win.getComputedStyle(colHeaders);
+    if (!styles) return colHeaders.clientWidth;
+    const paddingLeft = Number.parseFloat(styles.paddingLeft || "0") || 0;
+    const paddingRight = Number.parseFloat(styles.paddingRight || "0") || 0;
+    return Math.max(0, colHeaders.clientWidth - paddingLeft - paddingRight);
+  }
+
+  function getHeaderGapWidth(): number {
+    if (!colHeaders) return 0;
+    const styles = win.getComputedStyle(colHeaders);
+    if (!styles) return 0;
+    return (
+      Number.parseFloat(styles.columnGap || styles.gap || "0") ||
+      Number.parseFloat(styles.gap || "0") ||
+      0
+    );
+  }
+
+  function getCurrentTitleWidth(): number {
+    const hasSpacer = !!doc.getElementById(CHECKBOX_SPACER_ID);
+    const itemCount = hasSpacer ? 6 : 5;
+    const gapWidth = getHeaderGapWidth() * Math.max(0, itemCount - 1);
+    const fixedWidth =
+      DOT_COLUMN_WIDTH +
+      (hasSpacer ? CHECKBOX_SPACER_WIDTH : 0) +
+      columnWidths.firstCreator +
+      columnWidths.year +
+      columnWidths.dateAdded;
+    return Math.max(0, getHeaderContentWidth() - fixedWidth - gapWidth);
+  }
+
+  function startColumnResize(boundary: ResizeBoundary, event: MouseEvent): void {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+
+    stopActiveResize?.();
+
+    const startX = event.clientX;
+    const startWidths = { ...columnWidths };
+    const startTitleWidth = getCurrentTitleWidth();
+    const rootEl = doc.documentElement as HTMLElement;
+    const previousCursor = rootEl.style.cursor;
+    const previousUserSelect = rootEl.style.userSelect;
+
+    const onMouseMove = (moveEvent: MouseEvent) => {
+      moveEvent.preventDefault();
+      const rawDelta = moveEvent.clientX - startX;
+      let appliedDelta = rawDelta;
+
+      if (boundary === "title|firstCreator") {
+        const minDelta = Math.min(
+          0,
+          MIN_COLUMN_WIDTHS.title - startTitleWidth,
+        );
+        const maxDelta = Math.max(
+          0,
+          startWidths.firstCreator - MIN_COLUMN_WIDTHS.firstCreator,
+        );
+        appliedDelta = Math.min(maxDelta, Math.max(minDelta, rawDelta));
+        columnWidths.firstCreator = startWidths.firstCreator - appliedDelta;
+      } else if (boundary === "firstCreator|year") {
+        const minDelta = Math.min(
+          0,
+          MIN_COLUMN_WIDTHS.firstCreator - startWidths.firstCreator,
+        );
+        const maxDelta = Math.max(0, startWidths.year - MIN_COLUMN_WIDTHS.year);
+        appliedDelta = Math.min(maxDelta, Math.max(minDelta, rawDelta));
+        columnWidths.firstCreator = startWidths.firstCreator + appliedDelta;
+        columnWidths.year = startWidths.year - appliedDelta;
+      } else {
+        const minDelta = Math.min(0, MIN_COLUMN_WIDTHS.year - startWidths.year);
+        const maxDelta = Math.max(
+          0,
+          startWidths.dateAdded - MIN_COLUMN_WIDTHS.dateAdded,
+        );
+        appliedDelta = Math.min(maxDelta, Math.max(minDelta, rawDelta));
+        columnWidths.year = startWidths.year + appliedDelta;
+        columnWidths.dateAdded = startWidths.dateAdded - appliedDelta;
+      }
+
+      applyColumnLayout(colHeaders?.parentElement ?? itemsList ?? doc);
+    };
+
+    const onMouseUp = () => {
+      cleanup();
+    };
+
+    const cleanup = () => {
+      win.removeEventListener("mousemove", onMouseMove, true);
+      win.removeEventListener("mouseup", onMouseUp, true);
+      rootEl.style.cursor = previousCursor;
+      rootEl.style.userSelect = previousUserSelect;
+      if (stopActiveResize === cleanup) {
+        stopActiveResize = null;
+      }
+    };
+
+    stopActiveResize = cleanup;
+    rootEl.style.cursor = "col-resize";
+    rootEl.style.userSelect = "none";
+    win.addEventListener("mousemove", onMouseMove, true);
+    win.addEventListener("mouseup", onMouseUp, true);
+  }
+
+  function ensureHeaderCellLabel(cell: HTMLElement): HTMLSpanElement {
+    let label = cell.querySelector(
+      "[data-mineru-header-label]",
+    ) as HTMLSpanElement | null;
+    if (label) return label;
+
+    label = doc.createElement("span");
+    label.setAttribute("data-mineru-header-label", "true");
+    label.style.cssText =
+      "display: block; width: 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;";
+    label.textContent = cell.textContent || "";
+    cell.textContent = "";
+    cell.appendChild(label);
+    return label;
+  }
+
+  function getHeaderHandlePlacements(key: SortKey): ResizeHandlePlacement[] {
+    if (key === "title") {
+      return [{ boundary: "title|firstCreator", side: "right" }];
+    }
+    if (key === "firstCreator") {
+      return [{ boundary: "firstCreator|year", side: "right" }];
+    }
+    if (key === "year") {
+      return [{ boundary: "year|dateAdded", side: "right" }];
+    }
+    return [];
+  }
+
+  function ensureResizableHeaderCells(): void {
+    if (!colHeaders) return;
+    const spans = colHeaders.querySelectorAll("[data-sort-key]");
+    for (let i = 0; i < spans.length; i++) {
+      const cell = spans[i] as HTMLElement;
+      const key = cell.getAttribute("data-sort-key") as SortKey;
+      const label = ensureHeaderCellLabel(cell);
+      cell.style.display = "flex";
+      cell.style.alignItems = "center";
+      cell.style.position = "relative";
+      cell.style.minWidth = "0";
+      label.style.textAlign = key === "cached" ? "center" : "left";
+      label.style.paddingLeft =
+        key === "title" ? `${TITLE_CONTENT_OFFSET}px` : "0";
+      setColumnWidthStyle(cell, key);
+
+      const placements = getHeaderHandlePlacements(key);
+      for (const placement of placements) {
+        const handleId = `${placement.boundary}:${placement.side}`;
+        if (
+          cell.querySelector(
+            `[data-mineru-resize-handle="${handleId}"]`,
+          )
+        ) {
+          continue;
+        }
+
+        const handle = doc.createElement("span");
+        handle.setAttribute("data-mineru-resize-handle", handleId);
+        handle.style.cssText =
+          `position: absolute; top: -4px; ${placement.side}: -6px; width: 12px; height: calc(100% + 8px); cursor: col-resize; z-index: 2;`;
+
+        const guide = doc.createElement("span");
+        guide.style.cssText =
+          "position: absolute; top: 20%; left: 50%; width: 1px; height: 60%; background: rgba(128,128,128,0.35); transform: translateX(-0.5px); pointer-events: none;";
+        handle.appendChild(guide);
+
+        handle.addEventListener("mousedown", (e) =>
+          startColumnResize(placement.boundary, e as MouseEvent),
+        );
+        handle.addEventListener("click", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+        });
+
+        cell.appendChild(handle);
+      }
+    }
+  }
+
   function renderColumnHeaders(): void {
     if (!colHeaders) return;
+    ensureResizableHeaderCells();
     const spans = colHeaders.querySelectorAll("[data-sort-key]");
     for (let i = 0; i < spans.length; i++) {
       const sp = spans[i] as HTMLElement;
       const key = sp.getAttribute("data-sort-key") as SortKey;
+      const labelEl = ensureHeaderCellLabel(sp);
       const label = {
         cached: "\u25CF",
         title: t("Title"),
@@ -351,16 +603,17 @@ export async function registerMineruManagerScript(
       }[key];
       if (sortKey === key) {
         if (key === "cached") {
-          sp.textContent = sortDir === "asc" ? "\u25B2" : "\u25BC";
+          labelEl.textContent = sortDir === "asc" ? "\u25B2" : "\u25BC";
         } else {
-          sp.textContent = `${label} ${sortDir === "asc" ? "\u25B2" : "\u25BC"}`;
+          labelEl.textContent = `${label} ${sortDir === "asc" ? "\u25B2" : "\u25BC"}`;
         }
         sp.style.color = "FieldText";
       } else {
-        sp.textContent = label || "";
+        labelEl.textContent = label || "";
         sp.style.color = "#888";
       }
     }
+    applyColumnLayout(colHeaders.parentElement ?? colHeaders);
   }
 
   if (colHeaders) {
@@ -433,6 +686,7 @@ export async function registerMineruManagerScript(
 
     const dot = doc.createElement("span");
     dot.style.cssText = "width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;";
+    setColumnWidthStyle(dot, "cached");
     dot.style.background = item.cached ? "#10b981" : "#d1d5db";
     dotElements.set(item.attachmentId, dot);
     row.appendChild(dot);
@@ -449,33 +703,38 @@ export async function registerMineruManagerScript(
     titleSpan.style.cssText =
       "flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px;";
     if (opts.isChild) {
-      titleSpan.style.paddingLeft = "20px";
+      titleSpan.style.paddingLeft = `${20 + TITLE_CONTENT_OFFSET}px`;
       titleSpan.style.color = "#888";
       titleSpan.style.fontSize = "11.5px";
       titleSpan.textContent = item.pdfTitle;
       titleSpan.title = item.pdfTitle;
     } else {
+      titleSpan.style.paddingLeft = `${TITLE_CONTENT_OFFSET}px`;
       titleSpan.textContent = item.title;
       titleSpan.title = item.title;
     }
+    setColumnWidthStyle(titleSpan, "title");
     row.appendChild(titleSpan);
 
     const authorSpan = doc.createElement("span");
     authorSpan.style.cssText =
       "flex: 0 0 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; color: #888;";
     authorSpan.textContent = opts.isChild ? "" : item.firstCreator;
+    setColumnWidthStyle(authorSpan, "firstCreator");
     row.appendChild(authorSpan);
 
     const yearSpan = doc.createElement("span");
     yearSpan.style.cssText =
-      "flex: 0 0 40px; text-align: right; font-size: 11.5px; color: #888;";
+      "flex: 0 0 40px; text-align: left; font-size: 11.5px; color: #888;";
     yearSpan.textContent = opts.isChild ? "" : item.year;
+    setColumnWidthStyle(yearSpan, "year");
     row.appendChild(yearSpan);
 
     const dateSpan = doc.createElement("span");
     dateSpan.style.cssText =
       "flex: 0 0 72px; text-align: right; font-size: 11px; color: #888;";
     dateSpan.textContent = opts.isChild ? "" : fmtDate(item.dateAdded);
+    setColumnWidthStyle(dateSpan, "dateAdded");
     row.appendChild(dateSpan);
 
     row.addEventListener("click", (e) => {
@@ -545,18 +804,45 @@ export async function registerMineruManagerScript(
           renderItemsList();
           updateButtons();
         });
-        cb.addEventListener("click", (e) => e.stopPropagation());
+        cb.addEventListener("click", (e: Event) => {
+          e.stopPropagation();
+          if ((e as MouseEvent).shiftKey && lastClickedId !== null) {
+            e.preventDefault();
+            const anchorIdx = visibleItemsOrdered.findIndex(
+              (i) => i.attachmentId === lastClickedId,
+            );
+            const firstIdx = visibleItemsOrdered.findIndex(
+              (i) => i.attachmentId === group.children[0]?.attachmentId,
+            );
+            const lastIdx = visibleItemsOrdered.findIndex(
+              (i) =>
+                i.attachmentId ===
+                group.children[group.children.length - 1]?.attachmentId,
+            );
+            if (anchorIdx >= 0 && firstIdx >= 0 && lastIdx >= 0) {
+              const targetIdx = anchorIdx <= firstIdx ? lastIdx : firstIdx;
+              const from = Math.min(anchorIdx, targetIdx);
+              const to = Math.max(anchorIdx, targetIdx);
+              for (let i = from; i <= to; i++) {
+                selectedIds.add(visibleItemsOrdered[i].attachmentId);
+              }
+            }
+            renderItemsList();
+            updateButtons();
+          }
+        });
         parentRow.appendChild(cb);
       }
 
       // Aggregated status dot (before chevron)
       const parentDot = doc.createElement("span");
       parentDot.style.cssText = "width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;";
+      setColumnWidthStyle(parentDot, "cached");
 
       // Chevron (expand/collapse) — SVG triangle, after dot, before title
       const chev = doc.createElement("span");
       chev.style.cssText =
-        "width: 12px; height: 12px; flex-shrink: 0; cursor: pointer; user-select: none; display: inline-flex; align-items: center; justify-content: center;";
+        `width: 12px; height: 12px; flex-shrink: 0; cursor: pointer; user-select: none; display: inline-flex; align-items: center; justify-content: center; margin-left: ${TITLE_CONTENT_OFFSET}px;`;
       const svgNS = "http://www.w3.org/2000/svg";
       const svg = doc.createElementNS(svgNS, "svg");
       svg.setAttribute("width", "8");
@@ -587,6 +873,7 @@ export async function registerMineruManagerScript(
         "flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px;";
       titleSpan.textContent = group.title;
       titleSpan.title = group.title;
+      setColumnWidthStyle(titleSpan, "title");
       parentRow.appendChild(titleSpan);
 
       // Badge (multi-PDF only)
@@ -603,23 +890,48 @@ export async function registerMineruManagerScript(
       authorSpan.style.cssText =
         "flex: 0 0 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; color: #888;";
       authorSpan.textContent = group.firstCreator;
+      setColumnWidthStyle(authorSpan, "firstCreator");
       parentRow.appendChild(authorSpan);
 
       const yearSpan = doc.createElement("span");
-      yearSpan.style.cssText = "flex: 0 0 40px; text-align: right; font-size: 11.5px; color: #888;";
+      yearSpan.style.cssText = "flex: 0 0 40px; text-align: left; font-size: 11.5px; color: #888;";
       yearSpan.textContent = group.year;
+      setColumnWidthStyle(yearSpan, "year");
       parentRow.appendChild(yearSpan);
 
       const dateSpan = doc.createElement("span");
       dateSpan.style.cssText = "flex: 0 0 72px; text-align: right; font-size: 11px; color: #888;";
       dateSpan.textContent = fmtDate(group.dateAdded);
+      setColumnWidthStyle(dateSpan, "dateAdded");
       parentRow.appendChild(dateSpan);
 
       // Click: select all children
       parentRow.addEventListener("click", (e) => {
         if ((e.target as HTMLElement).tagName === "INPUT") return;
         const isMeta = (e as MouseEvent).metaKey || (e as MouseEvent).ctrlKey;
-        if (isMeta) {
+        const isShift = (e as MouseEvent).shiftKey;
+        if (isShift && lastClickedId !== null) {
+          const anchorIdx = visibleItemsOrdered.findIndex(
+            (i) => i.attachmentId === lastClickedId,
+          );
+          const firstIdx = visibleItemsOrdered.findIndex(
+            (i) => i.attachmentId === group.children[0]?.attachmentId,
+          );
+          const lastIdx = visibleItemsOrdered.findIndex(
+            (i) =>
+              i.attachmentId ===
+              group.children[group.children.length - 1]?.attachmentId,
+          );
+          if (anchorIdx >= 0 && firstIdx >= 0 && lastIdx >= 0) {
+            const targetIdx = anchorIdx <= firstIdx ? lastIdx : firstIdx;
+            const from = Math.min(anchorIdx, targetIdx);
+            const to = Math.max(anchorIdx, targetIdx);
+            if (!isMeta) selectedIds.clear();
+            for (let i = from; i <= to; i++) {
+              selectedIds.add(visibleItemsOrdered[i].attachmentId);
+            }
+          }
+        } else if (isMeta) {
           if (allChildrenSelected) {
             for (const c of group.children) selectedIds.delete(c.attachmentId);
           } else {
@@ -629,7 +941,8 @@ export async function registerMineruManagerScript(
           selectedIds.clear();
           for (const c of group.children) selectedIds.add(c.attachmentId);
         }
-        lastClickedId = group.children[0]?.attachmentId ?? null;
+        if (!isShift)
+          lastClickedId = group.children[0]?.attachmentId ?? null;
         renderItemsList();
         updateButtons();
       });
@@ -680,7 +993,27 @@ export async function registerMineruManagerScript(
               renderItemsList();
               updateButtons();
             });
-            cb.addEventListener("click", (e) => e.stopPropagation());
+            cb.addEventListener("click", (e: Event) => {
+              e.stopPropagation();
+              if ((e as MouseEvent).shiftKey && lastClickedId !== null) {
+                e.preventDefault();
+                const idxA = visibleItemsOrdered.findIndex(
+                  (i) => i.attachmentId === lastClickedId,
+                );
+                const idxB = visibleItemsOrdered.findIndex(
+                  (i) => i.attachmentId === child.attachmentId,
+                );
+                if (idxA >= 0 && idxB >= 0) {
+                  const from = Math.min(idxA, idxB);
+                  const to = Math.max(idxA, idxB);
+                  for (let i = from; i <= to; i++) {
+                    selectedIds.add(visibleItemsOrdered[i].attachmentId);
+                  }
+                }
+                renderItemsList();
+                updateButtons();
+              }
+            });
             childRow.insertBefore(cb, childRow.firstChild);
           }
           fragment.appendChild(childRow);
@@ -689,6 +1022,7 @@ export async function registerMineruManagerScript(
     }
 
     itemsList.appendChild(fragment);
+    applyColumnLayout(colHeaders?.parentElement ?? itemsList);
     updateButtons();
   }
 
@@ -1141,6 +1475,7 @@ export async function registerMineruManagerScript(
   });
 
   win.addEventListener("unload", () => {
+    stopActiveResize?.();
     unsubscribe();
     unsubscribeAutoWatch();
     unsubscribeProcessingStatus();
