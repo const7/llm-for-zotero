@@ -929,7 +929,16 @@ function refreshTrackedNoteEditingSelection(
 
   const nextSelectionText = noteItem
     ? collectAccessibleDocuments(win.document).reduce((found, doc) => {
-        return found || getEditableSelectionFromDocument(doc);
+        if (found) return found;
+        // Skip documents from background tab editors: only the focused
+        // editor's selection matters.  Without this, switching from Note A
+        // (with selected text) to Note B leaks Note A's selection because
+        // collectAccessibleDocuments traverses ALL iframes, including
+        // hidden-tab editors that still hold stale selections.
+        if (doc !== win.document && typeof doc.hasFocus === "function") {
+          if (!doc.hasFocus()) return found;
+        }
+        return getEditableSelectionFromDocument(doc);
       }, "")
     : "";
 
