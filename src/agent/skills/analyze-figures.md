@@ -14,17 +14,20 @@ When the user asks about a figure, table, or diagram in a paper, use the most ef
 
 This is the fast path — MinerU has already extracted figures as image files.
 
-**Step 1 — Read the markdown:**
-Use `file_io(read, '{mineruCacheDir}/full.md')` to get the full parsed content. Search for the figure reference (e.g. `Fig 1`, `Figure 1`, `Table 2`).
+**Step 1 — Read the manifest:**
+Use `file_io(read, '{mineruCacheDir}/manifest.json')` to see all sections with their figure lists, page numbers, and charStart/charEnd ranges.
 
-**Step 2 — Find the image file:**
-In the markdown, figure images appear as `![](images/hashname.png)` or `![](images/hashname.jpg)`. The absolute path is `{mineruCacheDir}/images/hashname.png`.
+**Step 2 — Find the figure in the manifest:**
+The manifest lists figures per section with labels (e.g. "Fig. 1"), image paths, captions, and page numbers. Locate the target figure and note which section it belongs to.
 
-**Step 3 — Read the image directly:**
-Use `read_attachment(target:{contextItemId:<id>})` with the image attachment, OR use `file_io(read, '{mineruCacheDir}/images/hashname.png')` to access the image. Visual models (GPT-4o, Codex, Claude, Gemini) can see images natively — let the model analyze the figure visually.
+**Step 3 — Read the section text:**
+Use `file_io(read, '{mineruCacheDir}/full.md', offset=<charStart>, length=<charEnd - charStart>)` to read just the section containing the figure. This gives you the caption and surrounding discussion.
 
-**Step 4 — Combine with caption text:**
-The markdown around the image reference contains the figure caption and surrounding discussion. Use both the image and the text to give a complete answer.
+**Step 4 — Read the image directly:**
+Use `file_io(read, '{mineruCacheDir}/<figure_path>')` to load the image. The path comes from the manifest's figure entry. Visual models (GPT-4o, Codex, Claude, Gemini) can see images natively — let the model analyze the figure visually.
+
+**Step 5 — Combine image + text:**
+Use both the image and the section text (caption + discussion) to give a complete answer.
 
 ### When MinerU cache is NOT available
 

@@ -24,6 +24,7 @@ import noteFromPaperRaw from "./note-from-paper.md";
 import noteEditingRaw from "./note-editing.md";
 import literatureReviewRaw from "./literature-review.md";
 import writeToObsidianRaw from "./write-to-obsidian.md";
+import importCitedReferenceRaw from "./import-cited-reference.md";
 
 export { matchesSkill } from "./skillLoader";
 export type { AgentSkill } from "./skillLoader";
@@ -42,6 +43,7 @@ export const BUILTIN_SKILL_FILES: Record<string, string> = {
   "note-editing.md": noteEditingRaw,
   "literature-review.md": literatureReviewRaw,
   "write-to-obsidian.md": writeToObsidianRaw,
+  "import-cited-reference.md": importCitedReferenceRaw,
 };
 
 /**
