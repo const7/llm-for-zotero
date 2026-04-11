@@ -873,6 +873,11 @@ export class ZoteroGateway {
     item?: Zotero.Item | null;
     content: string;
     expectedOriginalHtml?: string;
+    /** Pre-patched HTML that bypasses the text→HTML conversion.  When
+     *  provided, this HTML is set directly on the note, preserving
+     *  images, list numbering, and other structure that the plain-text
+     *  roundtrip would destroy. */
+    preRenderedHtml?: string;
   }): Promise<{
     noteId: number;
     title: string;
@@ -902,7 +907,11 @@ export class ZoteroGateway {
         ? params.content
         : String(params.content || ""),
     );
-    noteItem.setNote(renderRawNoteHtml(nextText));
+    if (params.preRenderedHtml) {
+      noteItem.setNote(params.preRenderedHtml);
+    } else {
+      noteItem.setNote(renderRawNoteHtml(nextText));
+    }
     await noteItem.saveTx();
     invalidateCachedContextText(snapshot.noteId);
     return {

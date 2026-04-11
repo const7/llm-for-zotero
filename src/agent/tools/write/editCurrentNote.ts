@@ -2,7 +2,12 @@ import type { ZoteroGateway } from "../../services/zoteroGateway";
 import { LibraryMutationService } from "../../services/libraryMutationService";
 import { pushUndoEntry } from "../../store/undoStore";
 import type { AgentToolDefinition } from "../../types";
-import { normalizeNoteSourceText } from "../../../modules/contextPanel/notes";
+import {
+  normalizeNoteSourceText,
+  stripNoteHtml,
+  renderRawNoteHtml,
+} from "../../../modules/contextPanel/notes";
+import { escapeNoteHtml } from "../../../modules/contextPanel/textUtils";
 import { fileUrlToPath } from "../../../utils/localPath";
 import { ok, fail, validateObject, normalizePositiveInt } from "../shared";
 import { executeAndRecordUndo } from "./mutateLibraryShared";
@@ -79,6 +84,10 @@ type EditCurrentNoteInput = {
   mode: "edit" | "create";
   content: string;
   expectedOriginalHtml?: string;
+  /** Pre-patched HTML computed by applying patches directly to the original
+   *  note HTML.  When set, `execute()` uses this instead of round-tripping
+   *  through `renderRawNoteHtml` to preserve images, list numbering, etc. */
+  _patchedHtml?: string;
   noteId?: number;
   noteTitle?: string;
   target?: "item" | "standalone";
@@ -100,6 +109,157 @@ function applyPatches(base: string, patches: NotePatch[]): string {
         patch.replace +
         result.slice(index + patch.find.length);
     }
+  }
+  return result;
+}
+
+/**
+ * Render a replacement string as inline HTML.  Uses the full markdown
+ * renderer but strips the outer `<p>` wrapper so the result can be
+ * inserted into an existing HTML element.
+ */
+function renderReplacementAsInlineHtml(text: string): string {
+  try {
+    const rendered = renderRawNoteHtml(text);
+    const match = rendered.match(/^<p>([\s\S]*)<\/p>\s*$/);
+    if (match) return match[1];
+    return escapeNoteHtml(text);
+  } catch {
+    return escapeNoteHtml(text);
+  }
+}
+
+/**
+ * Find plain text content within HTML (skipping tags and decoding common
+ * entities) and replace it, preserving surrounding HTML structure.
+ *
+ * Returns the patched HTML, or `null` when the text cannot be located
+ * (caller should fall back to full-note replacement).
+ */
+function replaceTextContentInHtml(
+  html: string,
+  find: string,
+  replace: string,
+): string | null {
+  if (!find) return html;
+
+  // Strategy 1: Direct match (no entities or inline tags in the way)
+  const directIdx = html.indexOf(find);
+  if (directIdx >= 0) {
+    return (
+      html.slice(0, directIdx) +
+      escapeNoteHtml(replace) +
+      html.slice(directIdx + find.length)
+    );
+  }
+
+  // Strategy 2: Walk HTML character-by-character, building a text→HTML
+  // position map that handles tags and common HTML entities.
+  const textChars: string[] = [];
+  // For each text character, record the HTML start and end positions
+  // of the source token (a single char or an entity like &amp;).
+  const htmlStarts: number[] = [];
+  const htmlEnds: number[] = [];
+
+  let i = 0;
+  while (i < html.length) {
+    if (html[i] === "<") {
+      const tagEnd = html.indexOf(">", i);
+      if (tagEnd < 0) break;
+      i = tagEnd + 1;
+      continue;
+    }
+
+    if (html[i] === "&") {
+      const semiPos = html.indexOf(";", i);
+      if (semiPos > i && semiPos - i <= 10) {
+        const entity = html.slice(i, semiPos + 1);
+        let decoded: string;
+        switch (entity.toLowerCase()) {
+          case "&amp;":
+            decoded = "&";
+            break;
+          case "&lt;":
+            decoded = "<";
+            break;
+          case "&gt;":
+            decoded = ">";
+            break;
+          case "&nbsp;":
+            decoded = " ";
+            break;
+          case "&quot;":
+            decoded = '"';
+            break;
+          case "&apos;":
+          case "&#39;":
+            decoded = "'";
+            break;
+          default: {
+            const numMatch = entity.match(/^&#(\d+);$/);
+            if (numMatch) {
+              decoded = String.fromCodePoint(parseInt(numMatch[1], 10));
+            } else {
+              const hexMatch = entity.match(/^&#x([0-9a-fA-F]+);$/i);
+              decoded = hexMatch
+                ? String.fromCodePoint(parseInt(hexMatch[1], 16))
+                : entity;
+            }
+            break;
+          }
+        }
+        for (const ch of decoded) {
+          textChars.push(ch);
+          htmlStarts.push(i);
+          htmlEnds.push(semiPos + 1);
+        }
+        i = semiPos + 1;
+        continue;
+      }
+    }
+
+    textChars.push(html[i]);
+    htmlStarts.push(i);
+    htmlEnds.push(i + 1);
+    i++;
+  }
+
+  const text = textChars.join("");
+  const findIdx = text.indexOf(find);
+  if (findIdx < 0) return null;
+
+  const findEndIdx = findIdx + find.length;
+  const htmlStart = htmlStarts[findIdx];
+  const htmlEnd =
+    findEndIdx <= htmlEnds.length ? htmlEnds[findEndIdx - 1] : html.length;
+
+  return (
+    html.slice(0, htmlStart) +
+    renderReplacementAsInlineHtml(replace) +
+    html.slice(htmlEnd)
+  );
+}
+
+/**
+ * Apply find-and-replace patches directly to the note's original HTML,
+ * preserving images, list structure, and other formatting in blocks that
+ * are not being edited.
+ *
+ * Returns the patched HTML, or `null` if any patch cannot be located
+ * (the caller should fall back to full-note replacement via
+ * `renderRawNoteHtml`).
+ */
+function applyPatchesToNoteHtml(
+  html: string,
+  patches: NotePatch[],
+): string | null {
+  if (!patches.length || !html) return html || null;
+
+  let result = html;
+  for (const patch of patches) {
+    const applied = replaceTextContentInHtml(result, patch.find, patch.replace);
+    if (applied === null) return null;
+    result = applied;
   }
   return result;
 }
@@ -279,8 +439,19 @@ export function createEditCurrentNoteTool(
         if (!snapshot) {
           throw new Error("No active note is available to edit");
         }
+        // Apply patches to the plain text representation for the diff preview.
         const patched = applyPatches(snapshot.text, inputWithPatches._patches);
         input.content = normalizeNoteSourceText(patched);
+
+        // Also apply patches directly to the original HTML so that images,
+        // list numbering, and other structure are preserved when executing.
+        const patchedHtml = applyPatchesToNoteHtml(
+          snapshot.html,
+          inputWithPatches._patches,
+        );
+        if (patchedHtml) {
+          input._patchedHtml = patchedHtml;
+        }
         delete inputWithPatches._patches;
       }
 
@@ -350,12 +521,18 @@ export function createEditCurrentNoteTool(
       if (!validateObject<Record<string, unknown>>(resolutionData)) {
         return ok(input);
       }
+      const userEditedContent =
+        typeof resolutionData.content === "string"
+          ? normalizeNoteSourceText(resolutionData.content)
+          : input.content;
+      // If the user modified the textarea, discard the pre-patched HTML
+      // so execute() falls back to full-note rendering from the user's text.
+      const patchedHtml =
+        userEditedContent !== input.content ? undefined : input._patchedHtml;
       return ok({
         ...input,
-        content:
-          typeof resolutionData.content === "string"
-            ? normalizeNoteSourceText(resolutionData.content)
-            : input.content,
+        content: userEditedContent,
+        _patchedHtml: patchedHtml,
       });
     },
     execute: async (input, context) => {
@@ -464,6 +641,7 @@ export function createEditCurrentNoteTool(
         item: context.item,
         content: contentToSave,
         expectedOriginalHtml: input.expectedOriginalHtml,
+        preRenderedHtml: input._patchedHtml,
       });
       pushUndoEntry(context.request.conversationKey, {
         id: `undo-edit-current-note-${result.noteId}-${Date.now()}`,

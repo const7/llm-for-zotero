@@ -913,6 +913,22 @@ function refreshTrackedNoteEditingSelection(
   const tracker = win.__llmNoteEditingSelectionTracking;
   if (!tracker) return;
 
+  // If focus is inside the plugin's own UI (e.g. the input box), the note
+  // editing selection hasn't changed — preserve the current tracking state.
+  // Without this guard, the note editor iframe transiently loses hasFocus()
+  // and the "Editing..." chip disappears.
+  try {
+    const activeEl = win.document.activeElement;
+    if (
+      activeEl &&
+      (activeEl.id === "llm-main" || activeEl.closest?.("#llm-main"))
+    ) {
+      return;
+    }
+  } catch {
+    // Ignore — proceed with normal refresh
+  }
+
   // Fast path: skip expensive iframe traversal when no note tab is active.
   // getActiveNoteItemFromWindow traverses Zotero tabs and items; only proceed
   // to the heavier collectAccessibleDocuments when a note is actually open.
