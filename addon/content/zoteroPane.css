@@ -1356,7 +1356,7 @@
   font-size: var(--llm-fs-12);
   line-height: 20px;
   font-weight: 500;
-  color: var(--fill-secondary);
+  color: var(--fill-primary);
   border-bottom: 1px solid var(--stroke-secondary);
   flex-shrink: 0;
   white-space: nowrap;
