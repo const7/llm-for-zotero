@@ -29,6 +29,27 @@ import {
   onAutoWatchProgress,
 } from "./mineruAutoWatch";
 
+/** Show a confirm dialog with a custom title using ztoolkit.Dialog. */
+async function confirmDialog(message: string): Promise<boolean> {
+  const dialogData: { [key: string]: unknown } = {
+    loadCallback: () => { return; },
+    unloadCallback: () => { return; },
+  };
+  new ztoolkit.Dialog(1, 1)
+    .addCell(0, 0, {
+      tag: "div",
+      namespace: "html",
+      properties: { innerHTML: message },
+      styles: { width: "320px", lineHeight: "1.45" },
+    })
+    .addButton("OK", "ok")
+    .addButton("Cancel", "cancel")
+    .setDialogData(dialogData)
+    .open(t("Delete confirmation"));
+  await (dialogData as { unloadLock: { promise: Promise<void> } }).unloadLock.promise;
+  return (dialogData as { _lastButtonId?: string })._lastButtonId === "ok";
+}
+
 function fmtDate(d: string): string {
   if (!d) return "";
   try {
@@ -1329,9 +1350,9 @@ export async function registerMineruManagerScript(
     deleteBtn.addEventListener("click", async () => {
       if (selectedIds.size > 0) {
         if (
-          !win.confirm(
+          !(await confirmDialog(
             `${t("Delete MinerU cache for")} ${selectedIds.size} ${t("selected item(s)?")}`,
-          )
+          ))
         )
           return;
         for (const id of selectedIds) {
@@ -1347,9 +1368,9 @@ export async function registerMineruManagerScript(
       } else if (isSubfolder() || activeCollectionId === "unfiled") {
         const ids = getFolderItemIds();
         if (
-          !win.confirm(
+          !(await confirmDialog(
             `${t("Delete MinerU cache for")} ${ids.length} ${t("item(s) in this folder?")}`,
-          )
+          ))
         )
           return;
         for (const id of ids) {
@@ -1362,9 +1383,9 @@ export async function registerMineruManagerScript(
         renderItemsList();
       } else {
         if (
-          !win.confirm(
+          !(await confirmDialog(
             t("Delete all MinerU cached files? This cannot be undone."),
-          )
+          ))
         )
           return;
         await deleteAllMineruCache();

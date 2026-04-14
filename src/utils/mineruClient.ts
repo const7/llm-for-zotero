@@ -904,9 +904,8 @@ async function parsePdfViaUpload(
     JSON.stringify({
       enable_formula: true,
       enable_table: true,
-      language: "en",
-      layout_model: "doclayout_yolo",
-      enable_page_ocr: false,
+      language: "ch",
+      model_version: "pipeline",
       files: [{ name: fileName, is_ocr: false }],
     }),
   );

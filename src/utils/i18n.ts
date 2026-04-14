@@ -206,6 +206,7 @@ const zhCN: Record<string, string> = {
   "Delete Folder Cache": "删除文件夹缓存",
   "Process This Item": "处理此条目",
   "Show in File Manager": "在文件管理器中显示",
+  "Delete confirmation": "删除确认",
   "Delete MinerU Cache": "删除 MinerU 缓存",
   "Start Selected": "开始所选",
   "Delete Cache": "删除缓存",
