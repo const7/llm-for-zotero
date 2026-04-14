@@ -13,7 +13,7 @@
  * Users can create, edit, or delete skills by managing `.md` files in:
  *   {Zotero data directory}/llm-for-zotero/skills/
  */
-import { matchesSkill } from "./skillLoader";
+import { matchesSkill, parseSkill } from "./skillLoader";
 import type { AgentSkill } from "./skillLoader";
 import libraryAnalysisRaw from "./library-analysis.md";
 import comparePapersRaw from "./compare-papers.md";
@@ -23,10 +23,11 @@ import evidenceBasedQaRaw from "./evidence-based-qa.md";
 import noteFromPaperRaw from "./note-from-paper.md";
 import noteEditingRaw from "./note-editing.md";
 import literatureReviewRaw from "./literature-review.md";
-import writeToObsidianRaw from "./write-to-obsidian.md";
+import noteToFileRaw from "./note-to-file.md";
 import importCitedReferenceRaw from "./import-cited-reference.md";
+import noteTemplateRaw from "./note-template.md";
 
-export { matchesSkill } from "./skillLoader";
+export { matchesSkill, parseSkill } from "./skillLoader";
 export type { AgentSkill } from "./skillLoader";
 
 /**
@@ -42,9 +43,25 @@ export const BUILTIN_SKILL_FILES: Record<string, string> = {
   "note-from-paper.md": noteFromPaperRaw,
   "note-editing.md": noteEditingRaw,
   "literature-review.md": literatureReviewRaw,
-  "write-to-obsidian.md": writeToObsidianRaw,
+  "note-to-file.md": noteToFileRaw,
   "import-cited-reference.md": importCitedReferenceRaw,
+  "note-template.md": noteTemplateRaw,
 };
+
+/** Set of filenames that are built-in (shipped with the plugin). */
+export const BUILTIN_SKILL_FILENAMES = new Set(Object.keys(BUILTIN_SKILL_FILES));
+
+/**
+ * Returns the parsed instruction body of a shipped built-in skill.
+ * Used to compare against on-disk versions for the source badge.
+ */
+export function getBuiltinSkillInstruction(
+  filename: string,
+): string | undefined {
+  const raw = BUILTIN_SKILL_FILES[filename];
+  if (!raw) return undefined;
+  return parseSkill(raw).instruction;
+}
 
 /**
  * Skills loaded from the user's data directory.
@@ -73,9 +90,10 @@ export function getAllSkills(): AgentSkill[] {
  * Used by the runtime to emit trace events for matched skills.
  */
 export function getMatchedSkillIds(
-  request: Pick<import("../types").AgentRuntimeRequest, "userText">,
+  request: Pick<import("../types").AgentRuntimeRequest, "userText" | "forcedSkillIds">,
 ): string[] {
+  const forcedIds = new Set(request.forcedSkillIds || []);
   return getAllSkills()
-    .filter((skill) => matchesSkill(skill, request))
+    .filter((skill) => forcedIds.has(skill.id) || matchesSkill(skill, request))
     .map((skill) => skill.id);
 }

@@ -1,10 +1,29 @@
 ---
 id: evidence-based-qa
+name: Evidence-Based Q&A
+description: Find specific evidence, methods, or results in papers
+version: 1
 match: /\b(what method|what approach|what technique|what model|how did they|how does it|what results?|what data|what dataset|what experiment|what metric|what performance|what accuracy|what baseline)\b/i
 match: /\b(find|locate|where|which section|which page|quote|passage|excerpt|evidence|proof|support|mention)\b.*\b(paper|article|study|text|document)\b/i
 match: /\b(does (this|the) paper|do the authors?)\b.*\b(mention|discuss|address|cover|report|describe|analyze|analyse|use|propose|introduce|present|evaluate|compare)\b/i
 match: /\b(specific|particular|exact|precise)\b.*\b(result|finding|number|figure|statistic|claim|statement)\b/i
 ---
+
+<!--
+  SKILL: Evidence-Based Q&A
+
+  This skill activates for specific questions about methods, results, or
+  evidence in a paper (e.g., "what method did they use?", "find where
+  they discuss accuracy").
+
+  You can customize:
+  - Retrieval strategy: change how evidence is gathered
+  - Tool budget: adjust the number of allowed tool calls
+  - Answer format: modify how evidence is presented
+
+  Your changes are preserved across plugin updates.
+  To reset to default, delete this file — it will be recreated on next restart.
+-->
 
 ## Evidence-Based Paper Q&A — read then retrieve, then answer
 

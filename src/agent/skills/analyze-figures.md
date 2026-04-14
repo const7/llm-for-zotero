@@ -1,10 +1,28 @@
 ---
 id: analyze-figures
+name: Analyze Figures
+description: Analyze figures, tables, and diagrams from papers
+version: 1
 match: /\b(figure|fig\.?|table|diagram|chart|graph|plot|schematic|illustration)\s*\d/i
 match: /\banalyze?\b.*\b(figure|fig\.?|table|diagram|image|chart)\b/i
 match: /\b(figure|fig\.?|table|diagram)\b.*\b(about|explain|describe|show|mean|depict)\b/i
 match: /\b(what|how|why|can you)\b.*\b(figure|fig\.?|table|diagram|chart)\b/i
 ---
+
+<!--
+  SKILL: Analyze Figures
+
+  This skill activates when you ask about a specific figure, table, or
+  diagram in a paper (e.g., "explain Figure 2", "what does Table 1 show?").
+
+  You can customize:
+  - Analysis depth: change how the agent interprets visual content
+  - MinerU vs PDF fallback: adjust which path is preferred
+  - Note saving: modify how figure analyses are saved to notes
+
+  Your changes are preserved across plugin updates.
+  To reset to default, delete this file — it will be recreated on next restart.
+-->
 
 ## Analyzing Figures and Tables — use MinerU cache, not raw PDF
 

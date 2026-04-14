@@ -1,5 +1,7 @@
 import { createElement } from "../../utils/domHelpers";
 import { t } from "../../utils/i18n";
+import { getAllSkills } from "../../agent/skills";
+import type { AgentSkill } from "../../agent/skills/skillLoader";
 import type { RuntimeModelEntry } from "../../utils/modelProviders";
 import { getLastUsedModelEntryId, getModelEntryById } from "../../utils/modelProviders";
 import {
@@ -3859,6 +3861,7 @@ export function setupHandlers(
     inlineEditCleanup?.();
     setInlineEditCleanup(null);
     setInlineEditTarget(null);
+    clearForcedSkill();
     closePaperPicker();
     closePromptMenu();
     closeResponseMenu();
@@ -3936,6 +3939,7 @@ export function setupHandlers(
     inlineEditCleanup?.();
     setInlineEditCleanup(null);
     setInlineEditTarget(null);
+    clearForcedSkill();
     closePaperPicker();
     closePromptMenu();
     closeResponseMenu();
@@ -7111,10 +7115,12 @@ export function setupHandlers(
       closeSlashMenu();
       return;
     }
-    // Agent mode: render filtered agent actions into slash menu
+    // Agent mode: render agent actions first (creates section labels),
+    // then skills (inserts between agent actions and base actions)
     if (getCurrentRuntimeMode() === "agent") {
       const query = token.query.toLowerCase().trim();
       renderAgentActionsInSlashMenu(query);
+      renderSkillsInSlashMenu(query);
     }
     if (!isFloatingMenuOpen(slashMenu)) {
       closeRetryModelMenu();
@@ -7318,6 +7324,70 @@ export function setupHandlers(
       ztoolkit.log("LLM: action picker run error", err);
       if (status) setStatus(status, `Error: ${String(err)}`, "error");
     }
+  };
+
+  // ── Forced skill state (from slash menu skill selection) ────────────────
+  /** The skill ID force-selected from the slash menu, if any. */
+  let forcedSkillId: string | null = null;
+  /** Badge element for the forced skill, rendered in the compose area. */
+  let forcedSkillBadge: HTMLElement | null = null;
+
+  const clearForcedSkill = (): void => {
+    forcedSkillId = null;
+    if (forcedSkillBadge) {
+      forcedSkillBadge.remove();
+      forcedSkillBadge = null;
+    }
+    inputBox.style.textIndent = "";
+    if (inputBox.dataset.originalPlaceholder !== undefined) {
+      inputBox.placeholder = inputBox.dataset.originalPlaceholder;
+      delete inputBox.dataset.originalPlaceholder;
+    }
+  };
+
+  const handleSkillSelection = (skill: AgentSkill): void => {
+    clearForcedSkill();
+    clearCommandChip();
+    forcedSkillId = skill.id;
+
+    // Ensure agent mode
+    if (getCurrentRuntimeMode() !== "agent" && getAgentModeEnabled()) {
+      setCurrentRuntimeMode("agent");
+    }
+
+    const ownerDoc = body.ownerDocument;
+    const composeArea =
+      inputBox.closest(".llm-compose-area") || inputBox.parentElement;
+    if (!ownerDoc || !composeArea) return;
+
+    // Render inline badge (same pattern as insertCommandToken)
+    const badge = ownerDoc.createElement("div");
+    badge.className = "llm-command-inline";
+    badge.title = skill.description || skill.name;
+    badge.textContent = `/${skill.id}`;
+
+    const cs = ownerDoc.defaultView?.getComputedStyle(inputBox);
+    const padTop = cs ? parseFloat(cs.paddingTop) : 12;
+    const padLeft = cs ? parseFloat(cs.paddingLeft) : 14;
+    const borderTop = cs ? parseFloat(cs.borderTopWidth) : 1;
+    const borderLeft = cs ? parseFloat(cs.borderLeftWidth) : 1;
+    badge.style.top = `${inputBox.offsetTop + borderTop + padTop}px`;
+    badge.style.left = `${inputBox.offsetLeft + borderLeft + padLeft}px`;
+    composeArea.appendChild(badge);
+    forcedSkillBadge = badge;
+
+    const badgeWidth = badge.offsetWidth;
+    inputBox.style.textIndent = `${badgeWidth + 6}px`;
+
+    if (inputBox.dataset.originalPlaceholder === undefined) {
+      inputBox.dataset.originalPlaceholder = inputBox.placeholder;
+    }
+    inputBox.placeholder = skill.description || "";
+    inputBox.value = "";
+    inputBox.focus({ preventScroll: true });
+    const EvtCtor =
+      (inputBox.ownerDocument?.defaultView as any)?.Event ?? Event;
+    inputBox.dispatchEvent(new EvtCtor("input", { bubbles: true }));
   };
 
   // ── Inline command badge state ──────────────────────────────────────────
@@ -7547,6 +7617,93 @@ export function setupHandlers(
     void executeAgentAction(action, input);
   };
 
+  /** Prepends filtered skills into the slash menu (agent mode only). */
+  const renderSkillsInSlashMenu = (query: string = "") => {
+    const list = slashMenu?.querySelector(".llm-action-picker-list");
+    if (!list) return;
+    const ownerDoc = body.ownerDocument;
+    if (!ownerDoc) return;
+
+    // Remove old skill items
+    list
+      .querySelectorAll("[data-slash-skill-item]")
+      .forEach((el: Element) => el.remove());
+
+    const allSkills = getAllSkills();
+    if (!allSkills.length) return;
+
+    const filtered = query
+      ? allSkills.filter(
+          (s: AgentSkill) =>
+            s.name.toLowerCase().includes(query) ||
+            s.description.toLowerCase().includes(query) ||
+            s.id.toLowerCase().includes(query),
+        )
+      : allSkills;
+
+    if (!filtered.length) return;
+
+    // Anchor: the "Base actions" section label (inserted by renderAgentActionsInSlashMenu),
+    // or fall back to the first base item, or list end
+    const baseAnchor =
+      list.querySelector("[data-slash-section='base']") ||
+      list.querySelector("[data-slash-base-item]") ||
+      null;
+
+    const mkSkillEl = (tag: string, cls: string): HTMLElement => {
+      const el = ownerDoc.createElement(tag);
+      el.className = cls;
+      el.setAttribute("data-slash-skill-item", "true");
+      return el;
+    };
+
+    // "Skills" section label
+    const sectionLabel = mkSkillEl("div", "llm-slash-menu-section");
+    sectionLabel.setAttribute("aria-hidden", "true");
+    sectionLabel.textContent = t("Skills");
+    list.insertBefore(sectionLabel, baseAnchor);
+
+    // Skill items
+    filtered.forEach((skill: AgentSkill) => {
+      const btn = mkSkillEl(
+        "button",
+        "llm-action-picker-item",
+      ) as HTMLButtonElement;
+      btn.type = "button";
+      btn.title = skill.description || skill.name;
+
+      const titleEl = ownerDoc.createElement("span");
+      titleEl.className = "llm-action-picker-title";
+      titleEl.textContent = skill.name;
+
+      const descEl = ownerDoc.createElement("span");
+      descEl.className = "llm-action-picker-description";
+      descEl.textContent = skill.description;
+
+      const badgeLabel =
+        skill.source === "system"
+          ? "System"
+          : skill.source === "customized"
+            ? "Customized"
+            : "Personal";
+      const badgeEl = ownerDoc.createElement("span");
+      badgeEl.className = "llm-action-picker-badge";
+      badgeEl.textContent = t(badgeLabel);
+
+      btn.append(titleEl, descEl, badgeEl);
+
+      btn.addEventListener("click", (e: Event) => {
+        e.preventDefault();
+        e.stopPropagation();
+        consumeActiveActionToken();
+        closeSlashMenu();
+        handleSkillSelection(skill);
+      });
+
+      list.insertBefore(btn, baseAnchor);
+    });
+  };
+
   /** Prepends filtered agent actions into the slash menu (agent mode only). */
   const renderAgentActionsInSlashMenu = (query: string = "") => {
     clearAgentSlashItems();
@@ -7574,19 +7731,26 @@ export function setupHandlers(
     const ownerDoc = body.ownerDocument;
     const list = slashMenu?.querySelector(".llm-action-picker-list");
     if (!ownerDoc || !list) return;
-    const firstBase = list.firstChild;
+    // Anchor: first static base item (marked in buildUI.ts)
+    const baseAnchor = list.querySelector("[data-slash-base-item]") || null;
     const mkAgentEl = (tag: string, cls: string): HTMLElement => {
       const el = ownerDoc.createElement(tag);
       el.className = cls;
       el.setAttribute("data-slash-agent-item", "true");
       return el;
     };
-    // "Agent actions" section label
+    // "Base actions" section label (always shown above static base items)
+    const baseLabel = mkAgentEl("div", "llm-slash-menu-section");
+    baseLabel.setAttribute("aria-hidden", "true");
+    baseLabel.setAttribute("data-slash-section", "base");
+    baseLabel.textContent = t("Base actions");
+    list.insertBefore(baseLabel, baseAnchor);
+    // "Agent actions" section label (at the very top)
     const agentLabel = mkAgentEl("div", "llm-slash-menu-section");
     agentLabel.setAttribute("aria-hidden", "true");
     agentLabel.textContent = t("Agent actions");
-    list.insertBefore(agentLabel, firstBase);
-    // Agent action items
+    list.insertBefore(agentLabel, baseLabel);
+    // Agent action items (between agent label and base label)
     filtered.forEach((action) => {
       const btn = mkAgentEl("button", "llm-action-picker-item") as HTMLButtonElement;
       btn.type = "button";
@@ -7602,13 +7766,8 @@ export function setupHandlers(
         closeSlashMenu();
         void insertCommandToken(action);
       });
-      list.insertBefore(btn, firstBase);
+      list.insertBefore(btn, baseLabel);
     });
-    // "Base actions" section label (above the static base items)
-    const baseLabel = mkAgentEl("div", "llm-slash-menu-section");
-    baseLabel.setAttribute("aria-hidden", "true");
-    baseLabel.textContent = t("Base actions");
-    list.insertBefore(baseLabel, firstBase);
   };
 
   /** Selects an action from the (legacy) action picker by index. */
@@ -8912,6 +9071,12 @@ export function setupHandlers(
         }
       : undefined,
     editStaleStatusText: EDIT_STALE_STATUS_TEXT,
+    consumeForcedSkillIds: () => {
+      if (!forcedSkillId) return undefined;
+      const ids = [forcedSkillId];
+      clearForcedSkill();
+      return ids;
+    },
   });
   const { clearCurrentConversation } = createClearConversationController({
     getConversationKey: () => (item ? getConversationKey(item) : null),
@@ -9387,14 +9552,27 @@ export function setupHandlers(
         return;
       }
     }
-    // Backspace at position 0 with active command badge: remove the badge
-    if (ke.key === "Backspace" && activeCommandAction) {
-      if (inputBox.selectionStart === 0 && inputBox.selectionEnd === 0) {
+    // Backspace at position 0 with active badge: remove it
+    if (ke.key === "Backspace" && inputBox.selectionStart === 0 && inputBox.selectionEnd === 0) {
+      if (forcedSkillId) {
+        e.preventDefault();
+        e.stopPropagation();
+        clearForcedSkill();
+        return;
+      }
+      if (activeCommandAction) {
         e.preventDefault();
         e.stopPropagation();
         clearCommandChip();
         return;
       }
+    }
+    // Escape with active skill badge: remove the badge
+    if (ke.key === "Escape" && forcedSkillId) {
+      e.preventDefault();
+      e.stopPropagation();
+      clearForcedSkill();
+      return;
     }
     // Escape with active command badge: remove the badge
     if (ke.key === "Escape" && activeCommandAction) {

@@ -5101,8 +5101,11 @@ label.llm-search-results-item:hover {
   text-align: left;
   font: inherit;
   padding: 5px 8px;
+  gap: 2px;
   cursor: pointer;
   outline: none;
+  overflow: hidden;
+  min-width: 0;
 }
 
 .llm-action-picker-item:hover {
@@ -5129,7 +5132,26 @@ label.llm-search-results-item:hover {
 }
 
 .llm-action-picker-description {
-  display: none;
+  font-size: var(--llm-fs-11);
+  font-weight: 400;
+  color: var(--fill-secondary, #888);
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-left: 6px;
+  flex: 1;
+  min-width: 0;
+}
+
+.llm-action-picker-badge {
+  font-size: calc(10px * var(--llm-font-scale, 1));
+  font-weight: 500;
+  color: var(--fill-tertiary, #aaa);
+  white-space: nowrap;
+  margin-left: auto;
+  padding-left: 8px;
+  flex-shrink: 0;
 }
 
 .llm-action-picker-empty {
@@ -5611,6 +5633,7 @@ label.llm-search-results-item:hover {
   z-index: 30;
   max-height: min(30vh, 220px);
   overflow-y: auto;
+  overflow-x: hidden;
   border-radius: 10px;
   border: 1px solid var(--stroke-secondary, rgba(120, 120, 120, 0.35));
   background: var(--material-background, #fff);

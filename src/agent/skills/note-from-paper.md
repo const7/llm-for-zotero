@@ -1,10 +1,28 @@
 ---
 id: note-from-paper
+name: Reading Notes
+description: Create reading notes from a paper with optional figures
+version: 1
 match: /\b(create|make|write|draft|generate)\b.*\b(note|summary note|reading note|notes?)\b.*\b(for|from|about|on)\b.*\b(paper|article|this)\b/i
 match: /\b(note|notes?)\b.*\b(for|from|about|on)\b.*\b(paper|article|this|these)\b/i
 match: /\b(reading notes?|study notes?|literature notes?|research notes?)\b/i
 match: /\b(summarize|summarise)\b.*\b(into|as|to)\b.*\b(note|notes?)\b/i
 ---
+
+<!--
+  SKILL: Reading Notes
+
+  This skill activates when you ask the agent to create notes from a paper
+  (e.g., "create reading notes", "make a note about this paper").
+
+  You can customize:
+  - RECIPE steps: change how the agent reads and summarizes content
+  - Figure handling: adjust when and how figures are embedded
+  - Note structure: modify the output format
+
+  Your changes are preserved across plugin updates.
+  To reset to default, delete this file — it will be recreated on next restart.
+-->
 
 ## Writing Notes from Papers — read then write
 

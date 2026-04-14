@@ -1,10 +1,28 @@
 ---
 id: note-editing
+name: Edit Note
+description: Create, edit, or append to Zotero notes
+version: 1
 match: /\b(save|write|append|add|put)\b.*\b(to\s+)?(note|notes?)\b/i
 match: /\b(note|notes?)\b.*\b(save|write|append|add)\b/i
 match: /\b(edit|update|modify|rewrite|revise|polish)\b.*\b(note|notes?)\b/i
 match: /\b(create|make|new)\b.*\bnote\b/i
 ---
+
+<!--
+  SKILL: Edit Note
+
+  This skill activates when you ask the agent to create, edit, or append
+  to Zotero notes (e.g., "save to note", "edit my note", "create a note").
+
+  You can customize:
+  - Create vs edit behavior: change defaults for how notes are created or patched
+  - Figure embedding rules: adjust when images are included
+  - Append behavior: modify how content is added to existing notes
+
+  Your changes are preserved across plugin updates.
+  To reset to default, delete this file — it will be recreated on next restart.
+-->
 
 ## Note Editing Workflow
 
