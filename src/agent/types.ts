@@ -22,6 +22,8 @@ export type AgentRequest = {
   pinnedPaperContexts?: PaperContextRef[];
   attachments?: ChatAttachment[];
   screenshots?: string[];
+  /** Skill IDs to force-activate regardless of regex matching (from slash menu selection). */
+  forcedSkillIds?: string[];
   model?: string;
   apiBase?: string;
   apiKey?: string;

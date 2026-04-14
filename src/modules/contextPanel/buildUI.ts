@@ -455,6 +455,7 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
       type: "button",
       title: desc,
     });
+    btn.setAttribute("data-slash-base-item", "true");
     const titleEl = createElement(doc, "span", "llm-action-picker-title", {
       textContent: title,
     });

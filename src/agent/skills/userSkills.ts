@@ -7,7 +7,11 @@
  */
 import { parseSkill } from "./skillLoader";
 import type { AgentSkill } from "./skillLoader";
-import { BUILTIN_SKILL_FILES } from "./index";
+import {
+  BUILTIN_SKILL_FILES,
+  BUILTIN_SKILL_FILENAMES,
+  getBuiltinSkillInstruction,
+} from "./index";
 import { joinLocalPath } from "../../utils/localPath";
 
 const USER_SKILLS_DIR_NAME = "llm-for-zotero/skills";
@@ -102,6 +106,51 @@ export async function initUserSkills(): Promise<void> {
   const seeded = getSeededSkills();
   const encoder = new TextEncoder();
 
+  // ── Migration: write-to-obsidian.md → note-to-file.md ──────────────
+  if (io.read && io.remove) {
+    try {
+      const oldPath = joinLocalPath(dir, "write-to-obsidian.md");
+      const newPath = joinLocalPath(dir, "note-to-file.md");
+      const oldExists = await io.exists(oldPath);
+      const newExists = await io.exists(newPath);
+
+      if (oldExists && !newExists) {
+        const oldData = await io.read(oldPath);
+        const oldBytes =
+          oldData instanceof Uint8Array
+            ? oldData
+            : new Uint8Array(oldData as ArrayBuffer);
+        const oldContent = new TextDecoder("utf-8").decode(oldBytes);
+
+        // Only remove if user hasn't customized it (original id AND body)
+        if (/^id:\s*write-to-obsidian\s*$/m.test(oldContent)) {
+          const isOriginalBody =
+            oldContent.includes("Writing Notes to Obsidian") &&
+            oldContent.includes("file_io(write, filePath, noteContent)");
+          if (isOriginalBody) {
+            await io.remove(oldPath);
+            Zotero.debug?.(
+              "[llm-for-zotero] Removed old write-to-obsidian.md (migrated to note-to-file.md)",
+            );
+          } else {
+            Zotero.debug?.(
+              "[llm-for-zotero] Kept customized write-to-obsidian.md as personal skill",
+            );
+          }
+        }
+      }
+
+      // Clean up seeded tracking for old filename
+      if (seeded.has("write-to-obsidian.md")) {
+        seeded.delete("write-to-obsidian.md");
+      }
+    } catch (err) {
+      Zotero.debug?.(
+        `[llm-for-zotero] Skill migration warning: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
   for (const [filename, content] of Object.entries(BUILTIN_SKILL_FILES)) {
     if (seeded.has(filename)) continue; // already seeded once — respect user deletions
     const filePath = joinLocalPath(dir, filename);
@@ -122,6 +171,106 @@ export async function initUserSkills(): Promise<void> {
   }
 
   setSeededSkills(seeded);
+
+  // ── Metadata patching: inject name/description/version into old files ────
+  // Existing users have on-disk skill files from previous versions that lack
+  // the new frontmatter fields. Patch them without touching instruction body.
+  if (io.read) {
+    const decoder = new TextDecoder("utf-8");
+    for (const [filename, shippedContent] of Object.entries(
+      BUILTIN_SKILL_FILES,
+    )) {
+      const filePath = joinLocalPath(dir, filename);
+      try {
+        const fileExists = await io.exists(filePath);
+        if (!fileExists) continue;
+        const data = await io.read(filePath);
+        const bytes =
+          data instanceof Uint8Array
+            ? data
+            : new Uint8Array(data as ArrayBuffer);
+        const onDiskRaw = decoder.decode(bytes);
+        const patched = patchSkillFrontmatter(onDiskRaw, shippedContent);
+        if (patched) {
+          await io.write(filePath, encoder.encode(patched));
+          Zotero.debug?.(
+            `[llm-for-zotero] Patched skill metadata: ${filename}`,
+          );
+        }
+      } catch (err) {
+        Zotero.debug?.(
+          `[llm-for-zotero] Skill metadata patch warning for ${filename}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Frontmatter metadata patching
+// ---------------------------------------------------------------------------
+
+/**
+ * Patch an on-disk skill file's frontmatter with metadata (name, description,
+ * version) from the shipped version, without touching the instruction body or
+ * user-customized match patterns.
+ *
+ * Returns the patched string, or `null` if no patch is needed.
+ */
+export function patchSkillFrontmatter(
+  onDiskRaw: string,
+  shippedRaw: string,
+): string | null {
+  const onDisk = parseSkill(onDiskRaw);
+  const shipped = parseSkill(shippedRaw);
+
+  // Already up-to-date
+  if (onDisk.version >= shipped.version) return null;
+
+  // Rebuild frontmatter: use shipped name/description/version,
+  // but keep on-disk id and match patterns (user may have customized those).
+  const onDiskLines = onDiskRaw.split("\n");
+  let inFm = false;
+  let fmStart = -1;
+  let fmEnd = -1;
+
+  for (let i = 0; i < onDiskLines.length; i++) {
+    if (onDiskLines[i].trim() === "---") {
+      if (!inFm) {
+        inFm = true;
+        fmStart = i;
+      } else {
+        fmEnd = i;
+        break;
+      }
+    }
+  }
+
+  if (fmStart < 0 || fmEnd < 0) return null;
+
+  // Extract on-disk match lines (preserve user customizations)
+  const onDiskMatchLines = onDiskLines
+    .slice(fmStart + 1, fmEnd)
+    .filter((l) => l.trim().startsWith("match:"));
+
+  // Also preserve on-disk id (user may have renamed it)
+  const idLine = `id: ${onDisk.id}`;
+
+  // Build patched frontmatter
+  const patchedFm = [
+    "---",
+    idLine,
+    `name: ${shipped.name}`,
+    `description: ${shipped.description}`,
+    `version: ${shipped.version}`,
+    ...onDiskMatchLines,
+    "---",
+  ];
+
+  // Instruction body is everything after the closing ---
+  const instructionBody = onDiskLines.slice(fmEnd + 1).join("\n");
+
+  return patchedFm.join("\n") + "\n" + instructionBody;
 }
 
 // ---------------------------------------------------------------------------
@@ -175,6 +324,19 @@ export async function loadUserSkills(): Promise<AgentSkill[]> {
           `[llm-for-zotero] Skipping invalid skill file (missing id or match patterns): ${filePath}`,
         );
         continue;
+      }
+
+      // Determine source badge: system / customized / personal
+      const filename = filePath.split(/[/\\]/).pop() || "";
+      if (BUILTIN_SKILL_FILENAMES.has(filename)) {
+        const shippedInstruction = getBuiltinSkillInstruction(filename);
+        skill.source =
+          shippedInstruction !== undefined &&
+          skill.instruction === shippedInstruction
+            ? "system"
+            : "customized";
+      } else {
+        skill.source = "personal";
       }
 
       skills.push(skill);
@@ -250,8 +412,22 @@ export async function createSkillTemplate(): Promise<string | null> {
   const encoder = new TextEncoder();
   const template = `---
 id: my-custom-skill
+name: My Custom Skill
+description: Describe what this skill does
+version: 1
 match: /your regex pattern here/i
 ---
+
+<!--
+  Custom skill template.
+
+  - name/description: shown in the "/" slash menu
+  - match: regex patterns that trigger this skill (OR semantics)
+  - version: increment when you make significant changes
+
+  The text below is injected into the agent's system prompt when
+  the skill activates. Edit it to define how the agent should behave.
+-->
 
 Describe when and how the agent should behave when this skill matches.
 `;

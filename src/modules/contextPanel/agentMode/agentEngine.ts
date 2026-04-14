@@ -72,6 +72,7 @@ type BuildAgentRuntimeRequestParamsShape = {
   fullTextPaperContexts: PaperContextRef[];
   attachments: ChatAttachment[] | undefined;
   screenshots: string[] | undefined;
+  forcedSkillIds?: string[];
   effectiveRequestConfig: EffectiveRequestConfigShape;
   history: ChatMessage[];
 };
@@ -223,6 +224,7 @@ export async function sendAgentTurn(
     paperContexts?: PaperContextRef[];
     fullTextPaperContexts?: PaperContextRef[];
     attachments?: ChatAttachment[];
+    forcedSkillIds?: string[];
   },
   deps: AgentEngineDeps,
 ): Promise<void> {
@@ -230,6 +232,7 @@ export async function sendAgentTurn(
     body, item, question, images, model, apiBase, apiKey, reasoning, advanced,
     displayQuestion, selectedTexts, selectedTextSources, selectedTextPaperContexts,
     selectedTextNoteContexts, paperContexts, fullTextPaperContexts, attachments,
+    forcedSkillIds,
   } = opts;
   await deps.ensureConversationLoaded(item);
   const conversationKey = deps.getConversationKey(item);
@@ -269,6 +272,7 @@ export async function sendAgentTurn(
     fullTextPaperContexts: fullTextPaperContextsForMessage,
     attachments,
     screenshots: images,
+    forcedSkillIds,
     effectiveRequestConfig,
     history: llmHistory,
   });

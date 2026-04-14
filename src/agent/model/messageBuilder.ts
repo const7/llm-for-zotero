@@ -9,13 +9,12 @@ import { getAllSkills, matchesSkill } from "../skills";
 
 import { isTextOnlyModel } from "../../providers";
 import {
-  isObsidianConfigured,
-  getObsidianVaultPath,
-  getObsidianTargetFolder,
-  getObsidianAttachmentsFolder,
-  getObsidianNoteTemplate,
-  getDefaultObsidianNoteTemplate,
-} from "../../utils/obsidianConfig";
+  isNotesDirectoryConfigured,
+  getNotesDirectoryPath,
+  getNotesDirectoryFolder,
+  getNotesDirectoryAttachmentsFolder,
+  getNotesDirectoryNickname,
+} from "../../utils/notesDirectoryConfig";
 import { joinLocalPath } from "../../utils/localPath";
 import { buildRuntimePlatformGuidanceText } from "../../utils/runtimePlatform";
 
@@ -201,8 +200,26 @@ function collectGuidanceInstructions(
     const instruction = guidance.instruction.trim();
     if (instruction) instructions.add(instruction);
   }
+  const forcedIds = new Set(request.forcedSkillIds || []);
+
+  // Dynamic activation: if the user's message mentions the notes directory
+  // nickname, force-activate the note-to-file skill so the full file-writing
+  // workflow is available.
+  const nickname = getNotesDirectoryNickname().trim();
+  if (nickname && isNotesDirectoryConfigured() && request.userText) {
+    const escaped = nickname.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const isAscii = /^[\x20-\x7E]+$/.test(nickname);
+    const pattern = isAscii
+      ? new RegExp(`\\b${escaped}\\b`, "i")
+      : new RegExp(escaped, "i");
+    if (pattern.test(request.userText)) {
+      forcedIds.add("note-to-file");
+    }
+  }
+
   for (const skill of getAllSkills()) {
-    if (!matchesSkill(skill, request)) continue;
+    // Activate if regex matches OR if force-activated from slash menu / nickname
+    if (!forcedIds.has(skill.id) && !matchesSkill(skill, request)) continue;
     const instruction = skill.instruction.trim();
     if (instruction) instructions.add(instruction);
   }
@@ -238,29 +255,33 @@ function buildAutoReadInstruction(request: AgentRuntimeRequest): string {
   );
 }
 
-function buildObsidianConfigSection(): string {
-  if (!isObsidianConfigured()) return "";
-  const vaultPath = getObsidianVaultPath();
-  const targetFolder = getObsidianTargetFolder();
-  const attachmentsFolder = getObsidianAttachmentsFolder();
-  const template =
-    getObsidianNoteTemplate() || getDefaultObsidianNoteTemplate();
+function buildNotesDirectorySection(): string {
+  if (!isNotesDirectoryConfigured()) return "";
+  const dirPath = getNotesDirectoryPath();
+  const targetFolder = getNotesDirectoryFolder();
+  const attachmentsFolder = getNotesDirectoryAttachmentsFolder();
+  const nickname = getNotesDirectoryNickname().trim();
   const defaultTargetPath = targetFolder
-    ? joinLocalPath(vaultPath, targetFolder)
-    : vaultPath;
-  return [
-    "Obsidian configuration (user-configured):",
-    `- Vault path: ${vaultPath}`,
+    ? joinLocalPath(dirPath, targetFolder)
+    : dirPath;
+  const lines = [
+    "Notes directory configuration (user-configured):",
+  ];
+  if (nickname) {
+    lines.push(`- Nickname: ${nickname}`);
+  }
+  lines.push(
+    `- Directory path: ${dirPath}`,
     `- Default folder: ${targetFolder}`,
     `- Default target path: ${defaultTargetPath}`,
     `- Attachments folder: ${attachmentsFolder} (subfolder for copied figures and images)`,
-    "- Note template:",
-    "```",
-    template,
-    "```",
-    "When writing to Obsidian, use Pandoc citation syntax [@citekey] for paper references. " +
-      "Look up citation keys from Zotero item metadata via read_library.",
-  ].join("\n");
+  );
+  if (nickname) {
+    lines.push(
+      `When the user mentions "${nickname}" in the context of notes, write to this directory.`,
+    );
+  }
+  return lines.join("\n");
 }
 
 function buildRuntimePlatformSection(): string {
@@ -292,8 +313,8 @@ export async function buildAgentInitialMessages(
       lines: [(request.customInstructions || "").trim()],
     },
     {
-      id: "obsidian-config",
-      lines: [buildObsidianConfigSection()],
+      id: "notes-directory-config",
+      lines: [buildNotesDirectorySection()],
     },
     {
       id: "tool-guidance",
