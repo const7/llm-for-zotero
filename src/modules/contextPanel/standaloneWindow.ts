@@ -772,6 +772,17 @@ export function openStandaloneChat(options?: {
       skillTitle.className = "llm-standalone-skill-title";
       skillTitle.textContent = t("Skills");
 
+      const skillRefreshBtn = doc.createElementNS(
+        HTML_NS,
+        "button",
+      ) as HTMLButtonElement;
+      skillRefreshBtn.className = "llm-outline-btn";
+      skillRefreshBtn.type = "button";
+      skillRefreshBtn.textContent = t("Check for updates");
+      skillRefreshBtn.title = t(
+        "Re-seed built-in skills and refresh the list. Customized files are kept — use the right-click menu to restore individual skills to default.",
+      );
+
       const skillCloseBtn = doc.createElementNS(
         HTML_NS,
         "button",
@@ -780,7 +791,7 @@ export function openStandaloneChat(options?: {
       skillCloseBtn.type = "button";
       skillCloseBtn.textContent = "\u00D7";
 
-      skillHeader.append(skillTitle, skillCloseBtn);
+      skillHeader.append(skillTitle, skillRefreshBtn, skillCloseBtn);
 
       const skillGrid = doc.createElementNS(HTML_NS, "div") as HTMLDivElement;
       skillGrid.className = "llm-standalone-skill-grid";
@@ -804,6 +815,15 @@ export function openStandaloneChat(options?: {
       skillCtxShowInFs.type = "button";
       skillCtxShowInFs.textContent = t("Show in file system");
 
+      const skillCtxRestore = doc.createElementNS(
+        HTML_NS,
+        "button",
+      ) as HTMLButtonElement;
+      skillCtxRestore.className = "llm-standalone-skill-ctx-item";
+      skillCtxRestore.type = "button";
+      skillCtxRestore.textContent = t("Restore to default");
+      skillCtxRestore.style.display = "none"; // only shown for customized built-ins
+
       const skillCtxDelete = doc.createElementNS(
         HTML_NS,
         "button",
@@ -813,7 +833,7 @@ export function openStandaloneChat(options?: {
       skillCtxDelete.type = "button";
       skillCtxDelete.textContent = t("Delete");
 
-      skillCtxMenu.append(skillCtxShowInFs, skillCtxDelete);
+      skillCtxMenu.append(skillCtxShowInFs, skillCtxRestore, skillCtxDelete);
 
       root.append(
         lowerArea,
@@ -1658,6 +1678,8 @@ export function openStandaloneChat(options?: {
       // Skills popup — open/close/render/interactions
       // ----------------------------------------------------------------
       let skillCtxFilePath = ""; // tracks which file the context menu targets
+      let skillCtxFilename = ""; // basename of ctx target
+      let skillCtxSource: "system" | "customized" | "personal" = "personal";
 
       /** Reload the in-memory skill list from disk (call after create/delete). */
       const reloadRuntimeSkills = async () => {
@@ -1669,9 +1691,9 @@ export function openStandaloneChat(options?: {
       };
 
       const renderSkillGrid = async () => {
-        const { listSkillFiles } =
+        const { getSkillListing } =
           await import("../../agent/skills/userSkills");
-        const files = await listSkillFiles();
+        const entries = await getSkillListing();
         skillGrid.textContent = "";
 
         // "+" add button — first grid item
@@ -1710,31 +1732,57 @@ export function openStandaloneChat(options?: {
         skillGrid.appendChild(addBtn);
 
         // Skill file items
-        for (const fullPath of files) {
-          const filename = fullPath.split(/[\\/]/).pop() || fullPath;
+        for (const entry of entries) {
           const item = doc.createElementNS(
             HTML_NS,
             "button",
           ) as HTMLButtonElement;
           item.className = "llm-standalone-skill-item";
           item.type = "button";
-          item.dataset.filePath = fullPath;
+          item.dataset.filePath = entry.filePath;
+          item.dataset.source = entry.source;
+
+          // Customized built-ins get an accent border; outdated-format gets
+          // a stronger amber cue so the user notices they should restore.
+          if (entry.source === "customized") {
+            item.style.borderColor = entry.managedBlockOutdated
+              ? "#d97706"
+              : "var(--color-accent, #2563eb)";
+          }
 
           const icon = doc.createElementNS(HTML_NS, "span") as HTMLSpanElement;
           icon.className = "llm-standalone-skill-doc-icon";
 
           const label = doc.createElementNS(HTML_NS, "span") as HTMLSpanElement;
           label.className = "llm-standalone-skill-label";
-          label.textContent = filename;
+          label.textContent = entry.filename;
 
           item.append(icon, label);
+
+          // Tooltip summarizes source + available actions
+          const tooltipLines = [entry.description || entry.id, ""];
+          if (entry.source === "system") {
+            tooltipLines.push(`Shipped built-in (v${entry.version})`);
+          } else if (entry.source === "customized") {
+            tooltipLines.push(
+              entry.managedBlockOutdated
+                ? `Customized — shipped v${entry.shippedVersion} uses a new format. Right-click → Restore to default to adopt it (overwrites your edits).`
+                : entry.shippedVersion !== null &&
+                    entry.version < entry.shippedVersion
+                  ? `Customized — shipped v${entry.shippedVersion} available. Right-click → Restore to default to adopt it.`
+                  : `Customized built-in.`,
+            );
+          } else {
+            tooltipLines.push(`Your custom skill.`);
+          }
+          item.title = tooltipLines.filter(Boolean).join("\n");
 
           // Left click — open in system editor
           item.addEventListener("click", () => {
             try {
               (
                 Zotero as unknown as { launchFile?: (p: string) => void }
-              ).launchFile?.(fullPath);
+              ).launchFile?.(entry.filePath);
             } catch {
               /* */
             }
@@ -1745,12 +1793,21 @@ export function openStandaloneChat(options?: {
             e.preventDefault();
             e.stopPropagation();
             const me = e as MouseEvent;
-            skillCtxFilePath = fullPath;
+            skillCtxFilePath = entry.filePath;
+            skillCtxFilename = entry.filename;
+            skillCtxSource = entry.source;
             skillCtxMenu.style.display = "flex";
 
+            // Show Restore only for customized built-ins
+            skillCtxRestore.style.display =
+              entry.source === "customized" ? "flex" : "none";
+            // Hide Delete for system built-ins (they'd just be re-seeded)
+            skillCtxDelete.style.display =
+              entry.source === "system" ? "none" : "flex";
+
             // Position with viewport bounds checking
-            const menuW = 180;
-            const menuH = 80;
+            const menuW = 200;
+            const menuH = 110;
             let x = me.clientX + 4;
             let y = me.clientY + 4;
             if (x + menuW > (doc.documentElement?.clientWidth ?? 9999))
@@ -1815,6 +1872,33 @@ export function openStandaloneChat(options?: {
         }
       });
 
+      // Context menu: Restore to default (customized built-ins only)
+      skillCtxRestore.addEventListener("click", async () => {
+        skillCtxMenu.style.display = "none";
+        if (!skillCtxFilename || skillCtxSource !== "customized") return;
+        const { restoreSkillToDefault } =
+          await import("../../agent/skills/userSkills");
+        const win = doc.defaultView as unknown as {
+          confirm?: (msg: string) => boolean;
+        };
+        // Destructive action: if the window has no `confirm` available for
+        // any reason, refuse rather than silently overwrite user edits.
+        const confirmed =
+          typeof win?.confirm === "function"
+            ? win.confirm(
+                `Restore ${skillCtxFilename} to the shipped default? Your customizations in this file will be lost.`,
+              )
+            : false;
+        if (!confirmed) return;
+        const ok = await restoreSkillToDefault(skillCtxFilename);
+        skillCtxFilePath = "";
+        skillCtxFilename = "";
+        if (ok) {
+          await reloadRuntimeSkills();
+          void renderSkillGrid();
+        }
+      });
+
       // Context menu: Delete (+ reload runtime skills)
       skillCtxDelete.addEventListener("click", async () => {
         skillCtxMenu.style.display = "none";
@@ -1823,8 +1907,40 @@ export function openStandaloneChat(options?: {
           await import("../../agent/skills/userSkills");
         await deleteSkillFile(skillCtxFilePath);
         skillCtxFilePath = "";
+        skillCtxFilename = "";
         await reloadRuntimeSkills();
         void renderSkillGrid();
+      });
+
+      // Header: Check for updates — re-seed built-ins and refresh the grid
+      skillRefreshBtn.addEventListener("click", async () => {
+        skillRefreshBtn.disabled = true;
+        const originalText = skillRefreshBtn.textContent;
+        skillRefreshBtn.textContent = t("Checking…");
+        try {
+          const { initUserSkills } = await import(
+            "../../agent/skills/userSkills"
+          );
+          await initUserSkills();
+          await reloadRuntimeSkills();
+          await renderSkillGrid();
+          skillRefreshBtn.textContent = t("Up to date");
+          doc.defaultView?.setTimeout(() => {
+            skillRefreshBtn.textContent = originalText;
+            skillRefreshBtn.disabled = false;
+          }, 1500);
+        } catch (err) {
+          Zotero.debug?.(
+            `[llm-for-zotero] Skill refresh failed: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
+          skillRefreshBtn.textContent = t("Update failed");
+          doc.defaultView?.setTimeout(() => {
+            skillRefreshBtn.textContent = originalText;
+            skillRefreshBtn.disabled = false;
+          }, 2000);
+        }
       });
 
       // Dismiss context menu on click outside

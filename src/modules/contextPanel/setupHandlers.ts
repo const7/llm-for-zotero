@@ -7192,8 +7192,13 @@ export function setupHandlers(
   const buildActionInput = (actionName: string, schema: object, extraFields: Record<string, string>): Record<string, unknown> => {
     const input: Record<string, unknown> = { ...extraFields };
     const s = schema as { required?: string[] };
-    if (s.required?.includes("itemId") && item) {
-      input.itemId = item.id;
+    if (s.required?.includes("itemId")) {
+      // Portal items carry the conversation key as `id`, not the real Zotero
+      // item ID. Resolve to the base paper first so tools receive a real ID.
+      const realItem = resolveCurrentPaperBaseItem() || item;
+      if (realItem?.id) {
+        input.itemId = realItem.id;
+      }
     }
     return input;
   };
@@ -7287,8 +7292,13 @@ export function setupHandlers(
       input = parsedInput;
       // Auto-fill itemId from context if needed
       const s = action.inputSchema as { required?: string[] };
-      if (s.required?.includes("itemId") && item && !input.itemId) {
-        input.itemId = item.id;
+      if (s.required?.includes("itemId") && !input.itemId) {
+        // Portal items carry the conversation key as `id`, not the real Zotero
+        // item ID. Resolve to the base paper first so tools receive a real ID.
+        const realItem = resolveCurrentPaperBaseItem() || item;
+        if (realItem?.id) {
+          input.itemId = realItem.id;
+        }
       }
     } else {
       const needsInput = getNeedsUserInputFields(action.name, action.inputSchema);

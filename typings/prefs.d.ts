@@ -31,6 +31,7 @@ declare namespace _ZoteroTypes {
       "obsidianTargetFolder": string;
       "obsidianAttachmentsFolder": string;
       "obsidianNoteTemplate": string;
+      "notesDirectoryNickname": string;
       "locale": string;
       "mineruAutoWatchCollections": string;
       "mineruGlobalAutoParse": boolean;

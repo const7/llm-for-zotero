@@ -1027,6 +1027,29 @@
   color: var(--fill-primary);
 }
 
+.llm-outline-btn {
+  appearance: none;
+  -moz-appearance: none;
+  padding: 4px 10px;
+  font-size: var(--llm-fs-12, 12px);
+  font-weight: 500;
+  background: transparent;
+  color: var(--color-accent, #2563eb);
+  border: 1px solid var(--color-accent, #2563eb);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+
+.llm-outline-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-accent, #2563eb) 12%, transparent);
+}
+
+.llm-outline-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 .llm-standalone-skill-grid {
   flex: 1 1 auto;
   overflow-y: auto;
@@ -5734,6 +5757,9 @@ label.llm-search-results-item:hover {
 
 .llm-command-row[data-active] {
   display: flex;
+  /* Align chip text with textarea cursor: textarea padding-left (14px)
+     minus chip border (1px) and chip label padding-left (8px) = 5px. */
+  padding-left: 5px;
 }
 
 .llm-command-row .llm-paper-context-chip-header {

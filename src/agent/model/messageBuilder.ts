@@ -5,7 +5,7 @@ import type {
 } from "../types";
 import { AGENT_PERSONA_INSTRUCTIONS } from "./agentPersona";
 import { buildAgentMemoryBlock } from "../store/conversationMemory";
-import { getAllSkills, matchesSkill } from "../skills";
+import { getAllSkills } from "../skills";
 
 import { isTextOnlyModel } from "../../providers";
 import {
@@ -191,6 +191,7 @@ function buildSystemPrompt(sections: PromptSection[]): string {
 function collectGuidanceInstructions(
   request: AgentRuntimeRequest,
   tools: AgentToolDefinition<any, any>[],
+  matchedSkillIds: ReadonlyArray<string>,
 ): string[] {
   const instructions = new Set<string>();
   for (const tool of tools) {
@@ -200,26 +201,15 @@ function collectGuidanceInstructions(
     const instruction = guidance.instruction.trim();
     if (instruction) instructions.add(instruction);
   }
-  const forcedIds = new Set(request.forcedSkillIds || []);
 
-  // Dynamic activation: if the user's message mentions the notes directory
-  // nickname, force-activate the note-to-file skill so the full file-writing
-  // workflow is available.
-  const nickname = getNotesDirectoryNickname().trim();
-  if (nickname && isNotesDirectoryConfigured() && request.userText) {
-    const escaped = nickname.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const isAscii = /^[\x20-\x7E]+$/.test(nickname);
-    const pattern = isAscii
-      ? new RegExp(`\\b${escaped}\\b`, "i")
-      : new RegExp(escaped, "i");
-    if (pattern.test(request.userText)) {
-      forcedIds.add("note-to-file");
-    }
-  }
-
+  // Inject only the skills that the caller (runtime.ts) pre-selected for
+  // this user turn. Skill selection happens once in getMatchedSkillIds,
+  // before this function is called — its result gates which instruction
+  // bodies ship in the system prompt so unrelated skills don't flood the
+  // context.
+  const activeSkillIds = new Set(matchedSkillIds);
   for (const skill of getAllSkills()) {
-    // Activate if regex matches OR if force-activated from slash menu / nickname
-    if (!forcedIds.has(skill.id) && !matchesSkill(skill, request)) continue;
+    if (!activeSkillIds.has(skill.id)) continue;
     const instruction = skill.instruction.trim();
     if (instruction) instructions.add(instruction);
   }
@@ -270,12 +260,20 @@ function buildNotesDirectorySection(): string {
   if (nickname) {
     lines.push(`- Nickname: ${nickname}`);
   }
+  const attachmentsPath = attachmentsFolder
+    ? joinLocalPath(dirPath, attachmentsFolder)
+    : "";
   lines.push(
     `- Directory path: ${dirPath}`,
     `- Default folder: ${targetFolder}`,
     `- Default target path: ${defaultTargetPath}`,
-    `- Attachments folder: ${attachmentsFolder} (subfolder for copied figures and images)`,
+    `- Attachments folder: ${attachmentsFolder} (relative to vault root)`,
   );
+  if (attachmentsPath) {
+    lines.push(
+      `- Attachments path: ${attachmentsPath} (resolved absolute path for copying images)`,
+    );
+  }
   if (nickname) {
     lines.push(
       `When the user mentions "${nickname}" in the context of notes, write to this directory.`,
@@ -291,6 +289,7 @@ function buildRuntimePlatformSection(): string {
 export async function buildAgentInitialMessages(
   request: AgentRuntimeRequest,
   tools: AgentToolDefinition<any, any>[],
+  matchedSkillIds: ReadonlyArray<string>,
 ): Promise<AgentModelMessage[]> {
   const memoryBlock = await buildAgentMemoryBlock(request.conversationKey);
   const autoReadInstruction = buildAutoReadInstruction(request);
@@ -318,7 +317,7 @@ export async function buildAgentInitialMessages(
     },
     {
       id: "tool-guidance",
-      lines: collectGuidanceInstructions(request, tools),
+      lines: collectGuidanceInstructions(request, tools, matchedSkillIds),
     },
     {
       id: "agent-memory",
