@@ -124,10 +124,12 @@ export const discoverRelatedAction: AgentAction<DiscoverRelatedInput, DiscoverRe
     const loadMoreIncrement = 20;
     const source = input.source || "openalex";
 
+    type FetchModeResult = { rows: PaperRow[]; failed: boolean; error?: string };
+
     const fetchMode = async (
       mode: SearchMode,
       limit: number,
-    ): Promise<PaperRow[]> => {
+    ): Promise<FetchModeResult> => {
       const result = await callTool(
         "search_literature_online",
         {
@@ -141,12 +143,20 @@ export const discoverRelatedAction: AgentAction<DiscoverRelatedInput, DiscoverRe
         ctx,
         `Finding ${mode} for "${seedTitle}"`,
       );
-      if (!result.ok) return [];
+      if (!result.ok) {
+        const errContent = result.content as Record<string, unknown> | undefined;
+        const errMsg =
+          errContent && typeof errContent.error === "string"
+            ? errContent.error
+            : `search_literature_online failed for mode "${mode}"`;
+        return { rows: [], failed: true, error: errMsg };
+      }
       const content = result.content as Record<string, unknown>;
       const raw = Array.isArray(content.results) ? content.results : [];
-      return raw
+      const rows = raw
         .filter((r): r is Record<string, unknown> => !!r && typeof r === "object")
         .map((r, i) => buildPaperRow(r, i, mode));
+      return { rows, failed: false };
     };
 
     const buildPaperRow = (
@@ -207,7 +217,26 @@ export const discoverRelatedAction: AgentAction<DiscoverRelatedInput, DiscoverRe
     let cit: PaperRow[] = [];
     let allRows: PaperRow[] = [];
     let totalDiscovered = 0;
+    // Track which modes failed in the most recent fetchAllModes call so we
+    // can distinguish "genuinely no related papers" from "every source
+    // failed" (network/auth/rate-limit).
+    let fetchFailures: { mode: SearchMode; error: string }[] = [];
     let resolution: Awaited<ReturnType<typeof ctx.requestConfirmation>>;
+
+    const extractFetchResult = (
+      settled: PromiseSettledResult<FetchModeResult>,
+      mode: SearchMode,
+    ): FetchModeResult =>
+      settled.status === "fulfilled"
+        ? settled.value
+        : {
+            rows: [],
+            failed: true,
+            error:
+              settled.reason instanceof Error
+                ? settled.reason.message
+                : String(settled.reason),
+          };
 
     const fetchAllModes = async (limit: number) => {
       const [recSettled, refSettled, citSettled] = await Promise.allSettled([
@@ -215,11 +244,21 @@ export const discoverRelatedAction: AgentAction<DiscoverRelatedInput, DiscoverRe
         fetchMode("references", limit),
         fetchMode("citations", limit),
       ]);
-      rec = recSettled.status === "fulfilled" ? recSettled.value : [];
-      ref = refSettled.status === "fulfilled" ? refSettled.value : [];
-      cit = citSettled.status === "fulfilled" ? citSettled.value : [];
+      const recResult = extractFetchResult(recSettled, "recommendations");
+      const refResult = extractFetchResult(refSettled, "references");
+      const citResult = extractFetchResult(citSettled, "citations");
+      rec = recResult.rows;
+      ref = refResult.rows;
+      cit = citResult.rows;
       allRows = [...rec, ...ref, ...cit];
       totalDiscovered = allRows.length;
+      fetchFailures = [
+        { mode: "recommendations" as const, result: recResult },
+        { mode: "references" as const, result: refResult },
+        { mode: "citations" as const, result: citResult },
+      ]
+        .filter((x) => x.result.failed)
+        .map((x) => ({ mode: x.mode, error: x.result.error || "unknown error" }));
     };
 
     await fetchAllModes(currentLimit);
@@ -229,6 +268,16 @@ export const discoverRelatedAction: AgentAction<DiscoverRelatedInput, DiscoverRe
       step: "Finding related papers",
       summary: `Recommendations: ${rec.length} · References: ${ref.length} · Citations: ${cit.length}`,
     });
+
+    // All three modes failed → surface the actual error instead of the
+    // ambiguous "no related papers" empty-success path.
+    if (fetchFailures.length === 3) {
+      const firstError = fetchFailures[0].error;
+      return {
+        ok: false,
+        error: `Failed to fetch related papers from ${source}: ${firstError}`,
+      };
+    }
 
     if (totalDiscovered === 0) {
       return { ok: true, output: { seedTitle, discovered: 0, imported: 0 } };
@@ -349,7 +398,16 @@ export const discoverRelatedAction: AgentAction<DiscoverRelatedInput, DiscoverRe
       break;
     }
 
-    if (!resolution! || !resolution.approved || resolution.actionId === "cancel") {
+    // Treat a cap-exit as cancel: if the last resolution is still "load_more"
+    // when the loop's hard iteration cap is reached, the user never gave an
+    // explicit import confirmation, so we must NOT fall through and import
+    // whatever happened to be checked at that point.
+    if (
+      !resolution! ||
+      !resolution.approved ||
+      resolution.actionId === "cancel" ||
+      resolution.actionId === "load_more"
+    ) {
       return {
         ok: true,
         output: { seedTitle, discovered: totalDiscovered, imported: 0 },

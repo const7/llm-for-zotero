@@ -267,7 +267,7 @@ function buildNotesDirectorySection(): string {
     `- Directory path: ${dirPath}`,
     `- Default folder: ${targetFolder}`,
     `- Default target path: ${defaultTargetPath}`,
-    `- Attachments folder: ${attachmentsFolder} (relative to vault root)`,
+    `- Attachments folder: ${attachmentsFolder} (relative to notes directory root)`,
   );
   if (attachmentsPath) {
     lines.push(

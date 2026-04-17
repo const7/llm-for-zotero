@@ -241,7 +241,7 @@ Ask the agent to write a note using the nickname you configured — e.g. _"Summa
 
 1. Gather content from the paper (metadata, summary, key points, figures, etc.).
 2. Compose a Markdown note following the conventions of the `write-note` skill.
-3. Add YAML frontmatter with title, date, tags, authors, year, and citation key.
+3. Add YAML frontmatter that matches the `write-note` template (`title`, `created`, `tags`, `citekey`, `doi`, `journal`); author information is kept in the note body, not frontmatter.
 4. Optionally copy figures from MinerU-parsed PDFs into the attachments folder.
 5. Write the note to `{notes_directory}/{default_folder}/{title}.md`.
 

@@ -65,7 +65,13 @@ export function hashBody(str: string): string {
  * - If the raw content has MANAGED markers: hash only the managed block.
  *   This lets us detect plugin-owned content drift while ignoring user
  *   edits outside the markers.
- * - Otherwise: fall back to hashing the fallback body (legacy).
+ * - Otherwise (legacy, no markers): hash the provided `fallbackBody` —
+ *   typically `parseSkill(raw).instruction`, i.e. body without frontmatter.
+ *   Frontmatter is deliberately excluded: `description` and `version` are
+ *   plugin-managed (rewritten by `patchSkillFrontmatter` on upgrade), while
+ *   `match:` and user-added keys are preserved by the same patcher regardless
+ *   of hash outcome. So frontmatter-only edits neither block auto-upgrade
+ *   nor get silently lost.
  */
 export function hashSkillForUpgrade(
   raw: string,
