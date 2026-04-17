@@ -30,9 +30,9 @@ Documentation:
 
 ### 📢 Recent Updates
 
-- **Skills** — Customizable guidance files that shape how the agent handles different tasks. 9 built-in skills included, plus a portal for creating your own. See [Skills](#skills).
+- **Skills** — Customizable guidance files that shape how the agent handles different tasks. 8 built-in skills included, plus a portal for creating your own. See [Skills](#skills).
 - **Standalone Window Mode** — Open the LLM Assistant in its own dedicated window, separate from the Zotero reader sidebar. See [Standalone Window Mode](#standalone-window-mode).
-- **Obsidian Integration** — Write notes from your Zotero papers directly to your Obsidian vault with customizable templates. See [Obsidian Integration](#obsidian-integration).
+- **File-Based Notes** — Save research notes as Markdown files in any local directory — works with Obsidian, Logseq, or any plain markdown folder. See [File-Based Notes](#file-based-notes).
 - **Agent Mode (beta)** — LLM-for-Zotero can now act as an autonomous agent inside your Zotero library. See [Agent Mode](#agent-mode-beta) for details.
 - **Codex auth** — ChatGPT Plus subscribers can use their Codex quota to access Codex models (e.g. `gpt-5.4`) without an API key. See [Codex Auth Setup](#codex-auth-setup-chatgpt-plus-subscribers).
 - **MinerU PDF parsing** — High-fidelity PDF extraction that preserves tables, equations, and figures. See [MinerU PDF Parsing](#mineru-pdf-parsing).
@@ -45,7 +45,7 @@ Documentation:
 - [Configuration](#configuration)
 - [Usage Guide](#usage-guide)
 - [Features](#features)
-- [Obsidian Integration](#obsidian-integration)
+- [File-Based Notes](#file-based-notes)
 - [Agent Mode (beta)](#agent-mode-beta)
 - [Skills](#skills)
 - [WebChat Setup](#webchat-setup-chatgpt-web-sync)
@@ -214,42 +214,44 @@ While the standalone window is open, the reader sidebar panels display a placeho
 
 ---
 
-## Obsidian Integration
+## File-Based Notes
 
-The agent can write notes from your Zotero papers directly into your [Obsidian](https://obsidian.md/) vault — with full metadata, citations, and optionally extracted figures.
+Beyond Zotero's built-in notes, the agent can save research notes as Markdown files in any local directory you choose. The plugin is **not tied to any specific note-taking app** — point it at an [Obsidian](https://obsidian.md/) vault, a [Logseq](https://logseq.com/) graph, or a plain folder of `.md` files, and the agent will write notes there with full metadata, citations, and optionally extracted figures.
 
 ### Configuration
 
-Open `Preferences` → `llm-for-zotero` and scroll to the **Obsidian Integration** section.
+Open `Preferences` → `llm-for-zotero` and scroll to the **Notes Directory** section.
 
 <p align="center">
-  <img src="./assets/obsidian_setting.png" alt="Screenshot of Obsidian Integration settings" width="512" />
+  <img src="./assets/outside_notes.png" alt="Screenshot of the Notes Directory settings panel" width="512" />
 </p>
 
-| Setting                | Description                                                                | Default          |
-| ---------------------- | -------------------------------------------------------------------------- | ---------------- |
-| **Vault Path**         | Absolute path to your Obsidian vault root                                  | _(required)_     |
-| **Default Folder**     | Subfolder for notes (created if it doesn't exist)                          | `Logs`           |
-| **Attachments Folder** | Subfolder for copied figures and images                                    | `imgs`           |
-| **Note Template**      | Markdown template with `{{title}}`, `{{date}}`, `{{content}}` placeholders | Built-in default |
+| Setting                  | Description                                                                                      | Example                |
+| ------------------------ | ------------------------------------------------------------------------------------------------ | ---------------------- |
+| **Nickname**             | How you refer to this directory in chat — the agent recognizes the name when you mention it      | `Obsidian`, `Logseq`   |
+| **Notes Directory Path** | Absolute path to the root directory where notes are saved                                        | `/Users/me/MyVault`    |
+| **Default Folder**       | Default subfolder for new notes (the agent can write to a different folder if you ask it to)     | `Logs`                 |
+| **Attachments Folder**   | Folder for copied figures and images, **relative to the directory root**                         | `Logs/imgs`            |
 
-Click **Test Write Access** to verify the plugin can write to your vault.
+Click **Test Write Access** to verify the plugin can write to your directory.
 
 ### How it works
 
-Ask the agent to write a note to Obsidian (e.g. _"Summarize this paper and save it to Obsidian"_). The agent will:
+Ask the agent to write a note using the nickname you configured — e.g. _"Summarize this paper and save it to Obsidian"_ or _"Log this to my Logseq"_. The agent will:
 
-1. Gather content from the paper (metadata, summary, key points, etc.).
-2. Compose a Markdown note using your configured template.
+1. Gather content from the paper (metadata, summary, key points, figures, etc.).
+2. Compose a Markdown note following the conventions of the `write-note` skill.
 3. Add YAML frontmatter with title, date, tags, authors, year, and citation key.
 4. Optionally copy figures from MinerU-parsed PDFs into the attachments folder.
-5. Write the note to `{vault_path}/{default_folder}/{title}.md`.
+5. Write the note to `{notes_directory}/{default_folder}/{title}.md`.
 
 <p align="center">
-  <img src="./assets/obsidian_example.png" alt="Screenshot of a Zotero paper note in Obsidian" width="1024" />
+  <img src="./assets/obsidian_example.png" alt="Example of a paper note rendered in Obsidian" width="1024" />
 </p>
 
-Notes use [Pandoc citation syntax](https://pandoc.org/MANUAL.html#citations) (`[@citekey]`), compatible with Obsidian's Zotero Integration and Pandoc plugins.
+Notes use [Pandoc citation syntax](https://pandoc.org/MANUAL.html#citations) (`[@citekey]`), compatible with Obsidian's Zotero Integration and Pandoc plugins, as well as most other Markdown readers.
+
+> **Customizing the note format:** Note templates and figure-embedding rules live in the `write-note` skill, not in preferences. Open the **Standalone Window** → **Skills** portal to edit it — see the [Skills](#skills) section for details.
 
 ---
 
@@ -324,7 +326,7 @@ Skills are customizable guidance files that shape how the agent approaches diffe
 
 > Skills require **Agent Mode** to be enabled. They have no effect in standard chat mode.
 
-The plugin ships with **9 built-in skills** covering common research workflows:
+The plugin ships with **8 built-in skills** covering common research workflows:
 
 | Skill | What it guides the agent to do |
 | --- | --- |
@@ -334,9 +336,8 @@ The plugin ships with **9 built-in skills** covering common research workflows:
 | `compare-papers` | Compare multiple papers using batched reads and focused retrieval |
 | `library-analysis` | Summarize or analyze your entire library without context overflow |
 | `literature-review` | Conduct a structured literature review (discover, read, synthesize) |
-| `note-from-paper` | Create reading notes from papers with optional figure inclusion |
-| `note-editing` | Create and edit Zotero notes with smart defaults |
-| `write-to-obsidian` | Export notes to your Obsidian vault with metadata and citations |
+| `write-note` | Write reading notes either as Zotero notes or as Markdown files in your notes directory (Obsidian, Logseq, plain folders) |
+| `import-cited-reference` | Import papers cited in the current PDF into your Zotero library |
 
 ### Creating Custom Skills
 
@@ -474,7 +475,7 @@ When a personal API key is provided, the plugin calls the MinerU API directly (`
 - [x] GitHub Copilot auth
 - [x] WebChat mode (ChatGPT web sync)
 - [x] Standalone window mode ([#78](https://github.com/yilewang/llm-for-zotero/issues/78))
-- [x] Obsidian integration
+- [x] File-based notes (Obsidian, Logseq, any Markdown directory)
 - [ ] Local MinerU support
 - [x] Customized skills
 - [ ] Cross-device synchronization

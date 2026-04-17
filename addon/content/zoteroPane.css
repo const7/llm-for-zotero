@@ -3544,13 +3544,14 @@ label.llm-search-results-item:hover {
 }
 
 .llm-agent-hitl-title {
-  font-size: var(--llm-fs-11);
+  font-size: var(--llm-fs-13);
   font-weight: 600;
   color: var(--fill-primary);
+  line-height: 1.3;
 }
 
 .llm-agent-hitl-description {
-  font-size: var(--llm-fs-10);
+  font-size: var(--llm-fs-11);
   line-height: 1.45;
   color: var(--fill-secondary);
 }
@@ -3621,6 +3622,58 @@ label.llm-search-results-item:hover {
   white-space: pre;
 }
 
+/* Per-paper block used by review_table when a paper title is shown. */
+.llm-agent-hitl-paper-block {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--stroke-secondary, rgba(120, 120, 120, 0.22));
+  background: color-mix(in srgb, var(--fill-quinary, var(--fill-quaternary)) 88%, transparent);
+  margin: 4px 0 10px;
+}
+
+.llm-agent-hitl-paper-block + .llm-agent-hitl-paper-block {
+  margin-top: 6px;
+}
+
+.llm-agent-hitl-paper-block--plain {
+  padding: 0;
+  border: none;
+  background: transparent;
+  margin: 0;
+}
+
+.llm-agent-hitl-paper-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: var(--llm-fs-13);
+  font-weight: 600;
+  color: var(--fill-primary);
+  line-height: 1.3;
+}
+
+.llm-agent-hitl-paper-title-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.llm-agent-hitl-paper-title-index {
+  flex: 0 0 auto;
+  font-size: var(--llm-fs-10);
+  font-weight: 500;
+  color: var(--fill-tertiary);
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--fill-quaternary) 85%, transparent);
+}
+
 .llm-agent-hitl-review-list {
   display: flex;
   flex-direction: column;
@@ -3663,13 +3716,17 @@ label.llm-search-results-item:hover {
 .llm-agent-hitl-review-label {
   font-size: var(--llm-fs-10);
   font-weight: 700;
-  color: var(--fill-primary);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fill-secondary);
 }
 
 .llm-agent-hitl-review-values {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  column-gap: 10px;
+  row-gap: 4px;
+  align-items: stretch;
 }
 
 .llm-agent-hitl-review-column {
@@ -3679,9 +3736,18 @@ label.llm-search-results-item:hover {
   min-width: 0;
 }
 
+.llm-agent-hitl-review-arrow {
+  align-self: end;
+  padding-bottom: 10px;
+  font-size: var(--llm-fs-12);
+  color: var(--fill-tertiary);
+  user-select: none;
+}
+
 .llm-agent-hitl-review-column-label {
   font-size: var(--llm-fs-10);
   color: var(--fill-tertiary);
+  letter-spacing: 0.02em;
 }
 
 .llm-agent-hitl-review-value {
@@ -3689,7 +3755,7 @@ label.llm-search-results-item:hover {
   border-radius: 8px;
   background: var(--fill-quaternary);
   color: var(--fill-secondary);
-  font-size: var(--llm-fs-10);
+  font-size: var(--llm-fs-11);
   line-height: 1.4;
   white-space: nowrap;
   overflow: hidden;
@@ -3705,6 +3771,12 @@ label.llm-search-results-item:hover {
 
 .llm-agent-hitl-review-value-after {
   color: var(--fill-primary);
+  font-weight: 500;
+}
+
+.llm-agent-hitl-review-value-empty {
+  font-style: italic;
+  color: var(--fill-tertiary);
 }
 
 .llm-agent-hitl-diff {
@@ -3907,9 +3979,13 @@ label.llm-search-results-item:hover {
 }
 
 .llm-agent-hitl-assignment-title {
-  font-size: var(--llm-fs-10);
+  font-size: var(--llm-fs-12);
   font-weight: 600;
   color: var(--fill-primary);
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .llm-agent-hitl-assignment-description {
@@ -5205,6 +5281,51 @@ label.llm-search-results-item:hover {
   border-radius: 10px;
   border: 1px solid var(--stroke-secondary, rgba(120, 120, 120, 0.35));
   background: var(--material-background, #fff);
+}
+
+/* ── Action progress indicator (in-thread "working" card) ─────────────── */
+
+.llm-action-progress-card {
+  margin: 8px 0;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--stroke-secondary, rgba(120, 120, 120, 0.35));
+  background: var(--material-sidepane, var(--material-background, rgba(120, 120, 120, 0.04)));
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.llm-action-progress-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.llm-action-progress-title {
+  font-size: var(--llm-fs-12);
+  font-weight: 600;
+  color: var(--fill-primary);
+}
+
+.llm-action-progress-typing {
+  padding: 0;
+}
+
+.llm-action-progress-step {
+  font-size: var(--llm-fs-11);
+  color: var(--fill-secondary);
+}
+
+.llm-action-progress-summary {
+  font-size: var(--llm-fs-10);
+  color: var(--fill-tertiary);
+  min-height: 0;
+}
+
+.llm-action-progress-summary:empty {
+  display: none;
 }
 
 /* ── Action launch form ─────────────────────────────────────────────────── */

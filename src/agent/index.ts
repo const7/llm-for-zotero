@@ -205,6 +205,8 @@ export function getAgentApi() {
           requestId: string,
           action: import("./types").AgentPendingAction,
         ) => Promise<import("./types").AgentConfirmationResolution>;
+        /** LLM credentials for actions that propose per-item suggestions. */
+        llm?: import("./actions").ActionLLMConfig;
       } = {},
     ) => {
       if (!_actionRegistry || !_toolRegistry) throw new Error("Agent subsystem is not initialized");
@@ -220,6 +222,7 @@ export function getAgentApi() {
         confirmationMode: opts.confirmationMode ?? "native_ui",
         onProgress: opts.onProgress ?? (() => {}),
         requestConfirmation: opts.requestConfirmation ?? (async () => ({ approved: true })),
+        llm: opts.llm,
       };
       return _actionRegistry.run(name, input, ctx);
     },

@@ -129,12 +129,76 @@ function truncateAgentTraceText(value: unknown, max = 88): string {
   return `${normalized.slice(0, Math.max(0, max - 3)).trimEnd()}...`;
 }
 
+function renderReviewValueCell(
+  doc: Document,
+  raw: string,
+  multiline: boolean,
+  variant: "before" | "after",
+): HTMLDivElement {
+  const value = doc.createElement("div");
+  const baseClasses = multiline
+    ? ["llm-agent-hitl-review-value", "llm-agent-hitl-review-value-multiline"]
+    : ["llm-agent-hitl-review-value"];
+  if (variant === "after") {
+    baseClasses.push("llm-agent-hitl-review-value-after");
+  }
+  const trimmed = (raw || "").trim();
+  if (!trimmed) {
+    baseClasses.push("llm-agent-hitl-review-value-empty");
+    value.textContent = "(empty)";
+  } else {
+    value.textContent = trimmed;
+    if (!multiline) {
+      value.setAttribute("title", trimmed);
+    }
+  }
+  value.className = baseClasses.join(" ");
+  return value;
+}
+
+/**
+ * Renders a review_table as a per-paper block. When `paperTitle` is provided
+ * (batch mode: multiple papers in one card), the list is wrapped in a
+ * bordered block with a prominent title line. Each field row inside the
+ * block uses a three-column Before → After layout so the change is scannable.
+ */
 function renderReviewTableField(
   doc: Document,
   field: Extract<AgentPendingField, { type: "review_table" }>,
+  meta?: { paperTitle?: string; paperIndex?: number; paperTotal?: number },
 ): HTMLDivElement {
+  const paperTitle = meta?.paperTitle ?? field.label ?? "";
+  // Only wrap in a bordered paper-block when there's a title worth showing;
+  // otherwise the block's border would duplicate the outer HITL card border.
+  const root = doc.createElement("div");
+  root.className = paperTitle
+    ? "llm-agent-hitl-paper-block"
+    : "llm-agent-hitl-paper-block llm-agent-hitl-paper-block--plain";
+
+  if (paperTitle) {
+    const header = doc.createElement("div");
+    header.className = "llm-agent-hitl-paper-title";
+    const titleSpan = doc.createElement("span");
+    titleSpan.className = "llm-agent-hitl-paper-title-text";
+    titleSpan.textContent = paperTitle;
+    titleSpan.setAttribute("title", paperTitle);
+    header.appendChild(titleSpan);
+    if (
+      meta?.paperTotal &&
+      meta.paperTotal > 1 &&
+      typeof meta.paperIndex === "number"
+    ) {
+      const badge = doc.createElement("span");
+      badge.className = "llm-agent-hitl-paper-title-index";
+      badge.textContent = `${meta.paperIndex} / ${meta.paperTotal}`;
+      header.appendChild(badge);
+    }
+    root.appendChild(header);
+  }
+
   const list = doc.createElement("div");
   list.className = "llm-agent-hitl-review-list";
+  root.appendChild(list);
 
   for (const item of field.rows) {
     const row = doc.createElement("div");
@@ -153,31 +217,32 @@ function renderReviewTableField(
     const beforeLabel = doc.createElement("div");
     beforeLabel.className = "llm-agent-hitl-review-column-label";
     beforeLabel.textContent = "Before";
-    const beforeValue = doc.createElement("div");
-    beforeValue.className = item.multiline
-      ? "llm-agent-hitl-review-value llm-agent-hitl-review-value-multiline"
-      : "llm-agent-hitl-review-value";
-    beforeValue.textContent = item.before?.trim() || "Empty";
-    beforeCol.append(beforeLabel, beforeValue);
+    beforeCol.append(
+      beforeLabel,
+      renderReviewValueCell(doc, item.before || "", !!item.multiline, "before"),
+    );
+
+    const arrow = doc.createElement("div");
+    arrow.className = "llm-agent-hitl-review-arrow";
+    arrow.textContent = "\u2192";
+    arrow.setAttribute("aria-hidden", "true");
 
     const afterCol = doc.createElement("div");
     afterCol.className = "llm-agent-hitl-review-column";
     const afterLabel = doc.createElement("div");
     afterLabel.className = "llm-agent-hitl-review-column-label";
     afterLabel.textContent = "After";
-    const afterValue = doc.createElement("div");
-    afterValue.className = item.multiline
-      ? "llm-agent-hitl-review-value llm-agent-hitl-review-value-multiline llm-agent-hitl-review-value-after"
-      : "llm-agent-hitl-review-value llm-agent-hitl-review-value-after";
-    afterValue.textContent = item.after.trim() || "Empty";
-    afterCol.append(afterLabel, afterValue);
+    afterCol.append(
+      afterLabel,
+      renderReviewValueCell(doc, item.after || "", !!item.multiline, "after"),
+    );
 
-    values.append(beforeCol, afterCol);
+    values.append(beforeCol, arrow, afterCol);
     row.append(values);
     list.appendChild(row);
   }
 
-  return list;
+  return root;
 }
 
 function renderDiffPreviewField(
@@ -446,6 +511,7 @@ function renderAssignmentTableField(
     const title = doc.createElement("div");
     title.className = "llm-agent-hitl-assignment-title";
     title.textContent = item.label;
+    if (item.label) title.setAttribute("title", item.label);
     content.appendChild(title);
 
     if (item.description) {
@@ -569,6 +635,7 @@ function renderTagAssignmentTableField(
     const title = doc.createElement("div");
     title.className = "llm-agent-hitl-assignment-title";
     title.textContent = item.label;
+    if (item.label) title.setAttribute("title", item.label);
     content.appendChild(title);
 
     if (item.description) {
@@ -1225,6 +1292,14 @@ export function renderPendingActionCard(
     bindValidity?: (callback: () => void) => void;
   }> = [];
 
+  // Count review_table fields up front so each can render its "x of N" badge.
+  const reviewTableFields = pending.action.fields.filter(
+    (f): f is Extract<AgentPendingField, { type: "review_table" }> =>
+      f.type === "review_table",
+  );
+  const reviewTableTotal = reviewTableFields.length;
+  let reviewTableIndex = 0;
+
   for (const field of pending.action.fields) {
     const fieldContainer = doc.createElement("div");
     fieldContainer.className = "llm-agent-hitl-field";
@@ -1347,13 +1422,14 @@ export function renderPendingActionCard(
     }
 
     if (field.type === "review_table") {
-      if (field.label) {
-        const label = doc.createElement("label");
-        label.className = "llm-agent-hitl-label";
-        label.textContent = field.label;
-        fieldContainer.appendChild(label);
-      }
-      fieldContainer.appendChild(renderReviewTableField(doc, field));
+      reviewTableIndex += 1;
+      fieldContainer.appendChild(
+        renderReviewTableField(doc, field, {
+          paperTitle: field.label,
+          paperIndex: reviewTableIndex,
+          paperTotal: reviewTableTotal,
+        }),
+      );
       fieldAccessors.push({
         field,
         container: fieldContainer,

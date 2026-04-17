@@ -7173,6 +7173,91 @@ export function setupHandlers(
     });
   };
 
+  /**
+   * Returns a controller for a persistent "action in progress" indicator
+   * rendered inside the chat thread.  The indicator surfaces the current
+   * action's step label + the bouncing-dots animation used during assistant
+   * streaming, so users can see that work is happening during long
+   * network-bound steps (e.g. audit_library's per-item metadata fetch).
+   */
+  const createActionProgressIndicator = (actionName: string) => {
+    const ownerDoc = body.ownerDocument;
+    let element: HTMLDivElement | null = null;
+    let stepText: HTMLDivElement | null = null;
+    let summaryText: HTMLDivElement | null = null;
+
+    const ensureMounted = () => {
+      if (!ownerDoc || !chatBox) return;
+      if (element && element.isConnected) return;
+      chatBox.querySelector(".llm-action-progress-card")?.remove();
+      const wrapper = ownerDoc.createElement("div");
+      wrapper.className = "llm-action-progress-card";
+
+      const header = ownerDoc.createElement("div");
+      header.className = "llm-action-progress-header";
+      const title = ownerDoc.createElement("div");
+      title.className = "llm-action-progress-title";
+      title.textContent = `${formatActionLabel(actionName)}`;
+      const typing = ownerDoc.createElement("div");
+      typing.className = "llm-typing llm-action-progress-typing";
+      typing.innerHTML =
+        '<span class="llm-typing-dot"></span><span class="llm-typing-dot"></span><span class="llm-typing-dot"></span>';
+      header.append(title, typing);
+      wrapper.appendChild(header);
+
+      const step = ownerDoc.createElement("div");
+      step.className = "llm-action-progress-step";
+      step.textContent = "Starting…";
+      wrapper.appendChild(step);
+      stepText = step;
+
+      const summary = ownerDoc.createElement("div");
+      summary.className = "llm-action-progress-summary";
+      summary.textContent = "";
+      wrapper.appendChild(summary);
+      summaryText = summary;
+
+      chatBox.appendChild(wrapper);
+      chatBox.scrollTop = chatBox.scrollHeight;
+      element = wrapper;
+    };
+
+    // Mount right away so the user sees feedback before the first step event.
+    ensureMounted();
+
+    return {
+      setStep(stepName: string, index: number, total: number) {
+        ensureMounted();
+        if (stepText) {
+          stepText.textContent = `${stepName} (${index}/${total})`;
+        }
+        if (summaryText) {
+          summaryText.textContent = "";
+        }
+      },
+      setSummary(summary: string) {
+        ensureMounted();
+        if (summaryText) summaryText.textContent = summary;
+      },
+      hide() {
+        if (element && element.isConnected) {
+          element.remove();
+        }
+        element = null;
+        stepText = null;
+        summaryText = null;
+      },
+      remove() {
+        if (element && element.isConnected) {
+          element.remove();
+        }
+        element = null;
+        stepText = null;
+        summaryText = null;
+      },
+    };
+  };
+
   // ── Action launch form ─────────────────────────────────────────────────────
   /**
    * Returns the required fields that cannot be auto-filled from context.
@@ -7313,15 +7398,36 @@ export function setupHandlers(
       input = buildActionInput(action.name, action.inputSchema, extraFields);
     }
     if (status) setStatus(status, `Running: ${formatActionLabel(action.name)}…`, "ready");
+    const progressIndicator = createActionProgressIndicator(action.name);
     try {
       const agentApi = getAgentApi();
+      const selectedProfile = getSelectedProfile();
+      const actionLlmConfig = selectedProfile
+        ? {
+            model: selectedProfile.model,
+            apiBase: selectedProfile.apiBase,
+            apiKey: selectedProfile.apiKey,
+            authMode: selectedProfile.authMode,
+            providerProtocol: selectedProfile.providerProtocol,
+          }
+        : undefined;
       const result = await agentApi.runAction(action.name, input, {
         confirmationMode: "native_ui",
+        llm: actionLlmConfig,
         onProgress: (event) => {
-          if (event.type === "step_start" && status) {
-            setStatus(status, `${event.step} (${event.index}/${event.total})`, "ready");
-          } else if (event.type === "step_done" && event.summary && status) {
-            setStatus(status, event.summary, "ready");
+          if (event.type === "step_start") {
+            progressIndicator.setStep(event.step, event.index, event.total);
+            if (status) {
+              setStatus(status, `${event.step} (${event.index}/${event.total})`, "ready");
+            }
+          } else if (event.type === "step_done") {
+            if (event.summary) {
+              progressIndicator.setSummary(event.summary);
+              if (status) setStatus(status, event.summary, "ready");
+            }
+          } else if (event.type === "confirmation_required") {
+            // HITL card takes over; hide the indicator until work resumes.
+            progressIndicator.hide();
           }
         },
         requestConfirmation: (requestId, pendingAction) =>
@@ -7339,6 +7445,8 @@ export function setupHandlers(
     } catch (err) {
       ztoolkit.log("LLM: action picker run error", err);
       if (status) setStatus(status, `Error: ${String(err)}`, "error");
+    } finally {
+      progressIndicator.remove();
     }
   };
 
