@@ -146,6 +146,10 @@ import {
   countReusableChatMessagePrefix,
   type ChatRenderedMessageState,
 } from "./chatRenderReconciler";
+import {
+  getNextBackfillStartIndex,
+  resolveChatRenderStartIndex,
+} from "./chatRenderWindow";
 import { renderAgentTrace } from "./agentTrace/render";
 import { toFileUrl } from "../../utils/pathFileUrl";
 import { replaceOwnerAttachmentRefs } from "../../utils/attachmentRefStore";
@@ -3619,8 +3623,9 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
         <div class="llm-welcome-icon">📄</div>
         <div class="llm-welcome-text">Select an item or open a PDF to start.</div>
       </div>
-    `;
+	    `;
     chatBox.dataset.renderedConversationKey = "";
+    chatBox.dataset.renderedStartIndex = "";
     const tokenUsageEl = body.querySelector(
       "#llm-token-usage",
     ) as HTMLElement | null;
@@ -3655,6 +3660,7 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
 
   if (history.length === 0) {
     chatBox.dataset.renderedConversationKey = `${conversationKey}`;
+    chatBox.dataset.renderedStartIndex = "0";
     // [webchat] Show webchat-specific welcome instead of generic instructions
     const effectiveConfig = resolveEffectiveRequestConfig({ item });
     if (effectiveConfig.providerProtocol === "web_sync") {
@@ -3707,95 +3713,120 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
     item,
   }).providerProtocol;
   const conversationIsIdle = !history.some((m) => m.streaming);
-  const plannedRenderStates: ChatRenderedMessageState[] = history.map(
-    (msg, index) => {
-      const isUser = msg.role === "user";
-      const assistantPairMsg = history[index + 1];
-      const previousUserMessage =
-        index > 0 && history[index - 1]?.role === "user"
-          ? history[index - 1]
-          : null;
-      const canEditUserPrompt = canEditUserPromptTurn({
-        isUser,
-        hasItem: Boolean(item),
-        conversationIsIdle,
-        assistantPair: assistantPairMsg,
-        providerProtocol: renderProviderProtocol,
-      });
-      const isInlineEditBubble = Boolean(
-        canEditUserPrompt &&
-        inlineEditTarget?.conversationKey === conversationKey &&
-        inlineEditTarget.userTimestamp === msg.timestamp,
-      );
-      const agentTraceSnapshot =
-        msg.runMode === "agent"
-          ? getCachedAgentRunEvents(msg.agentRunId?.trim()).map((event) => [
-              event.seq,
-              event.eventType,
-              event.createdAt,
-            ])
-          : [];
-      return {
-        domKey: buildChatMessageDomKey(index, msg),
-        renderKey: JSON.stringify({
-          text: msg.text,
-          runMode: msg.runMode || "",
-          agentRunId: msg.agentRunId || "",
-          streaming: Boolean(msg.streaming),
-          selectedText: msg.selectedText || "",
-          selectedTexts: msg.selectedTexts || [],
-          selectedTextSources: msg.selectedTextSources || [],
-          selectedTextPaperContexts: msg.selectedTextPaperContexts || [],
-          selectedTextNoteContexts: msg.selectedTextNoteContexts || [],
-          selectedTextExpandedIndex: getMessageSelectedTextExpandedIndex(
-            msg,
-            getMessageSelectedTexts(msg).length,
-          ),
-          screenshotImages: msg.screenshotImages || [],
-          screenshotExpanded: Boolean(msg.screenshotExpanded),
-          screenshotActiveIndex: Number(msg.screenshotActiveIndex || 0),
-          paperContexts: msg.paperContexts || [],
-          fullTextPaperContexts: msg.fullTextPaperContexts || [],
-          paperContextsExpanded: Boolean(msg.paperContextsExpanded),
-          attachments: msg.attachments || [],
-          attachmentsExpanded: Boolean(msg.attachmentsExpanded),
-          modelName: msg.modelName || "",
-          modelEntryId: msg.modelEntryId || "",
-          modelProviderLabel: msg.modelProviderLabel || "",
-          reasoningSummary: msg.reasoningSummary || "",
-          reasoningDetails: msg.reasoningDetails || "",
-          reasoningOpen: Boolean(msg.reasoningOpen),
-          webchatRunState: msg.webchatRunState || "",
-          webchatCompletionReason: msg.webchatCompletionReason || "",
-          isLatestAssistant: index === latestAssistantIndex,
-          canEditUserPrompt,
-          isInlineEditBubble,
-          inlineEditDraft:
-            isInlineEditBubble && inlineEditTarget
-              ? inlineEditTarget.currentText
-              : "",
-          hasPromptTurnPair: Boolean(
-            isUser && assistantPairMsg?.role === "assistant",
-          ),
-          canDeletePromptTurn: Boolean(
-            isUser &&
-            assistantPairMsg?.role === "assistant" &&
-            !assistantPairMsg.streaming,
-          ),
-          canDeleteResponseTurn: Boolean(
-            !isUser && previousUserMessage?.role === "user" && !msg.streaming,
-          ),
-          pairedUserPaperContexts: previousUserMessage?.paperContexts || [],
-          pairedUserSelectedTextPaperContexts:
-            previousUserMessage?.selectedTextPaperContexts || [],
-          agentTraceSnapshot,
-        }),
-      };
-    },
-  );
   const existingConversationKey = Number(
     chatBox.dataset.renderedConversationKey || 0,
   );
+  const existingStartIndex = Math.max(
+    0,
+    Math.min(
+      history.length,
+      Number(chatBox.dataset.renderedStartIndex || 0) || 0,
+    ),
+  );
+  const renderStartIndex = resolveChatRenderStartIndex({
+    historyLength: history.length,
+    existingConversationKey,
+    conversationKey,
+    existingStartIndex,
+    hasExistingRenderedContent,
+    scrollMode: baselineSnapshot.mode,
+  });
+  const renderStateCache = new Map<number, ChatRenderedMessageState>();
+  const buildRenderState = (index: number): ChatRenderedMessageState => {
+    const msg = history[index];
+    const isUser = msg.role === "user";
+    const assistantPairMsg = history[index + 1];
+    const previousUserMessage =
+      index > 0 && history[index - 1]?.role === "user"
+        ? history[index - 1]
+        : null;
+    const canEditUserPrompt = canEditUserPromptTurn({
+      isUser,
+      hasItem: Boolean(item),
+      conversationIsIdle,
+      assistantPair: assistantPairMsg,
+      providerProtocol: renderProviderProtocol,
+    });
+    const isInlineEditBubble = Boolean(
+      canEditUserPrompt &&
+      inlineEditTarget?.conversationKey === conversationKey &&
+      inlineEditTarget.userTimestamp === msg.timestamp,
+    );
+    const agentTraceSnapshot =
+      msg.runMode === "agent"
+        ? getCachedAgentRunEvents(msg.agentRunId?.trim()).map((event) => [
+            event.seq,
+            event.eventType,
+            event.createdAt,
+          ])
+        : [];
+    return {
+      domKey: buildChatMessageDomKey(index, msg),
+      renderKey: JSON.stringify({
+        text: msg.text,
+        runMode: msg.runMode || "",
+        agentRunId: msg.agentRunId || "",
+        streaming: Boolean(msg.streaming),
+        selectedText: msg.selectedText || "",
+        selectedTexts: msg.selectedTexts || [],
+        selectedTextSources: msg.selectedTextSources || [],
+        selectedTextPaperContexts: msg.selectedTextPaperContexts || [],
+        selectedTextNoteContexts: msg.selectedTextNoteContexts || [],
+        selectedTextExpandedIndex: getMessageSelectedTextExpandedIndex(
+          msg,
+          getMessageSelectedTexts(msg).length,
+        ),
+        screenshotImages: msg.screenshotImages || [],
+        screenshotExpanded: Boolean(msg.screenshotExpanded),
+        screenshotActiveIndex: Number(msg.screenshotActiveIndex || 0),
+        paperContexts: msg.paperContexts || [],
+        fullTextPaperContexts: msg.fullTextPaperContexts || [],
+        paperContextsExpanded: Boolean(msg.paperContextsExpanded),
+        attachments: msg.attachments || [],
+        attachmentsExpanded: Boolean(msg.attachmentsExpanded),
+        modelName: msg.modelName || "",
+        modelEntryId: msg.modelEntryId || "",
+        modelProviderLabel: msg.modelProviderLabel || "",
+        reasoningSummary: msg.reasoningSummary || "",
+        reasoningDetails: msg.reasoningDetails || "",
+        reasoningOpen: Boolean(msg.reasoningOpen),
+        webchatRunState: msg.webchatRunState || "",
+        webchatCompletionReason: msg.webchatCompletionReason || "",
+        isLatestAssistant: index === latestAssistantIndex,
+        canEditUserPrompt,
+        isInlineEditBubble,
+        inlineEditDraft:
+          isInlineEditBubble && inlineEditTarget
+            ? inlineEditTarget.currentText
+            : "",
+        hasPromptTurnPair: Boolean(
+          isUser && assistantPairMsg?.role === "assistant",
+        ),
+        canDeletePromptTurn: Boolean(
+          isUser &&
+          assistantPairMsg?.role === "assistant" &&
+          !assistantPairMsg.streaming,
+        ),
+        canDeleteResponseTurn: Boolean(
+          !isUser && previousUserMessage?.role === "user" && !msg.streaming,
+        ),
+        pairedUserPaperContexts: previousUserMessage?.paperContexts || [],
+        pairedUserSelectedTextPaperContexts:
+          previousUserMessage?.selectedTextPaperContexts || [],
+        agentTraceSnapshot,
+      }),
+    };
+  };
+  const getRenderState = (index: number): ChatRenderedMessageState => {
+    const cached = renderStateCache.get(index);
+    if (cached) return cached;
+    const created = buildRenderState(index);
+    renderStateCache.set(index, created);
+    return created;
+  };
+  const plannedRenderStates = history
+    .slice(renderStartIndex)
+    .map((_msg, offset) => getRenderState(renderStartIndex + offset));
   const existingRenderStates =
     existingConversationKey === conversationKey
       ? Array.from(chatBox.children).reduce<ChatRenderedMessageState[]>(
@@ -3825,9 +3856,10 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
     }
   }
   chatBox.dataset.renderedConversationKey = `${conversationKey}`;
+  chatBox.dataset.renderedStartIndex = `${renderStartIndex}`;
 
-  for (const [index, msg] of history.entries()) {
-    if (index < reusablePrefix) continue;
+  const renderMessageWrapper = (index: number): HTMLDivElement => {
+    const msg = history[index];
     const isUser = msg.role === "user";
     const assistantPairMsg = history[index + 1];
     const hasAssistantPair = isUser && assistantPairMsg?.role === "assistant";
@@ -4758,13 +4790,22 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
     }
     wrapper.appendChild(meta);
     if (webchatStatusRow) wrapper.appendChild(webchatStatusRow);
-    wrapper.dataset.messageDomKey = plannedRenderStates[index]?.domKey || "";
-    wrapper.dataset.messageRenderKey =
-      plannedRenderStates[index]?.renderKey || "";
-    chatBox.appendChild(wrapper);
+    const renderState = getRenderState(index);
+    wrapper.dataset.messageDomKey = renderState.domKey;
+    wrapper.dataset.messageRenderKey = renderState.renderKey;
     if (isUser && hasUserContext) {
       wrapper.classList.add("llm-user-context-aligned");
     }
+    return wrapper;
+  };
+
+  for (
+    let offset = reusablePrefix;
+    offset < plannedRenderStates.length;
+    offset += 1
+  ) {
+    const index = renderStartIndex + offset;
+    chatBox.appendChild(renderMessageWrapper(index));
   }
 
   syncUserContextAlignmentWidths(body);
@@ -4786,6 +4827,29 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
       followBottomStabilizers.delete(conversationKey);
     }
   }
+}
+
+export function expandOlderChatHistory(
+  body: Element,
+  item: Zotero.Item,
+): boolean {
+  const chatBox = body.querySelector("#llm-chat-box") as HTMLDivElement | null;
+  if (!chatBox) return false;
+  const conversationKey = getConversationKey(item);
+  const renderedConversationKey = Number(
+    chatBox.dataset.renderedConversationKey || 0,
+  );
+  if (renderedConversationKey !== conversationKey) return false;
+  const currentStartIndex = Math.max(
+    0,
+    Number(chatBox.dataset.renderedStartIndex || 0) || 0,
+  );
+  if (currentStartIndex <= 0) return false;
+  const nextStartIndex = getNextBackfillStartIndex(currentStartIndex);
+  if (nextStartIndex === currentStartIndex) return false;
+  chatBox.dataset.renderedStartIndex = `${nextStartIndex}`;
+  refreshChat(body, item);
+  return true;
 }
 
 export function refreshConversationPanels(
