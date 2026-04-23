@@ -90,6 +90,7 @@ describe("hooks paper search cache invalidation", function () {
     assert.equal(getAllCount, 1);
 
     await hooks.onNotify("modify", "item", [1], {});
+    await new Promise((resolve) => setTimeout(resolve, 550));
     await searchPaperCandidates(1, "notify");
     assert.equal(getAllCount, 2);
   });

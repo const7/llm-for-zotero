@@ -67,6 +67,7 @@ import {
 } from "../utils/notesDirectoryConfig";
 import { testMineruConnection } from "../utils/mineruClient";
 import { registerMineruManagerScript } from "./mineruManagerScript";
+import { getFeatureProfile } from "../featureProfile";
 
 type PrefKey = "systemPrompt";
 
@@ -448,6 +449,7 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
   }
 
   const doc = _window.document;
+  const featureProfile = getFeatureProfile();
   await new Promise((resolve) => setTimeout(resolve, 100));
 
   // ── Translate static XHTML text ────────────────────────────────
@@ -517,6 +519,19 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
   const prefPanels = doc.querySelectorAll("[data-pref-panel]");
   for (let i = 0; i < prefPanels.length; i++) {
     translateTextNodes(prefPanels[i]);
+  }
+  const hiddenTabs: string[] = [];
+  if (!featureProfile.preferences.showAgentTab) hiddenTabs.push("agent");
+  if (!featureProfile.preferences.showMineruTab) hiddenTabs.push("mineru");
+  for (const tabId of hiddenTabs) {
+    const tabButton = doc.querySelector(
+      `[data-pref-tab="${tabId}"]`,
+    ) as HTMLElement | null;
+    const panel = doc.querySelector(
+      `[data-pref-panel="${tabId}"]`,
+    ) as HTMLElement | null;
+    if (tabButton) tabButton.style.display = "none";
+    if (panel) panel.style.display = "none";
   }
   // Translate textarea placeholder
   const systemPrompt = doc.querySelector(

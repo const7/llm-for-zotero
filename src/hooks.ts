@@ -1,31 +1,15 @@
 import { initLocale } from "./utils/locale";
 import { initI18n } from "./utils/i18n";
-import { registerPrefsScripts } from "./modules/preferenceScript";
 import { PREFERENCES_PANE_ID } from "./modules/contextPanel/constants";
 import {
   registerReaderContextPanel,
   registerLLMStyles,
-  registerNoteEditingSelectionTracking,
   registerReaderSelectionTracking,
-  openStandaloneChat,
 } from "./modules/contextPanel";
 import { invalidatePaperSearchCache } from "./modules/contextPanel/paperSearch";
 import { initChatStore } from "./utils/chatStore";
-import {
-  initAttachmentRefStore,
-  reconcileNoteAttachmentRefsFromNoteContent,
-  collectAndDeleteUnreferencedBlobs,
-  ATTACHMENT_GC_MIN_AGE_MS,
-} from "./utils/attachmentRefStore";
 import { runLegacyMigrations } from "./utils/migrations";
 import { createZToolkit } from "./utils/ztoolkit";
-import {
-  getAgentApi,
-  initAgentSubsystem,
-  shutdownAgentSubsystem,
-} from "./agent";
-import { pauseBatchProcessing } from "./modules/mineruBatchProcessor";
-import { startAutoWatch, stopAutoWatch } from "./modules/mineruAutoWatch";
 import { clearAllState, initFontScale } from "./modules/contextPanel/state";
 
 async function onStartup() {
@@ -50,51 +34,6 @@ async function onStartup() {
   } catch (err) {
     ztoolkit.log("LLM: Failed to initialize chat store", err);
   }
-  try {
-    await initAgentSubsystem();
-    addon.api.agent = getAgentApi();
-  } catch (err) {
-    ztoolkit.log("LLM: Failed to initialize agent subsystem", err);
-  }
-  try {
-    const { initUserSkills, loadUserSkills } = await import(
-      "./agent/skills/userSkills"
-    );
-    const { setUserSkills } = await import("./agent/skills");
-    await initUserSkills();
-    const userSkills = await loadUserSkills();
-    setUserSkills(userSkills);
-  } catch (err) {
-    ztoolkit.log("LLM: Failed to load user skills", err);
-  }
-  try {
-    await initAttachmentRefStore();
-  } catch (err) {
-    ztoolkit.log("LLM: Failed to initialize attachment reference store", err);
-  }
-
-  void (async () => {
-    try {
-      await reconcileNoteAttachmentRefsFromNoteContent();
-      await collectAndDeleteUnreferencedBlobs(ATTACHMENT_GC_MIN_AGE_MS);
-    } catch (err) {
-      ztoolkit.log("LLM: Attachment ref reconciliation/GC failed", err);
-    }
-  })();
-
-  // Register webchat relay endpoints on Zotero's embedded HTTP server
-  try {
-    const { registerWebChatRelay } = await import("./webchat/relayServer");
-    registerWebChatRelay();
-  } catch (err) {
-    ztoolkit.log("LLM: Failed to register webchat relay", err);
-  }
-
-  try {
-    startAutoWatch();
-  } catch (err) {
-    ztoolkit.log("LLM: Failed to start MinerU auto-watch", err);
-  }
 
   registerPrefsPane();
 
@@ -118,20 +57,6 @@ async function onMainWindowLoad(win: _ZoteroTypes.MainWindow): Promise<void> {
   registerLLMStyles(win);
   registerReaderContextPanel();
   registerReaderSelectionTracking();
-  registerNoteEditingSelectionTracking(win);
-
-  // Keyboard shortcut: Ctrl/Cmd+Shift+L
-  const doc = win.document;
-  const keyset = doc.getElementById("mainKeyset");
-  if (keyset) {
-    const key = doc.createXULElement("key");
-    key.id = "llmforzotero-key-standalone";
-    key.setAttribute("modifiers", "accel,shift");
-    key.setAttribute("key", "L");
-    key.setAttribute("oncommand", "void(0)");
-    key.addEventListener("command", () => openStandaloneChat());
-    keyset.appendChild(key);
-  }
 }
 
 function registerPrefsPane() {
@@ -166,9 +91,24 @@ function onShutdown(): void {
   } catch {
     /* ignore if module not loaded */
   }
-  pauseBatchProcessing();
-  stopAutoWatch();
-  shutdownAgentSubsystem();
+  try {
+    const { pauseBatchProcessing } = require("./modules/mineruBatchProcessor");
+    pauseBatchProcessing();
+  } catch {
+    /* ignore if module not loaded */
+  }
+  try {
+    const { stopAutoWatch } = require("./modules/mineruAutoWatch");
+    stopAutoWatch();
+  } catch {
+    /* ignore if module not loaded */
+  }
+  try {
+    const { shutdownAgentSubsystem } = require("./agent");
+    shutdownAgentSubsystem();
+  } catch {
+    /* ignore if module not loaded */
+  }
   clearAllState();
   // Remove addon object
   addon.data.alive = false;
@@ -216,9 +156,11 @@ async function onNotify(
  */
 async function onPrefsEvent(type: string, data: { [key: string]: any }) {
   switch (type) {
-    case "load":
+    case "load": {
+      const { registerPrefsScripts } = await import("./modules/preferenceScript");
       registerPrefsScripts(data.window);
       break;
+    }
     default:
       return;
   }
