@@ -424,13 +424,17 @@ const OUTLINE_BTN_STYLE =
   " background: transparent; color: var(--color-accent, #2563eb);" +
   " border: 1px solid var(--color-accent, #2563eb); border-radius: 5px; cursor: pointer;";
 
+// Keep provider cards visually rounded, but do not clip descendant native
+// select popups. Gecko/XUL can render the popup inside the ancestor box,
+// so `overflow: hidden` makes auth/provider/protocol dropdowns appear stuck.
 const CARD_STYLE =
-  "border: 1px solid var(--stroke-secondary, #c8c8c8); border-radius: 8px; overflow: hidden;";
+  "border: 1px solid var(--stroke-secondary, #c8c8c8); border-radius: 8px;";
 
 const CARD_HEADER_STYLE =
   "display: flex; align-items: center; justify-content: space-between; padding: 8px 12px;" +
   " background: Field; color: FieldText;" +
-  " border-bottom: 1px solid var(--stroke-secondary, #c8c8c8);";
+  " border-bottom: 1px solid var(--stroke-secondary, #c8c8c8);" +
+  " border-radius: 8px 8px 0 0;";
 
 const CARD_BODY_STYLE =
   "display: flex; flex-direction: column; gap: 12px; padding: 14px;";
