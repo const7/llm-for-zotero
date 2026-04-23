@@ -1,5 +1,6 @@
 import { assert } from "chai";
 import type { ChatMessage } from "../src/utils/llmClient";
+import { estimateAvailableContextBudget } from "../src/utils/llmClient";
 import type {
   ContextAssemblyStrategy,
   PaperContextCandidate,
@@ -26,14 +27,19 @@ function createCandidate(
 ): PaperContextCandidate {
   return {
     paperKey: `${paperContext.itemId}:${paperContext.contextItemId}`,
-    paper: paperContext,
+    itemId: paperContext.itemId,
+    contextItemId: paperContext.contextItemId,
+    title: paperContext.title,
+    citationKey: paperContext.citationKey,
     chunkIndex: 0,
-    text: "Evidence chunk",
-    score: 1,
-    sectionTitle: "Methods",
-    pageLabel: "1",
+    chunkText: "Evidence chunk",
+    estimatedTokens: 120,
+    bm25Score: 0.8,
+    embeddingScore: 0.7,
+    hybridScore: 0.9,
+    evidenceScore: 1,
     ...overrides,
-  } as PaperContextCandidate;
+  };
 }
 
 describe("leanPaperContextPlanner", function () {
@@ -42,6 +48,7 @@ describe("leanPaperContextPlanner", function () {
 
   it("does not retrieve papers that are already included in full-text mode", async function () {
     let retrievalCalls = 0;
+    let fullTextMaxTokens = 0;
     const statuses: Array<{ text: string; kind: string }> = [];
 
     const plan = await buildLeanPaperContextPlanForRequest(
@@ -65,9 +72,16 @@ describe("leanPaperContextPlanner", function () {
         resolvePaperContextRefFromAttachment: () => activePaper,
         ensurePaperContextsCached: async () => {},
         getPdfContext: () => undefined,
-        buildTruncatedFullPaperContext: (paperContext, _pdfContext, options) => ({
-          text: `FULL:${paperContext.contextItemId}:${options.maxTokens}`,
-        }),
+        buildTruncatedFullPaperContext: (
+          paperContext,
+          _pdfContext,
+          options,
+        ) => {
+          fullTextMaxTokens = options.maxTokens;
+          return {
+            text: `FULL:${paperContext.contextItemId}:${options.maxTokens}`,
+          };
+        },
         buildPaperRetrievalCandidates: async () => {
           retrievalCalls += 1;
           return [createCandidate(activePaper)];
@@ -78,8 +92,12 @@ describe("leanPaperContextPlanner", function () {
     );
 
     assert.equal(retrievalCalls, 0);
-    assert.equal(plan.combinedContext, "FULL:101:7000");
-    assert.equal(plan.strategy, "paper-first-full" satisfies ContextAssemblyStrategy);
+    assert.equal(plan.combinedContext, `FULL:101:${fullTextMaxTokens}`);
+    assert.isAbove(fullTextMaxTokens, 0);
+    assert.equal(
+      plan.strategy,
+      "paper-first-full" satisfies ContextAssemblyStrategy,
+    );
     assert.isUndefined(plan.assistantInstruction);
     assert.deepEqual(plan.paperContexts, [activePaper]);
     assert.deepEqual(plan.fullTextPaperContexts, [activePaper]);
@@ -87,6 +105,70 @@ describe("leanPaperContextPlanner", function () {
       text: "Using full paper context (1)",
       kind: "sending",
     });
+  });
+
+  it("respects the effective context budget on the lean full-text path", async function () {
+    let fullTextMaxTokens = 0;
+    const images = ["data:image/png;base64,aaaa"];
+    const systemPrompt = "Use a very careful style.";
+    const reasoning = {
+      provider: "openai" as const,
+      level: "high" as const,
+    };
+    const advanced = {
+      maxTokens: 1200,
+      inputTokenCap: 6000,
+    };
+
+    await buildLeanPaperContextPlanForRequest(
+      {
+        item,
+        question: "Summarize this paper",
+        paperContexts: [],
+        fullTextPaperContexts: [activePaper],
+        recentPaperContexts: [],
+        history: [],
+        effectiveModel: "gpt-5",
+        images,
+        reasoning,
+        advanced,
+        systemPrompt,
+        setStatusSafely: () => {},
+      },
+      {
+        resolveContextSourceItem: () => ({
+          statusText: "Loading paper context",
+          contextItem: { id: activePaper.contextItemId } as Zotero.Item,
+        }),
+        resolvePaperContextRefFromAttachment: () => activePaper,
+        ensurePaperContextsCached: async () => {},
+        getPdfContext: () => undefined,
+        buildTruncatedFullPaperContext: (
+          _paperContext,
+          _pdfContext,
+          options,
+        ) => {
+          fullTextMaxTokens = options.maxTokens;
+          return { text: "FULL" };
+        },
+        buildPaperRetrievalCandidates: async () => [],
+        renderEvidencePack: () => "",
+        resolveContextPlanMineruImages: async () => [],
+      },
+    );
+
+    const budget = estimateAvailableContextBudget({
+      model: "gpt-5",
+      prompt: "Summarize this paper",
+      history: [],
+      images,
+      reasoning,
+      maxTokens: advanced.maxTokens,
+      inputTokenCap: advanced.inputTokenCap,
+      systemPrompt,
+    });
+    assert.equal(fullTextMaxTokens, budget.contextBudgetTokens);
+    assert.isBelow(fullTextMaxTokens, 6000);
   });
 
   it("uses history-enriched retrieval for follow-up turns", async function () {
@@ -109,7 +191,8 @@ describe("leanPaperContextPlanner", function () {
     const plan = await buildLeanPaperContextPlanForRequest(
       {
         item,
-        question: "Do you have access to the full paper, and how does it differ from the prior result?",
+        question:
+          "Do you have access to the full paper, and how does it differ from the prior result?",
         paperContexts: [retrievalPaper],
         fullTextPaperContexts: [],
         recentPaperContexts: [retrievalPaper],
@@ -159,7 +242,10 @@ describe("leanPaperContextPlanner", function () {
       "paper-followup-retrieval" satisfies ContextAssemblyStrategy,
     );
     assert.isString(plan.assistantInstruction);
-    assert.include(plan.assistantInstruction || "", "If the user asks about access");
+    assert.include(
+      plan.assistantInstruction || "",
+      "If the user asks about access",
+    );
     assert.equal(plan.combinedContext, "EVIDENCE:1:1");
     assert.deepEqual(plan.mineruImages, ["image://figure-1"]);
     assert.deepEqual(mineruArgs?.paperContexts, [retrievalPaper]);

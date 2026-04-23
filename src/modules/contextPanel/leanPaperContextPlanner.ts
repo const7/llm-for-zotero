@@ -1,4 +1,9 @@
-import type { ChatMessage } from "../../utils/llmClient";
+import {
+  estimateAvailableContextBudget,
+  type ChatMessage,
+  type ReasoningConfig,
+} from "../../utils/llmClient";
+import { estimateTextTokens } from "../../utils/modelInputCap";
 import {
   buildEnrichedRetrievalQuery,
   buildPaperFollowupAssistantInstruction,
@@ -6,6 +11,7 @@ import {
 import { buildPaperKey } from "./pdfContext";
 import { sanitizeText } from "./textUtils";
 import type {
+  AdvancedModelParams,
   ContextAssemblyStrategy,
   PaperContextCandidate,
   PaperContextRef,
@@ -22,6 +28,10 @@ export type LeanPaperContextPlanParams = {
   recentPaperContexts: PaperContextRef[];
   history: ChatMessage[];
   effectiveModel: string;
+  images?: string[];
+  reasoning?: ReasoningConfig;
+  advanced?: AdvancedModelParams;
+  systemPrompt?: string;
   pdfModePaperKeys?: Set<string>;
   pdfUploadSystemMessages?: string[];
   signal?: AbortSignal;
@@ -29,9 +39,10 @@ export type LeanPaperContextPlanParams = {
 };
 
 export type LeanPaperContextPlanDeps = {
-  resolveContextSourceItem: (
-    item: Zotero.Item,
-  ) => { statusText: string; contextItem: Zotero.Item | null };
+  resolveContextSourceItem: (item: Zotero.Item) => {
+    statusText: string;
+    contextItem: Zotero.Item | null;
+  };
   resolvePaperContextRefFromAttachment: (
     item: Zotero.Item | null | undefined,
   ) => PaperContextRef | null;
@@ -84,7 +95,9 @@ function filterPdfModePaperContexts(
   );
 }
 
-function dedupePaperContexts(paperContexts: PaperContextRef[]): PaperContextRef[] {
+function dedupePaperContexts(
+  paperContexts: PaperContextRef[],
+): PaperContextRef[] {
   const deduped = new Map<string, PaperContextRef>();
   for (const paperContext of paperContexts) {
     const key = buildPaperKey(paperContext);
@@ -110,6 +123,117 @@ function excludeFullTextPaperContexts(
   );
 }
 
+function getCandidateTokenCost(candidate: PaperContextCandidate): number {
+  const estimated = Number(
+    (candidate as { estimatedTokens?: unknown }).estimatedTokens,
+  );
+  if (Number.isFinite(estimated) && estimated > 0) {
+    return Math.max(1, Math.floor(estimated));
+  }
+  const chunkText =
+    typeof (candidate as { chunkText?: unknown }).chunkText === "string"
+      ? ((candidate as { chunkText?: string }).chunkText ?? "")
+      : typeof (candidate as { text?: unknown }).text === "string"
+        ? ((candidate as { text?: string }).text ?? "")
+        : "";
+  return Math.max(1, estimateTextTokens(chunkText));
+}
+
+function getCandidateRank(candidate: PaperContextCandidate): number {
+  const hybrid = Number((candidate as { hybridScore?: unknown }).hybridScore);
+  if (Number.isFinite(hybrid)) return hybrid;
+  const legacy = Number((candidate as { score?: unknown }).score);
+  if (Number.isFinite(legacy)) return legacy;
+  return 0;
+}
+
+function sortCandidatesByRank(
+  candidates: PaperContextCandidate[],
+): PaperContextCandidate[] {
+  return [...candidates].sort((a, b) => {
+    const scoreDelta = getCandidateRank(b) - getCandidateRank(a);
+    if (scoreDelta !== 0) return scoreDelta;
+    return (a.chunkIndex || 0) - (b.chunkIndex || 0);
+  });
+}
+
+function selectCandidatesWithinBudget(params: {
+  paperContexts: PaperContextRef[];
+  candidatesByPaper: Map<string, PaperContextCandidate[]>;
+  contextBudgetTokens: number;
+}): PaperContextCandidate[] {
+  const selected: PaperContextCandidate[] = [];
+  const selectedKeys = new Set<string>();
+  let remainingTokens = Math.max(0, Math.floor(params.contextBudgetTokens));
+
+  const selectCandidate = (candidate: PaperContextCandidate): boolean => {
+    const key = `${candidate.paperKey}:${candidate.chunkIndex}`;
+    if (selectedKeys.has(key)) return false;
+    const tokenCost = getCandidateTokenCost(candidate);
+    if (tokenCost > remainingTokens) return false;
+    selected.push(candidate);
+    selectedKeys.add(key);
+    remainingTokens -= tokenCost;
+    return true;
+  };
+
+  for (const paperContext of params.paperContexts) {
+    const paperKey = buildPaperKey(paperContext);
+    const ranked = params.candidatesByPaper.get(paperKey) || [];
+    if (ranked.length > 0) {
+      selectCandidate(ranked[0]);
+    }
+  }
+
+  const globallyRanked = sortCandidatesByRank(
+    Array.from(params.candidatesByPaper.values()).flat(),
+  );
+  for (const candidate of globallyRanked) {
+    selectCandidate(candidate);
+  }
+
+  return selected;
+}
+
+function appendBudgetedFullTextBlocks(params: {
+  paperContexts: PaperContextRef[];
+  getPdfContext: (contextItemId: number) => PdfContext | undefined;
+  buildTruncatedFullPaperContext: (
+    paperContext: PaperContextRef,
+    pdfContext: PdfContext | undefined,
+    options: { maxTokens: number },
+  ) => { text: string };
+  contextBlocks: string[];
+  contextBudgetTokens: number;
+}): { usedTokens: number; selectedPaperCount: number } {
+  let remainingTokens = Math.max(0, Math.floor(params.contextBudgetTokens));
+  let selectedPaperCount = 0;
+
+  for (const [index, paperContext] of params.paperContexts.entries()) {
+    if (remainingTokens <= 0) break;
+    const papersRemaining = params.paperContexts.length - index;
+    const maxTokens = Math.max(
+      1,
+      Math.floor(remainingTokens / papersRemaining),
+    );
+    const fullContext = params.buildTruncatedFullPaperContext(
+      paperContext,
+      params.getPdfContext(paperContext.contextItemId),
+      { maxTokens },
+    );
+    const tokenCost = estimateTextTokens(fullContext.text);
+    if (tokenCost <= 0) continue;
+    params.contextBlocks.push(fullContext.text);
+    remainingTokens = Math.max(0, remainingTokens - tokenCost);
+    selectedPaperCount += 1;
+  }
+
+  return {
+    usedTokens: Math.max(0, params.contextBudgetTokens - remainingTokens),
+    selectedPaperCount,
+  };
+}
+
 export async function buildLeanPaperContextPlanForRequest(
   params: LeanPaperContextPlanParams,
   deps: LeanPaperContextPlanDeps,
@@ -122,13 +246,33 @@ export async function buildLeanPaperContextPlanForRequest(
     .map((message) => sanitizeText(message).trim())
     .filter(Boolean)
     .join("\n\n");
+  const uploadedPdfTokens = uploadedPdfContext
+    ? estimateTextTokens(uploadedPdfContext)
+    : 0;
+  const contextBudget = estimateAvailableContextBudget({
+    model: params.effectiveModel,
+    prompt: params.question,
+    history: params.history,
+    images: params.images,
+    reasoning: params.reasoning,
+    maxTokens: params.advanced?.maxTokens,
+    inputTokenCap: params.advanced?.inputTokenCap,
+    systemPrompt: params.systemPrompt,
+  });
+  let remainingContextTokens = Math.max(
+    0,
+    contextBudget.contextBudgetTokens - uploadedPdfTokens,
+  );
+
   const activePaperContext = (() => {
     const resolved = deps.resolvePaperContextRefFromAttachment(
       contextSource.contextItem,
     );
     if (!resolved) return null;
     if (
-      params.pdfModePaperKeys?.has(`${resolved.itemId}:${resolved.contextItemId}`)
+      params.pdfModePaperKeys?.has(
+        `${resolved.itemId}:${resolved.contextItemId}`,
+      )
     ) {
       return null;
     }
@@ -151,9 +295,7 @@ export async function buildLeanPaperContextPlanForRequest(
     ),
   );
   const retrievalPapers = excludeFullTextPaperContexts(
-    dedupePaperContexts(
-      displayPaperContexts,
-    ),
+    dedupePaperContexts(displayPaperContexts),
     fullTextPapers,
   );
 
@@ -163,47 +305,58 @@ export async function buildLeanPaperContextPlanForRequest(
   );
 
   const contextBlocks: string[] = [];
-  if (fullTextPapers.length) {
-    const maxTokensPerPaper = fullTextPapers.length === 1 ? 7000 : 3500;
-    for (const paperContext of fullTextPapers) {
-      const fullContext = deps.buildTruncatedFullPaperContext(
-        paperContext,
-        deps.getPdfContext(paperContext.contextItemId),
-        { maxTokens: maxTokensPerPaper },
+  if (fullTextPapers.length && remainingContextTokens > 0) {
+    const fullTextSelection = appendBudgetedFullTextBlocks({
+      paperContexts: fullTextPapers,
+      getPdfContext: deps.getPdfContext,
+      buildTruncatedFullPaperContext: deps.buildTruncatedFullPaperContext,
+      contextBlocks,
+      contextBudgetTokens: remainingContextTokens,
+    });
+    if (fullTextSelection.selectedPaperCount > 0) {
+      remainingContextTokens = Math.max(
+        0,
+        remainingContextTokens - fullTextSelection.usedTokens,
       );
-      contextBlocks.push(fullContext.text);
+      params.setStatusSafely(
+        `Using full paper context (${fullTextSelection.selectedPaperCount})`,
+        "sending",
+      );
     }
-    params.setStatusSafely(
-      `Using full paper context (${fullTextPapers.length})`,
-      "sending",
-    );
   }
 
   let selectedChunkCount = 0;
-  if (retrievalPapers.length) {
+  if (retrievalPapers.length && remainingContextTokens > 0) {
     const retrievalQuestion = buildEnrichedRetrievalQuery(
       params.question,
       params.history,
     );
-    const retrievalCandidates = (
-      await Promise.all(
-        retrievalPapers.map((paperContext) =>
-          deps.buildPaperRetrievalCandidates(
-            paperContext,
-            deps.getPdfContext(paperContext.contextItemId),
-            retrievalQuestion,
-            {
-              topK: retrievalPapers.length === 1 ? 6 : 3,
-              mode: "general",
-            },
-          ),
-        ),
-      )
-    ).flat();
-    selectedChunkCount = retrievalCandidates.length;
+    const candidatesByPaper = new Map<string, PaperContextCandidate[]>();
+    for (const paperContext of retrievalPapers) {
+      const candidates = await deps.buildPaperRetrievalCandidates(
+        paperContext,
+        deps.getPdfContext(paperContext.contextItemId),
+        retrievalQuestion,
+        {
+          topK: retrievalPapers.length === 1 ? 6 : 3,
+          mode: "general",
+        },
+      );
+      candidatesByPaper.set(
+        buildPaperKey(paperContext),
+        sortCandidatesByRank(candidates),
+      );
+    }
+
+    const selectedCandidates = selectCandidatesWithinBudget({
+      paperContexts: retrievalPapers,
+      candidatesByPaper,
+      contextBudgetTokens: remainingContextTokens,
+    });
+    selectedChunkCount = selectedCandidates.length;
     const evidencePack = deps.renderEvidencePack({
       papers: retrievalPapers,
-      candidates: retrievalCandidates,
+      candidates: selectedCandidates,
     });
     if (evidencePack) {
       contextBlocks.push(evidencePack);
@@ -216,10 +369,12 @@ export async function buildLeanPaperContextPlanForRequest(
       const fallbackContext = deps.buildTruncatedFullPaperContext(
         fallbackPaper,
         deps.getPdfContext(fallbackPaper.contextItemId),
-        { maxTokens: 5000 },
+        { maxTokens: remainingContextTokens },
       );
-      contextBlocks.push(fallbackContext.text);
-      params.setStatusSafely("Using current paper text", "sending");
+      if (fallbackContext.text.trim()) {
+        contextBlocks.push(fallbackContext.text);
+        params.setStatusSafely("Using current paper text", "sending");
+      }
     }
   }
 

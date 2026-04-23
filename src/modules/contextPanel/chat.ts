@@ -115,9 +115,7 @@ import {
   getStringPref,
   setLastReasoningExpanded,
 } from "./prefHelpers";
-import {
-  resolveMultiContextPlan,
-} from "./multiContextPlanner";
+import { resolveMultiContextPlan } from "./multiContextPlanner";
 import { resolveContextImages, buildImageResolver } from "./mineruImages";
 import {
   formatPaperCitationLabel,
@@ -1329,6 +1327,7 @@ async function buildContextPlanForRequest(params: {
   recentPaperContexts: PaperContextRef[];
   mineruImages: string[];
 }> {
+  const systemPrompt = getStringPref("systemPrompt") || undefined;
   if (
     getFeatureProfile().sendFlow.useLeanPaperChatFastPath &&
     resolveDisplayConversationKind(params.item) !== "global"
@@ -1342,6 +1341,10 @@ async function buildContextPlanForRequest(params: {
         recentPaperContexts: params.recentPaperContexts,
         history: params.history,
         effectiveModel: params.effectiveRequestConfig.model || "",
+        images: params.images,
+        reasoning: params.effectiveRequestConfig.reasoning,
+        advanced: params.effectiveRequestConfig.advanced,
+        systemPrompt,
         pdfModePaperKeys: params.pdfModePaperKeys,
         pdfUploadSystemMessages: params.pdfUploadSystemMessages,
         signal: params.signal,
@@ -1353,7 +1356,8 @@ async function buildContextPlanForRequest(params: {
         ensurePaperContextsCached: async (paperContexts, signal) => {
           for (const paperContext of paperContexts) {
             if (signal?.aborted) break;
-            const attachment = Zotero.Items.get(paperContext.contextItemId) || null;
+            const attachment =
+              Zotero.Items.get(paperContext.contextItemId) || null;
             if (attachment?.attachmentContentType === "application/pdf") {
               await ensurePDFTextCached(attachment);
             }
@@ -1385,7 +1389,6 @@ async function buildContextPlanForRequest(params: {
     : rawActiveContextItem;
   const conversationMode: "open" | "paper" =
     resolveDisplayConversationKind(params.item) === "global" ? "open" : "paper";
-  const systemPrompt = getStringPref("systemPrompt") || undefined;
 
   const plan = await resolveMultiContextPlan({
     activeContextItem,
@@ -3243,10 +3246,7 @@ export async function sendQuestion(
 
       // [webchat] Send PDF only when the caller explicitly requests it via chip state.
       // Always use dynamic port for the embedded relay server
-      const { getRelayBaseUrl, registerWebChatRelay } = await import(
-        "../../webchat/relayServer"
-      );
-      registerWebChatRelay();
+      const { getRelayBaseUrl } = await import("../../webchat/relayServer");
       const answer = await sendWebChatQuestion({
         item,
         question,
@@ -4523,7 +4523,8 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
           : null;
       const agentRunId = msg.agentRunId?.trim();
       const agentTraceEl =
-        msg.runMode === "agent" && getFeatureProfile().panel.showRuntimeModeToggle
+        msg.runMode === "agent" &&
+        getFeatureProfile().panel.showRuntimeModeToggle
           ? (
               require("./agentTrace/render") as typeof import("./agentTrace/render")
             ).renderAgentTrace({
