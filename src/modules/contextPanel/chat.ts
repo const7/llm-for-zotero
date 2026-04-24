@@ -149,6 +149,10 @@ import {
   scheduleLLMSummary,
   clearConversationSummary,
 } from "./conversationSummaryCache";
+import {
+  hideQuestionTimeline,
+  syncQuestionTimeline,
+} from "./questionTimeline";
 
 /** Get AbortController constructor from global scope */
 function getAbortControllerCtor(): new () => AbortController {
@@ -3091,6 +3095,7 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
       "#llm-token-usage",
     ) as HTMLElement | null;
     if (tokenUsageEl) tokenUsageEl.style.display = "none";
+    hideQuestionTimeline(body);
     return;
   }
 
@@ -3135,6 +3140,7 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
       chatBox.innerHTML = getPaperChatStartPageHtml();
       if (panelRoot) panelRoot.dataset.startPageActive = "true";
     }
+    hideQuestionTimeline(body);
     return;
   }
 
@@ -4201,6 +4207,7 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
     const renderState = getRenderState(index);
     wrapper.dataset.messageDomKey = renderState.domKey;
     wrapper.dataset.messageRenderKey = renderState.renderKey;
+    wrapper.dataset.messageIndex = `${index}`;
     if (isUser && hasUserContext) {
       wrapper.classList.add("llm-user-context-aligned");
     }
@@ -4220,6 +4227,20 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
 
   applyChatScrollSnapshot(chatBox, baselineSnapshot);
   persistChatScrollSnapshotByKey(conversationKey, chatBox);
+  syncQuestionTimeline({
+    body,
+    chatBox,
+    history,
+    conversationKey,
+    jumpToMessageIndex: (messageIndex) => {
+      chatBox.dataset.renderedStartIndex = `${Math.max(
+        0,
+        Math.floor(messageIndex),
+      )}`;
+      refreshChat(body, item);
+    },
+    persistScroll: () => persistChatScrollSnapshot(item, chatBox),
+  });
   if (baselineSnapshot.mode === "followBottom") {
     scheduleFollowBottomStabilization(body, conversationKey, chatBox);
   } else {

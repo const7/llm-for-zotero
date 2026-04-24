@@ -65,25 +65,36 @@ import { createLatestOnlyTaskScheduler } from "./latestOnlyTaskScheduler";
 // Public API
 // =============================================================================
 
-export function registerLLMStyles(win: _ZoteroTypes.MainWindow) {
-  const doc = win.document;
-  if (doc.getElementById(`${config.addonRef}-styles`)) return;
+const mainStylesCacheKey = Date.now().toString(36);
 
-  // Main styles
+function upsertStylesheet(doc: Document, id: string, href: string): void {
+  const existing = doc.getElementById(id) as HTMLLinkElement | null;
+  if (existing) {
+    if (existing.href !== href) {
+      existing.href = href;
+    }
+    return;
+  }
   const link = doc.createElement("link") as HTMLLinkElement;
-  link.id = `${config.addonRef}-styles`;
+  link.id = id;
   link.rel = "stylesheet";
   link.type = "text/css";
-  link.href = `chrome://${config.addonRef}/content/zoteroPane.css`;
+  link.href = href;
   doc.documentElement?.appendChild(link);
+}
 
-  // KaTeX styles for math rendering
-  const katexLink = doc.createElement("link") as HTMLLinkElement;
-  katexLink.id = `${config.addonRef}-katex-styles`;
-  katexLink.rel = "stylesheet";
-  katexLink.type = "text/css";
-  katexLink.href = `chrome://${config.addonRef}/content/vendor/katex/katex.min.css`;
-  doc.documentElement?.appendChild(katexLink);
+export function registerLLMStyles(win: _ZoteroTypes.MainWindow) {
+  const doc = win.document;
+  upsertStylesheet(
+    doc,
+    `${config.addonRef}-styles`,
+    `chrome://${config.addonRef}/content/zoteroPane.css?v=${mainStylesCacheKey}`,
+  );
+  upsertStylesheet(
+    doc,
+    `${config.addonRef}-katex-styles`,
+    `chrome://${config.addonRef}/content/vendor/katex/katex.min.css`,
+  );
 }
 
 export function registerReaderContextPanel() {

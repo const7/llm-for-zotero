@@ -195,7 +195,47 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
   const chatBox = createElement(doc, "div", "llm-messages", {
     id: "llm-chat-box",
   });
-  chatShell.append(chatBox);
+  const questionTimeline = createElement(
+    doc,
+    "nav",
+    "llm-question-timeline",
+    {
+      id: "llm-question-timeline",
+    },
+  );
+  questionTimeline.setAttribute("aria-label", t("Question timeline"));
+  questionTimeline.style.display = "none";
+  const questionTimelinePeek = createElement(
+    doc,
+    "div",
+    "llm-question-timeline-peek",
+  );
+  const questionTimelinePanel = createElement(
+    doc,
+    "div",
+    "llm-question-timeline-panel",
+  );
+  const questionTimelineList = createElement(
+    doc,
+    "div",
+    "llm-question-timeline-list",
+    {
+      id: "llm-question-timeline-list",
+    },
+  );
+  const questionTimelineTooltip = createElement(
+    doc,
+    "div",
+    "llm-question-timeline-tooltip",
+    {
+      id: "llm-question-timeline-tooltip",
+      role: "tooltip",
+    },
+  );
+  questionTimelineTooltip.setAttribute("aria-hidden", "true");
+  questionTimelinePanel.appendChild(questionTimelineList);
+  questionTimeline.append(questionTimelinePeek, questionTimelinePanel);
+  chatShell.append(chatBox, questionTimeline, questionTimelineTooltip);
   container.appendChild(chatShell);
 
   // Response context menu
