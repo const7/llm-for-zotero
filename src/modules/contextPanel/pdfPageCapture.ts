@@ -6,8 +6,7 @@ import {
 } from "./contextResolution";
 
 // ── Zotero reader introspection helpers ──────────────────────────────────────
-// These mirror the equivalent private helpers in agent/services/pdfPageService
-// but live here so contextPanel code can use them without importing agent code.
+// Small page-capture helpers used by the paper-chat panel.
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function unwrapWrappedJsObject<T>(value: T): T {

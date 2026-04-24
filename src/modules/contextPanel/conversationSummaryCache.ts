@@ -1,5 +1,5 @@
 /**
- * Auto-summary cache for non-agent chat mode.
+ * Auto-summary cache for paper chat.
  *
  * Strategy
  * --------

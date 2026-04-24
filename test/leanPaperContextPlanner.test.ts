@@ -171,7 +171,7 @@ describe("leanPaperContextPlanner", function () {
     assert.isBelow(fullTextMaxTokens, 6000);
   });
 
-  it("uses history-enriched retrieval for follow-up turns", async function () {
+  it("keeps follow-up retrieval query tied to the current user question", async function () {
     const retrievalPaper = createPaperContext({
       itemId: 2,
       contextItemId: 202,
@@ -233,9 +233,9 @@ describe("leanPaperContextPlanner", function () {
       },
     );
 
-    assert.include(
+    assert.equal(
       retrievalQuestion,
-      "[Prior answer context: The prior answer focused on the baseline method.]",
+      "Do you have access to the full paper, and how does it differ from the prior result?",
     );
     assert.equal(
       plan.strategy,

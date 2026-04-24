@@ -86,7 +86,6 @@ describe("pdfContext multi-context helpers", function () {
       paper,
       context,
       "gamma delta finding",
-      undefined,
       { topK: 2 },
     );
     assert.lengthOf(candidates, 2);

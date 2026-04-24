@@ -33,7 +33,6 @@ llm-panel-status-context-missing = Select an item or open a PDF
 # Context Info
 llm-context-has-pdf = PDF loaded
 llm-context-annotations = annotations
-llm-context-notes = notes
 
 # Quick Actions
 llm-action-summarize = Summarize

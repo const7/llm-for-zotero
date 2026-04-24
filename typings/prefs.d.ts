@@ -17,7 +17,6 @@ declare namespace _ZoteroTypes {
       "lastUsedModelEntryId": string;
       "systemPrompt": string;
       "showPopupAddText": boolean;
-      "semanticScholarApiKey": string;
       "temperaturePrimary": string;
       "maxTokensPrimary": string;
       "temperatureSecondary": string;

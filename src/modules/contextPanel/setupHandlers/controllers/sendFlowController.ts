@@ -1,5 +1,4 @@
 import { MAX_SELECTED_IMAGES } from "../../constants";
-import { getFeatureProfile } from "../../../../featureProfile";
 import type { ProviderProtocol } from "../../../../utils/providerProtocol";
 import type {
   AdvancedModelParams,
@@ -136,7 +135,6 @@ export function createSendFlowController(deps: SendFlowControllerDeps): {
   const shouldUseLeanChatFastPath = (
     profile: SelectedProfile | null,
   ): boolean => {
-    if (!getFeatureProfile().sendFlow.useLeanPaperChatFastPath) return false;
     return profile?.authMode !== "webchat";
   };
 

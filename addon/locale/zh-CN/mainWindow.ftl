@@ -33,7 +33,6 @@ llm-panel-status-context-missing = 选择一个条目或打开 PDF
 # 上下文信息
 llm-context-has-pdf = PDF 已加载
 llm-context-annotations = 个标注
-llm-context-notes = 个笔记
 
 # 快捷操作
 llm-action-summarize = 摘要

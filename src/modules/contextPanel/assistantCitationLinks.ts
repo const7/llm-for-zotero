@@ -225,8 +225,8 @@ export function clearCachedCitationPagesForTests(): void {
 
 /**
  * Look up the citation page cache for a corrected page label.
- * Used by note saving to replace the LLM's claimed page with the
- * actual page verified by FindController.
+ * Used when rendering citation links to replace the model's claimed page with
+ * the actual page verified by FindController.
  */
 export function lookupCachedCitationPage(
   contextItemId: number,
@@ -483,7 +483,7 @@ function getNextElementSibling(element: Element): Element | null {
   return null;
 }
 
-export function extractStandalonePaperSourceLabel(
+export function extractPaperSourceLabel(
   value: string,
 ): ExtractedCitationLabel | null {
   const normalized = stripCitationControlChars(sanitizeText(value || ""))
@@ -570,7 +570,7 @@ export function extractStandalonePaperSourceLabel(
   };
 }
 
-function isLikelyStandaloneCitationLabel(value: string): boolean {
+function isLikelyPaperCitationLabel(value: string): boolean {
   const clean = stripCitationControlChars(sanitizeText(value || ""))
     .replace(/\s+/g, " ")
     .trim();
@@ -598,8 +598,8 @@ export function extractBlockquoteTailCitation(
     .filter(Boolean);
   if (lines.length >= 2) {
     const tailLine = lines[lines.length - 1];
-    if (isLikelyStandaloneCitationLabel(tailLine)) {
-      const extractedCitation = extractStandalonePaperSourceLabel(tailLine);
+    if (isLikelyPaperCitationLabel(tailLine)) {
+      const extractedCitation = extractPaperSourceLabel(tailLine);
       if (extractedCitation) {
         const quoteText = sanitizeText(lines.slice(0, -1).join(" ")).trim();
         if (quoteText.length >= 8) {
@@ -615,8 +615,8 @@ export function extractBlockquoteTailCitation(
   );
   if (!tailMatch) return null;
   const tailCitation = sanitizeText(tailMatch[1] || "").trim();
-  if (!isLikelyStandaloneCitationLabel(tailCitation)) return null;
-  const extractedCitation = extractStandalonePaperSourceLabel(tailCitation);
+  if (!isLikelyPaperCitationLabel(tailCitation)) return null;
+  const extractedCitation = extractPaperSourceLabel(tailCitation);
   if (!extractedCitation) return null;
 
   const quoteText = sanitizeText(
@@ -683,11 +683,11 @@ function parseGroupedInlineCitationMatch(
       const { stripped, consumed } = stripLeadingInlineCitationCue(trimmedPart);
       const strippedPart = stripped.trim();
       if (strippedPart) {
-        if (!isLikelyStandaloneCitationLabel(strippedPart)) {
+        if (!isLikelyPaperCitationLabel(strippedPart)) {
           partStart = cursor + 1;
           continue;
         }
-        const extractedCitation = extractStandalonePaperSourceLabel(
+        const extractedCitation = extractPaperSourceLabel(
           `(${strippedPart})`,
         );
         if (
@@ -770,8 +770,8 @@ export function extractInlineCitationMentions(
       sanitizeText(rawMatchText),
     ).trim();
     if (!rawText) continue;
-    if (!isLikelyStandaloneCitationLabel(rawText)) continue;
-    const extractedCitation = extractStandalonePaperSourceLabel(rawText);
+    if (!isLikelyPaperCitationLabel(rawText)) continue;
+    const extractedCitation = extractPaperSourceLabel(rawText);
     if (!extractedCitation) continue;
     const end = start + rawMatchText.length;
 
@@ -789,7 +789,7 @@ export function extractInlineCitationMentions(
         if (authorText) {
           const syntheticCitation = `(${authorText}, ${yearLabel})`;
           const extractedFromNarrative =
-            extractStandalonePaperSourceLabel(syntheticCitation);
+            extractPaperSourceLabel(syntheticCitation);
           if (extractedFromNarrative) {
             const authorOffset =
               typeof authorMatch.index === "number" ? authorMatch.index : -1;
@@ -844,7 +844,7 @@ export function extractInlineCitationMentions(
     if (!rawMatchText || !authorText || !yearText) continue;
     const syntheticCitation = `(${authorText}, ${yearText})`;
     const extractedCitation =
-      extractStandalonePaperSourceLabel(syntheticCitation);
+      extractPaperSourceLabel(syntheticCitation);
     if (!extractedCitation) continue;
     const start = Number(narrativeMatch.index || 0);
     const end = start + rawMatchText.length;
@@ -868,7 +868,7 @@ export function extractInlineCitationMentions(
     if (!rawMatchText || !authorText || !yearText) continue;
     const syntheticCitation = `(${authorText}, ${yearText})`;
     const extractedCitation =
-      extractStandalonePaperSourceLabel(syntheticCitation);
+      extractPaperSourceLabel(syntheticCitation);
     if (!extractedCitation) continue;
     const start = Number(narrativeCommaMatch.index || 0);
     const end = start + rawMatchText.length;
@@ -883,7 +883,7 @@ export function matchAssistantCitationCandidates(
   citationLineText: string,
   paperContexts: PaperContextRef[],
 ): AssistantCitationPaperCandidate[] {
-  const extracted = extractStandalonePaperSourceLabel(citationLineText);
+  const extracted = extractPaperSourceLabel(citationLineText);
   if (!extracted) return [];
   return resolveMatchingCandidatesForExtractedCitation(
     extracted,
@@ -1533,8 +1533,7 @@ async function resolvePageForCitationButton(params: {
 /**
  * Dynamically resolve fallback candidates from the panel item / active reader
  * at interaction time.  This runs when the static candidate list from the user
- * message turns out to be empty (e.g. because paperContexts weren't stored or
- * the agent was not enabled).
+ * message turns out to be empty.
  */
 function resolveFallbackCandidates(
   panelItem: Zotero.Item,
@@ -1771,7 +1770,7 @@ async function resolveAndNavigateAssistantCitation(params: {
 
   try {
     const normalizedQuoteText = sanitizeText(params.quoteText || "").trim();
-    const extractedCitation = extractStandalonePaperSourceLabel(
+    const extractedCitation = extractPaperSourceLabel(
       params.baseSourceLabel,
     );
     // Build effective candidates from all available sources, then rank by
@@ -2410,9 +2409,8 @@ export function decorateAssistantCitationLinks(params: {
   }
 
   // Collect paper context candidates from the user message and panel item.
-  // This list may be empty (e.g. when the agent is disabled and no paper
-  // contexts were forwarded).  Buttons are still created in that case — the
-  // click handler will dynamically resolve a fallback from the panel item.
+  // This list may be empty. Buttons are still created in that case; the click
+  // handler dynamically resolves a fallback from the panel item.
   const candidates = collectAssistantCitationCandidates(
     params.panelItem,
     params.pairedUserMessage,
@@ -2441,7 +2439,7 @@ export function decorateAssistantCitationLinks(params: {
 
     // Primary attempt: the entire element is a citation label.
     let extractedCitation = citationEl
-      ? extractStandalonePaperSourceLabel(citationEl.textContent || "")
+      ? extractPaperSourceLabel(citationEl.textContent || "")
       : null;
 
     // Edge-case fallback: the element may start with a citation label followed
@@ -2453,7 +2451,7 @@ export function decorateAssistantCitationLinks(params: {
       const rawLines = (citationEl.textContent || "").split("\n");
       const firstLine = sanitizeText(rawLines[0] || "").trim();
       if (firstLine) {
-        const leadingAttempt = extractStandalonePaperSourceLabel(firstLine);
+        const leadingAttempt = extractPaperSourceLabel(firstLine);
         if (leadingAttempt) {
           extractedCitation = leadingAttempt;
           // Collect the remainder so it can be re-inserted as a sibling para.

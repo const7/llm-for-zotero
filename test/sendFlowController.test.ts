@@ -15,7 +15,7 @@ describe("sendFlowController", function () {
   };
   const selectedFile: ChatAttachment = {
     id: "file-1",
-    name: "notes.md",
+    name: "paper-summary.md",
     mimeType: "text/markdown",
     sizeBytes: 20,
     category: "markdown",

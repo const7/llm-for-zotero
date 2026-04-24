@@ -121,8 +121,6 @@ async function onNotify(
       invalidatePaperSearchCache();
     }, 500);
   }
-  // You can add your code to the corresponding notify type
-  ztoolkit.log("notify", event, type, ids, extraData);
   return;
 }
 

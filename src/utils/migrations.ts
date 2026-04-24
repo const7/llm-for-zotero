@@ -51,7 +51,6 @@ const MIGRATABLE_PREF_KEYS = [
   "shortcutDeleted",
   "customShortcuts",
   "shortcutOrder",
-  "assistantNoteMap",
 ] as const;
 
 function hasUserPref(prefKey: string): boolean {

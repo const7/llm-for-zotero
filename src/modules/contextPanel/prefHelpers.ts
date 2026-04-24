@@ -1,6 +1,5 @@
 import {
   config,
-  ASSISTANT_NOTE_MAP_PREF_KEY,
   CUSTOM_SHORTCUT_ID_PREFIX,
   FONT_SCALE_DEFAULT_PERCENT,
   FONT_SCALE_MIN_PERCENT,
@@ -323,71 +322,4 @@ export function resetShortcutsToDefault(): void {
   setDeletedShortcutIds([]);
   setCustomShortcuts([]);
   setShortcutOrder([]);
-}
-
-function getAssistantNoteMap(): Record<string, string> {
-  try {
-    return getJsonPref(ASSISTANT_NOTE_MAP_PREF_KEY);
-  } catch (err) {
-    ztoolkit.log("LLM: Failed to read assistantNoteMap pref:", err);
-    return {};
-  }
-}
-
-function setAssistantNoteMap(value: Record<string, string>): void {
-  try {
-    setJsonPref(ASSISTANT_NOTE_MAP_PREF_KEY, value);
-  } catch (err) {
-    ztoolkit.log("LLM: Failed to write assistantNoteMap pref:", err);
-  }
-}
-
-export function removeAssistantNoteMapEntry(parentItemId: number): void {
-  const parentKey = String(parentItemId);
-  const map = getAssistantNoteMap();
-  if (!(parentKey in map)) return;
-  delete map[parentKey];
-  setAssistantNoteMap(map);
-}
-
-export function getTrackedAssistantNoteForParent(
-  parentItemId: number,
-): Zotero.Item | null {
-  const parentKey = String(parentItemId);
-  const map = getAssistantNoteMap();
-  const rawNoteId = map[parentKey];
-  if (!rawNoteId) return null;
-  const noteId = Number.parseInt(rawNoteId, 10);
-  if (!Number.isFinite(noteId) || noteId <= 0) {
-    removeAssistantNoteMapEntry(parentItemId);
-    return null;
-  }
-  let note: Zotero.Item | null = null;
-  try {
-    note = Zotero.Items.get(noteId) || null;
-  } catch {
-    ztoolkit.log(`LLM: Failed to get note item ${noteId}`);
-    removeAssistantNoteMapEntry(parentItemId);
-    return null;
-  }
-  if (
-    !note ||
-    !note.isNote?.() ||
-    note.deleted ||
-    note.parentID !== parentItemId
-  ) {
-    removeAssistantNoteMapEntry(parentItemId);
-    return null;
-  }
-  return note;
-}
-
-export function rememberAssistantNoteForParent(
-  parentItemId: number,
-  noteId: number,
-): void {
-  if (!Number.isFinite(noteId) || noteId <= 0) return;
-  const map = getAssistantNoteMap();
-  map[String(parentItemId)] = String(noteId);
-  setAssistantNoteMap(map);
 }

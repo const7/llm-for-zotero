@@ -20,9 +20,9 @@ export type ProviderProtocolSpec = {
   reasoning: boolean;
 };
 
-export type AgentCapabilityClass =
-  | "full_agent"
-  | "agent_without_file_upload"
+export type ProviderCapabilityClass =
+  | "file_input_and_tools"
+  | "tools_only"
   | "chat_only";
 
 export const PROVIDER_PROTOCOL_SPECS: ProviderProtocolSpec[] = [
@@ -166,20 +166,18 @@ export function supportsProviderProtocolFileInputs(
   return getProviderProtocolSpec(protocol).fileInputs;
 }
 
-export function getAgentCapabilityClass(params: {
+export function getProviderCapabilityClass(params: {
   toolCalls: boolean;
   fileInputs: boolean;
-}): AgentCapabilityClass {
+}): ProviderCapabilityClass {
   if (!params.toolCalls) return "chat_only";
-  return params.fileInputs ? "full_agent" : "agent_without_file_upload";
+  return params.fileInputs ? "file_input_and_tools" : "tools_only";
 }
 
-export function describeAgentCapabilityClass(
-  capabilityClass: AgentCapabilityClass,
+export function describeProviderCapabilityClass(
+  capabilityClass: ProviderCapabilityClass,
 ): string {
-  if (capabilityClass === "full_agent") return "full agent";
-  if (capabilityClass === "agent_without_file_upload") {
-    return "agent without file upload";
-  }
+  if (capabilityClass === "file_input_and_tools") return "file input + tools";
+  if (capabilityClass === "tools_only") return "tools only";
   return "chat-only";
 }

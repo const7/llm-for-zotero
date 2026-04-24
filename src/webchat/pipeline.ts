@@ -44,7 +44,7 @@ async function resolveItemPdfPath(
     if (path) return { path, filename: extractFilename(path) };
   }
 
-  // Check parentItem if item is something like a note
+  // Fall back to a parent item for child attachments.
   if (item.parentID) {
     const parent = Zotero.Items.get(item.parentID);
     if (parent) return resolveItemPdfPath(parent);

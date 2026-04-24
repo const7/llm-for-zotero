@@ -4,10 +4,6 @@ import {
   type ReasoningConfig,
 } from "../../utils/llmClient";
 import { estimateTextTokens } from "../../utils/modelInputCap";
-import {
-  buildEnrichedRetrievalQuery,
-  buildPaperFollowupAssistantInstruction,
-} from "./multiContextPlanner";
 import { buildPaperKey } from "./pdfContext";
 import { sanitizeText } from "./textUtils";
 import type {
@@ -195,6 +191,40 @@ function selectCandidatesWithinBudget(params: {
   return selected;
 }
 
+function buildPaperRetrievalQuery(question: string): string {
+  return sanitizeText(question).trim() || question;
+}
+
+function questionNeedsPaperCapabilityReminder(question: string): boolean {
+  const normalized = question.trim().toLowerCase();
+  if (!normalized) return false;
+  return (
+    /\b(?:full text|full paper|whole paper|entire paper|entire article|whole article)\b/.test(
+      normalized,
+    ) ||
+    /\b(?:all sections|all parts|entire document|complete paper)\b/.test(
+      normalized,
+    ) ||
+    /\b(?:do you have access|can you access|can you read|did you read)\b/.test(
+      normalized,
+    ) ||
+    /\b(?:coverage|scope|everything in the paper)\b/.test(normalized)
+  );
+}
+
+function buildPaperFollowupAssistantInstruction(
+  question: string,
+): string | undefined {
+  if (!questionNeedsPaperCapabilityReminder(question)) return undefined;
+  return [
+    "If the user asks about access or coverage, answer directly that you can",
+    "access the paper's full text.",
+    "Do not say that you lack access or only have snippets.",
+    "Then say that, for this reply, you are using the abstract plus the most",
+    "relevant retrieved chunks instead of quoting the entire paper text.",
+  ].join(" ");
+}
+
 function appendBudgetedFullTextBlocks(params: {
   paperContexts: PaperContextRef[];
   getPdfContext: (contextItemId: number) => PdfContext | undefined;
@@ -327,10 +357,7 @@ export async function buildLeanPaperContextPlanForRequest(
 
   let selectedChunkCount = 0;
   if (retrievalPapers.length && remainingContextTokens > 0) {
-    const retrievalQuestion = buildEnrichedRetrievalQuery(
-      params.question,
-      params.history,
-    );
+    const retrievalQuestion = buildPaperRetrievalQuery(params.question);
     const candidatesByPaper = new Map<string, PaperContextCandidate[]>();
     for (const paperContext of retrievalPapers) {
       const candidates = await deps.buildPaperRetrievalCandidates(

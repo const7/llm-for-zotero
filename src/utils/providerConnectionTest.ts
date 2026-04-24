@@ -1,8 +1,8 @@
 import { usesMaxCompletionTokens } from "./apiHelpers";
 import type { ModelProviderAuthMode } from "./modelProviders";
 import {
-  describeAgentCapabilityClass,
-  getAgentCapabilityClass,
+  describeProviderCapabilityClass,
+  getProviderCapabilityClass,
   getProviderProtocolSpec,
   type ProviderProtocol,
 } from "./providerProtocol";
@@ -204,8 +204,8 @@ export function getProviderConnectionCapabilityLabel(params: {
   modelName: string;
 }): string {
   const capabilities = getProviderProtocolSpec(params.protocol);
-  return describeAgentCapabilityClass(
-    getAgentCapabilityClass({
+  return describeProviderCapabilityClass(
+    getProviderCapabilityClass({
       toolCalls: capabilities.toolCalls,
       fileInputs: capabilities.fileInputs,
     }),

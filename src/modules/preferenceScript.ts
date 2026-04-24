@@ -43,7 +43,6 @@ import {
   callEmbeddings,
 } from "../utils/llmClient";
 import { resetEmbeddingFailedFlags } from "./contextPanel/pdfContext";
-import { clearRetrievalCandidateCache } from "./contextPanel/multiContextPlanner";
 import { joinLocalPath } from "../utils/localPath";
 import {
   isMineruEnabled,
@@ -1633,7 +1632,7 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
             });
             statusLine.textContent =
               `${t("✓ Success — model says: ")}"${result.reply}"\n` +
-              `${t("Agent capability: ")}${result.capabilityLabel}`;
+              `${t("Provider capability: ")}${result.capabilityLabel}`;
             statusLine.style.color = "green";
           } catch (error) {
             statusLine.textContent = `✗ ${(error as Error).message}`;
@@ -1922,8 +1921,6 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
         }
         // Reset failed-embedding flags so queries retry with the new config
         resetEmbeddingFailedFlags();
-        // Cached retrieval candidates carry scores from the old provider
-        clearRetrievalCandidateCache();
         // Defer re-render so Gecko finishes processing the select change event
         // before we destroy the element (avoids "this.element is null" error).
         doc.defaultView?.setTimeout(() => renderEmbeddingCard(), 0);
@@ -1969,7 +1966,6 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
         apiKeyInput.addEventListener("change", () => {
           writeEmbPref("embeddingApiKey", apiKeyInput.value.trim());
           resetEmbeddingFailedFlags();
-          clearRetrievalCandidateCache();
         });
         apiKeyWrap.appendChild(apiKeyInput);
         cardBody.appendChild(apiKeyWrap);
@@ -2017,7 +2013,6 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
           apiKeyInput.addEventListener("change", () => {
             writeEmbPref("embeddingApiKey", apiKeyInput.value.trim());
             resetEmbeddingFailedFlags();
-            clearRetrievalCandidateCache();
             doc.defaultView?.setTimeout(() => renderEmbeddingCard(), 0);
           });
           apiKeyWrap.appendChild(apiKeyInput);
@@ -2096,7 +2091,6 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
         modelSelect.addEventListener("change", () => {
           writeEmbPref("embeddingModel", modelSelect.value);
           resetEmbeddingFailedFlags();
-          clearRetrievalCandidateCache();
           updatePricingHint(modelSelect.value);
         });
         modelRow.appendChild(modelSelect);

@@ -43,7 +43,7 @@ export type PaperContextRef = {
   mineruCacheDir?: string;
 };
 
-/** A non-PDF, non-note file attachment (image/figure or other file) selected as reference context. */
+/** A non-PDF file attachment (image/figure or other file) selected as reference context. */
 export type OtherContextRef = {
   contextItemId: number;
   parentItemId?: number;

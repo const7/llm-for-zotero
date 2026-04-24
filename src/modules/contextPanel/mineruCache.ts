@@ -396,7 +396,7 @@ type ContentListEntry = {
  *
  * 1. Scan full.md for `^# heading` lines to get char offsets for sections.
  * 2. Parse content_list.json for figure/table metadata per section.
- * 3. Combine into a lightweight manifest the agent can read quickly.
+ * 3. Combine into a lightweight manifest paper chat can read quickly.
  */
 export function buildManifest(
   mdContent: string,

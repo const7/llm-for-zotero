@@ -61,18 +61,6 @@ function sanitizeFileName(name: string): string {
   return sanitized || "attachment";
 }
 
-function splitFileName(name: string): { stem: string; ext: string } {
-  const safe = sanitizeFileName(name);
-  const index = safe.lastIndexOf(".");
-  if (index <= 0 || index === safe.length - 1) {
-    return { stem: safe, ext: "" };
-  }
-  return {
-    stem: safe.slice(0, index),
-    ext: safe.slice(index),
-  };
-}
-
 function getBaseWritableDir(): string {
   const zotero = Zotero as unknown as {
     DataDirectory?: { dir?: string };
@@ -229,20 +217,6 @@ async function computeSHA256Hex(bytes: Uint8Array): Promise<string> {
   return bytesToHex(new Uint8Array(hashBuffer));
 }
 
-async function copyFile(sourcePath: string, destPath: string): Promise<void> {
-  const io = getIOUtils();
-  if (io?.copy) {
-    await io.copy(sourcePath, destPath);
-    return;
-  }
-  const osFile = getOSFile();
-  if (osFile?.copy) {
-    await osFile.copy(sourcePath, destPath);
-    return;
-  }
-  throw new Error("No file copy API available");
-}
-
 async function removePath(path: string, recursive: boolean): Promise<void> {
   const io = getIOUtils();
   if (io?.remove) {
@@ -268,26 +242,6 @@ async function removePath(path: string, recursive: boolean): Promise<void> {
   } catch (err) {
     ztoolkit.log("LLM: OS.File remove failed", err);
   }
-}
-
-async function reserveUniquePath(
-  dirPath: string,
-  fileName: string,
-): Promise<string> {
-  const { stem, ext } = splitFileName(fileName);
-  const safeStem = stem.slice(0, 120) || "attachment";
-  let attempt = 0;
-  while (attempt < 500) {
-    const suffix = attempt === 0 ? "" : `-${attempt + 1}`;
-    const candidate = `${safeStem}${suffix}${ext}`;
-    const candidatePath = joinLocalPath(dirPath, candidate);
-    if (!(await pathExists(candidatePath))) {
-      return candidatePath;
-    }
-    attempt += 1;
-  }
-  const fallback = `${safeStem}-${Date.now()}${ext}`;
-  return joinLocalPath(dirPath, fallback);
 }
 
 let blobTableInitTask: Promise<void> | null = null;
@@ -325,11 +279,6 @@ function getConversationAttachmentPath(
   const dirPath = getConversationDir(conversationKey);
   const safeName = sanitizeFileName(fileName);
   return joinLocalPath(dirPath, safeName);
-}
-
-function getNoteDir(noteId: number): string {
-  const root = getChatAttachmentsRootDir();
-  return joinLocalPath(root, "notes", String(noteId));
 }
 
 function getBlobDir(contentHash: string): string {
@@ -449,18 +398,6 @@ export async function persistConversationAttachmentFile(
   // file name in the same chat overwrites instead of creating duplicates.
   const targetPath = getConversationAttachmentPath(conversationKey, fileName);
   await writeBytes(targetPath, bytes);
-  return targetPath;
-}
-
-export async function copyAttachmentFileToNoteDir(
-  noteId: number,
-  sourcePath: string,
-  fileName: string,
-): Promise<string> {
-  const dirPath = getNoteDir(noteId);
-  await ensureDir(dirPath);
-  const targetPath = await reserveUniquePath(dirPath, fileName);
-  await copyFile(sourcePath, targetPath);
   return targetPath;
 }
 

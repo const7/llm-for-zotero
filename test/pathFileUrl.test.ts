@@ -64,7 +64,7 @@ describe("pathFileUrl", function () {
   });
 
   it("should reject relative paths", function () {
-    assert.isUndefined(toFileUrl("notes/demo.txt"));
+    assert.isUndefined(toFileUrl("relative/demo.txt"));
   });
 
   it("pathToFileUrl should alias toFileUrl", function () {

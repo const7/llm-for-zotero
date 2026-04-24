@@ -1,5 +1,4 @@
-import { renderMarkdown, renderMarkdownForNote } from "../../utils/markdown";
-import { getFeatureProfile } from "../../featureProfile";
+import { renderMarkdown } from "../../utils/markdown";
 import {
   getWebChatWelcomeHtml,
   getPaperChatStartPageHtml,
@@ -111,7 +110,6 @@ import {
   getStringPref,
   setLastReasoningExpanded,
 } from "./prefHelpers";
-import { resolveMultiContextPlan } from "./multiContextPlanner";
 import { resolveContextImages, buildImageResolver } from "./mineruImages";
 import {
   formatPaperCitationLabel,
@@ -904,11 +902,9 @@ export async function copyTextToClipboard(
 }
 
 /**
- * Render markdown text through renderMarkdownForNote and copy the result
- * to the clipboard as both text/html and text/plain.  When pasted into a
- * rich-text destination, the HTML version is used so markdown tables/math stay
- * rendered. When pasted into a plain-text editor, the raw markdown
- * is used — matching "Copy chat as md".
+ * Render markdown text and copy both text/html and text/plain to the clipboard.
+ * Rich-text destinations use the rendered HTML; plain-text editors receive the
+ * raw markdown.
  */
 export async function copyRenderedMarkdownToClipboard(
   body: Element,
@@ -919,13 +915,12 @@ export async function copyRenderedMarkdownToClipboard(
 
   let renderedHtml = "";
   try {
-    renderedHtml = renderMarkdownForNote(safeText);
+    renderedHtml = renderMarkdown(safeText);
   } catch (err) {
     ztoolkit.log("LLM: Copy markdown render error:", err);
   }
 
-  // Try rich clipboard (HTML + plain) first so that paste into Zotero
-  // notes gives properly rendered content with math.
+  // Try rich clipboard first so tables, math, and links paste as rendered HTML.
   if (renderedHtml) {
     const win = body.ownerDocument?.defaultView as
       | (Window & {
@@ -1194,143 +1189,44 @@ async function buildContextPlanForRequest(params: {
   mineruImages: string[];
 }> {
   const systemPrompt = getStringPref("systemPrompt") || undefined;
-  if (getFeatureProfile().sendFlow.useLeanPaperChatFastPath) {
-    return buildLeanPaperContextPlanForRequest(
-      {
-        item: params.item,
-        question: params.question,
-        paperContexts: params.paperContexts,
-        fullTextPaperContexts: params.fullTextPaperContexts,
-        recentPaperContexts: params.recentPaperContexts,
-        history: params.history,
-        effectiveModel: params.effectiveRequestConfig.model || "",
-        images: params.images,
-        reasoning: params.effectiveRequestConfig.reasoning,
-        advanced: params.effectiveRequestConfig.advanced,
-        systemPrompt,
-        pdfModePaperKeys: params.pdfModePaperKeys,
-        pdfUploadSystemMessages: params.pdfUploadSystemMessages,
-        signal: params.signal,
-        setStatusSafely: params.setStatusSafely,
-      },
-      {
-        resolveContextSourceItem,
-        resolvePaperContextRefFromAttachment,
-        ensurePaperContextsCached: async (paperContexts, signal) => {
-          for (const paperContext of paperContexts) {
-            if (signal?.aborted) break;
-            const attachment =
-              Zotero.Items.get(paperContext.contextItemId) || null;
-            if (attachment?.attachmentContentType === "application/pdf") {
-              await ensurePDFTextCached(attachment);
-            }
+  return buildLeanPaperContextPlanForRequest(
+    {
+      item: params.item,
+      question: params.question,
+      paperContexts: params.paperContexts,
+      fullTextPaperContexts: params.fullTextPaperContexts,
+      recentPaperContexts: params.recentPaperContexts,
+      history: params.history,
+      effectiveModel: params.effectiveRequestConfig.model || "",
+      images: params.images,
+      reasoning: params.effectiveRequestConfig.reasoning,
+      advanced: params.effectiveRequestConfig.advanced,
+      systemPrompt,
+      pdfModePaperKeys: params.pdfModePaperKeys,
+      pdfUploadSystemMessages: params.pdfUploadSystemMessages,
+      signal: params.signal,
+      setStatusSafely: params.setStatusSafely,
+    },
+    {
+      resolveContextSourceItem,
+      resolvePaperContextRefFromAttachment,
+      ensurePaperContextsCached: async (paperContexts, signal) => {
+        for (const paperContext of paperContexts) {
+          if (signal?.aborted) break;
+          const attachment =
+            Zotero.Items.get(paperContext.contextItemId) || null;
+          if (attachment?.attachmentContentType === "application/pdf") {
+            await ensurePDFTextCached(attachment);
           }
-        },
-        getPdfContext: (contextItemId) => pdfTextCache.get(contextItemId),
-        buildTruncatedFullPaperContext,
-        buildPaperRetrievalCandidates,
-        renderEvidencePack,
-        resolveContextPlanMineruImages,
+        }
       },
-    );
-  }
-  const contextSource = resolveContextSourceItem(params.item);
-  params.setStatusSafely(contextSource.statusText, "sending");
-  const rawActiveContextItem = contextSource.contextItem;
-  // If the active paper is in PDF mode (sent as file attachment),
-  // exclude it from the text retrieval pipeline entirely.
-  const activeContextItemInPdfMode = (() => {
-    if (!rawActiveContextItem || !params.pdfModePaperKeys?.size) return false;
-    const autoLoaded = resolveAutoLoadedPaperContextForItem(params.item);
-    if (!autoLoaded) return false;
-    return params.pdfModePaperKeys.has(
-      `${autoLoaded.itemId}:${autoLoaded.contextItemId}`,
-    );
-  })();
-  const activeContextItem = activeContextItemInPdfMode
-    ? null
-    : rawActiveContextItem;
-  const conversationMode: "paper" = "paper";
-
-  const plan = await resolveMultiContextPlan({
-    activeContextItem,
-    conversationMode,
-    question: params.question,
-    contextPrefix: "",
-    // Exclude PDF-mode papers from the text retrieval pipeline
-    paperContexts: params.pdfModePaperKeys?.size
-      ? params.paperContexts.filter(
-          (p) =>
-            !params.pdfModePaperKeys!.has(`${p.itemId}:${p.contextItemId}`),
-        )
-      : params.paperContexts,
-    fullTextPaperContexts: params.fullTextPaperContexts,
-    historyPaperContexts: params.recentPaperContexts,
-    history: params.history,
-    images: params.images,
-    model: params.effectiveRequestConfig.model,
-    reasoning: params.effectiveRequestConfig.reasoning,
-    advanced: params.effectiveRequestConfig.advanced,
-    apiBase: params.effectiveRequestConfig.apiBase,
-    apiKey: params.effectiveRequestConfig.apiKey,
-    providerProtocol: params.effectiveRequestConfig.providerProtocol,
-    systemPrompt,
-    signal: params.signal,
-  });
-
-  if (plan.selectedPaperCount > 0) {
-    const semanticEnabled = getBoolPref("enableSemanticSearch", false);
-    const semanticTag =
-      plan.mode === "retrieval" &&
-      semanticEnabled &&
-      checkEmbeddingAvailability()
-        ? " + semantic search"
-        : "";
-    const modeStatus =
-      plan.strategy === "paper-first-full"
-        ? "Using full paper text (first turn)"
-        : plan.strategy === "paper-followup-retrieval"
-          ? `Retrieval${semanticTag} (${plan.selectedChunkCount} chunks)`
-          : plan.mode === "full"
-            ? `Using full context (${plan.selectedPaperCount} papers)`
-            : `Retrieval${semanticTag} (${plan.selectedPaperCount} papers, ${plan.selectedChunkCount} chunks)`;
-    params.setStatusSafely(modeStatus, "sending");
-  }
-  ztoolkit.log("LLM: Multi-context plan", {
-    mode: plan.mode,
-    strategy: plan.strategy,
-    selectedPaperCount: plan.selectedPaperCount,
-    selectedChunkCount: plan.selectedChunkCount,
-    contextBudgetTokens: plan.contextBudget.contextBudgetTokens,
-    usedContextTokens: plan.usedContextTokens,
-  });
-  const planContext = sanitizeText(plan.contextText || "").trim();
-  // Include provider-uploaded PDF content (Qwen fileid://, Kimi extracted text)
-  const uploadedPdfContext = (params.pdfUploadSystemMessages || [])
-    .map((msg) => sanitizeText(msg).trim())
-    .filter(Boolean)
-    .join("\n\n");
-  const combinedContext = [planContext, uploadedPdfContext]
-    .filter(Boolean)
-    .join("\n\n");
-
-  const mineruImages = await resolveContextPlanMineruImages({
-    contextText: planContext,
-    effectiveModel: params.effectiveRequestConfig.model || "",
-    activeContextItemId: activeContextItem?.id,
-    paperContexts: params.paperContexts,
-    fullTextPaperContexts: params.fullTextPaperContexts,
-  });
-
-  return {
-    combinedContext,
-    strategy: plan.strategy,
-    assistantInstruction: plan.assistantInstruction,
-    paperContexts: params.paperContexts,
-    fullTextPaperContexts: params.fullTextPaperContexts,
-    recentPaperContexts: params.recentPaperContexts,
-    mineruImages,
-  };
+      getPdfContext: (contextItemId) => pdfTextCache.get(contextItemId),
+      buildTruncatedFullPaperContext,
+      buildPaperRetrievalCandidates,
+      renderEvidencePack,
+      resolveContextPlanMineruImages,
+    },
+  );
 }
 
 async function resolveContextPlanMineruImages(params: {
@@ -3319,7 +3215,6 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
       inlineEditTarget?.conversationKey === conversationKey &&
       inlineEditTarget.userTimestamp === msg.timestamp,
     );
-    const agentTraceSnapshot: [] = [];
     return {
       domKey: buildChatMessageDomKey(index, msg),
       renderKey: JSON.stringify({
@@ -3370,7 +3265,6 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
         pairedUserPaperContexts: previousUserMessage?.paperContexts || [],
         pairedUserSelectedTextPaperContexts:
           previousUserMessage?.selectedTextPaperContexts || [],
-        agentTraceSnapshot,
       }),
     };
   };
@@ -4024,7 +3918,6 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
     } else {
       const hasModelName = Boolean(msg.modelName?.trim());
       const hasAnswerText = Boolean(msg.text);
-      const agentTraceEl = null;
       if (hasAnswerText) {
         const safeText = sanitizeText(msg.text);
         if (msg.streaming) bubble.classList.add("streaming");
@@ -4213,10 +4106,6 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
 
         details.appendChild(bodyWrap);
         bubbleHeaderNodes.push(details);
-      }
-
-      if (agentTraceEl) {
-        bubbleHeaderNodes.push(agentTraceEl);
       }
 
       for (let i = bubbleHeaderNodes.length - 1; i >= 0; i -= 1) {

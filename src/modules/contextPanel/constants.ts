@@ -33,7 +33,7 @@ export const MAX_UPLOAD_PDF_SIZE_BYTES = 50 * 1024 * 1024;
 export const MAX_SELECTED_PAPER_CONTEXTS = 10;
 export const CHAT_ATTACHMENTS_DIR_NAME = "chat-attachments";
 export const PAPER_CONVERSATION_KEY_BASE = 1_500_000_000;
-export const GLOBAL_HISTORY_LIMIT = 50;
+export const PAPER_HISTORY_LIMIT = 50;
 
 export function formatFigureCountLabel(
   count: number,
@@ -179,7 +179,6 @@ export const MODEL_PROFILE_ORDER: ModelProfileKey[] = [
   "tertiary",
   "quaternary",
 ];
-export const ASSISTANT_NOTE_MAP_PREF_KEY = "assistantNoteMap";
 
 export function getModelProfileSuffix(): Record<ModelProfileKey, string> {
   return {

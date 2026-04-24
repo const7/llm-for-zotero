@@ -14,8 +14,8 @@
  * - shortcuts.ts   – shortcut rendering and management
  * - screenshot.ts  – screenshot capture from PDF reader
  * - pdfContext.ts   – PDF text extraction, chunking, BM25, embeddings
- * - multiContextPlanner.ts – budget-first adaptive multi-context assembly
- * - notes.ts       – Zotero note creation from chat
+ * - leanPaperContextPlanner.ts – paper-chat context assembly
+ * - mineruCache.ts / mineruImages.ts – MinerU paper-chat inputs
  * - contextResolution.ts – tab/reader context resolution
  * - menuPositioning.ts   – dropdown/context menu positioning
  * - prefHelpers.ts – preference access helpers

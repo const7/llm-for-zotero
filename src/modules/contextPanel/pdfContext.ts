@@ -283,14 +283,6 @@ export function invalidateCachedContextText(itemId: number): void {
   const normalizedItemId = Math.floor(itemId);
   pdfTextCache.delete(normalizedItemId);
   pdfTextLoadingTasks.delete(normalizedItemId);
-  // Clear retrieval candidate cache — cached candidates carry stale chunk
-  // text and scores after a MinerU refresh.  Lazy import to avoid circular
-  // dependency (multiContextPlanner imports from pdfContext).
-  import("./multiContextPlanner")
-    .then(({ clearRetrievalCandidateCache }) =>
-      clearRetrievalCandidateCache(normalizedItemId),
-    )
-    .catch(() => {});
   // Clear embedding cache — chunks will change when MinerU content is refreshed,
   // so cached embeddings are stale. Do NOT delete MinerU files themselves:
   // this function is called right after writeMineruCacheFiles(), so deleting
@@ -431,7 +423,7 @@ function findSentenceBoundary(
   return bestDist <= maxDrift ? bestPos : targetPos;
 }
 
-// ── Plain-text chunking (PDFWorker, notes) ────────────────────────────────────
+// ── Plain-text chunking (PDFWorker) ───────────────────────────────────────────
 
 function splitIntoChunks(text: string, targetLength: number): string[] {
   if (!text) return [];

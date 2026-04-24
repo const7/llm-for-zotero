@@ -58,7 +58,10 @@ import {
   isGrokApiBase,
   providerSupportsResponsesEndpoint,
 } from "./providerPresets";
-import type { ProviderProtocol } from "./providerProtocol";
+import {
+  normalizeProviderProtocolForAuthMode,
+  type ProviderProtocol,
+} from "./providerProtocol";
 import {
   buildProviderTransportHeaders,
   resolveAnthropicMessagesEndpoint,
@@ -272,11 +275,16 @@ function getApiConfig(overrides?: {
   const model = (overrides?.model || modelPrimary).trim();
   const embeddingModel = getPref("embeddingModel") || DEFAULT_EMBEDDING_MODEL;
   const customSystemPrompt = getPref("systemPrompt") || "";
-  const providerProtocol: ProviderProtocol =
-    overrides?.providerProtocol ||
-    defaultEntry?.providerProtocol ||
-    defaultProviderGroup?.providerProtocol ||
-    "openai_chat_compat";
+  const storedProviderProtocol =
+    overrides?.apiBase || overrides?.authMode
+      ? undefined
+      : defaultEntry?.providerProtocol || defaultProviderGroup?.providerProtocol;
+  const providerProtocol = normalizeProviderProtocolForAuthMode({
+    protocol: overrides?.providerProtocol || storedProviderProtocol,
+    authMode,
+    apiBase,
+    model,
+  });
 
   if (!apiBase) {
     throw new Error("API URL is missing in preferences");
@@ -930,7 +938,7 @@ function isCopilotModelUsable(m: CopilotModelEntry): boolean {
   }
   // Exclude internal/legacy duplicates (model_picker_enabled=false with no category)
   if (m.model_picker_enabled === false && !m.model_picker_category) return false;
-  // Exclude codex agent-only models (gated to VS Code agent, not usable via general API)
+  // Exclude Codex IDE-only models that are not usable via the general API.
   if (typeof m.id === "string" && /-codex($|-)/i.test(m.id)) return false;
   // Exclude VS Code internal models (oswe = fine-tuned for VS Code Copilot)
   if (typeof m.id === "string" && /^oswe-/i.test(m.id)) return false;

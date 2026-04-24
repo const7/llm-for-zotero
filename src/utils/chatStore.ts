@@ -51,6 +51,7 @@ export type StoredChatMessage = {
 
 const CHAT_MESSAGES_TABLE = "llm_for_zotero_chat_messages";
 const CHAT_MESSAGES_INDEX = "llm_for_zotero_chat_messages_conversation_idx";
+const TEMP_CHAT_MESSAGES_TABLE = `${CHAT_MESSAGES_TABLE}_old`;
 const PAPER_CONVERSATIONS_TABLE = "llm_for_zotero_paper_conversations";
 const PAPER_CONVERSATIONS_PAPER_INDEX =
   "llm_for_zotero_paper_conversations_paper_idx";
@@ -58,6 +59,51 @@ const PAPER_CONVERSATIONS_CONVERSATION_INDEX =
   "llm_for_zotero_paper_conversations_conversation_idx";
 const LEGACY_CHAT_MESSAGES_TABLE = "zoterollm_chat_messages";
 const LEGACY_CHAT_MESSAGES_INDEX = "zoterollm_chat_messages_conversation_idx";
+const CHAT_MESSAGE_COLUMNS = [
+  "id",
+  "conversation_key",
+  "role",
+  "text",
+  "timestamp",
+  "selected_text",
+  "selected_texts_json",
+  "selected_text_sources_json",
+  "selected_text_paper_contexts_json",
+  "paper_contexts_json",
+  "full_text_paper_contexts_json",
+  "screenshot_images",
+  "attachments_json",
+  "model_name",
+  "model_entry_id",
+  "model_provider_label",
+  "webchat_run_state",
+  "webchat_completion_reason",
+  "reasoning_summary",
+  "reasoning_details",
+] as const;
+
+const CHAT_MESSAGES_CREATE_SQL = `CREATE TABLE IF NOT EXISTS ${CHAT_MESSAGES_TABLE} (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  conversation_key INTEGER NOT NULL,
+  role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
+  text TEXT NOT NULL,
+  timestamp INTEGER NOT NULL,
+  selected_text TEXT,
+  selected_texts_json TEXT,
+  selected_text_sources_json TEXT,
+  selected_text_paper_contexts_json TEXT,
+  paper_contexts_json TEXT,
+  full_text_paper_contexts_json TEXT,
+  screenshot_images TEXT,
+  attachments_json TEXT,
+  model_name TEXT,
+  model_entry_id TEXT,
+  model_provider_label TEXT,
+  webchat_run_state TEXT,
+  webchat_completion_reason TEXT,
+  reasoning_summary TEXT,
+  reasoning_details TEXT
+)`;
 
 async function tableExists(tableName: string): Promise<boolean> {
   const rows = (await Zotero.DB.queryAsync(
@@ -109,6 +155,49 @@ async function migrateLegacyChatStore(): Promise<void> {
   await Zotero.DB.queryAsync(
     `DROP INDEX IF EXISTS ${LEGACY_CHAT_MESSAGES_INDEX}`,
   );
+}
+
+async function getTableColumnNames(tableName: string): Promise<string[]> {
+  const columns = (await Zotero.DB.queryAsync(
+    `PRAGMA table_info(${tableName})`,
+  )) as Array<{ name?: unknown }> | undefined;
+  return (columns || [])
+    .map((column) => (typeof column.name === "string" ? column.name : ""))
+    .filter(Boolean);
+}
+
+async function rebuildChatMessagesTableIfNeeded(): Promise<void> {
+  const existingColumns = await getTableColumnNames(CHAT_MESSAGES_TABLE);
+  if (!existingColumns.length) return;
+  const desiredColumns = new Set<string>(CHAT_MESSAGE_COLUMNS);
+  const existingColumnSet = new Set(existingColumns);
+  const hasLegacyOnlyColumns = existingColumns.some(
+    (column) => !desiredColumns.has(column),
+  );
+  const missingDesiredColumns = CHAT_MESSAGE_COLUMNS.some(
+    (column) => !existingColumnSet.has(column),
+  );
+  if (!hasLegacyOnlyColumns && !missingDesiredColumns) return;
+
+  const columnsToCopy = CHAT_MESSAGE_COLUMNS.filter((column) =>
+    existingColumnSet.has(column),
+  );
+  if (!columnsToCopy.length) return;
+
+  await Zotero.DB.queryAsync(`DROP INDEX IF EXISTS ${CHAT_MESSAGES_INDEX}`);
+  await Zotero.DB.queryAsync(`DROP TABLE IF EXISTS ${TEMP_CHAT_MESSAGES_TABLE}`);
+  await Zotero.DB.queryAsync(
+    `ALTER TABLE ${CHAT_MESSAGES_TABLE}
+     RENAME TO ${TEMP_CHAT_MESSAGES_TABLE}`,
+  );
+  await Zotero.DB.queryAsync(CHAT_MESSAGES_CREATE_SQL);
+  await Zotero.DB.queryAsync(
+    `INSERT INTO ${CHAT_MESSAGES_TABLE}
+      (${columnsToCopy.join(", ")})
+     SELECT ${columnsToCopy.join(", ")}
+     FROM ${TEMP_CHAT_MESSAGES_TABLE}`,
+  );
+  await Zotero.DB.queryAsync(`DROP TABLE IF EXISTS ${TEMP_CHAT_MESSAGES_TABLE}`);
 }
 
 function normalizeConversationKey(conversationKey: number): number | null {
@@ -227,187 +316,8 @@ export async function initChatStore(): Promise<void> {
   await Zotero.DB.executeTransaction(async () => {
     await migrateLegacyChatStore();
 
-    await Zotero.DB.queryAsync(
-      `CREATE TABLE IF NOT EXISTS ${CHAT_MESSAGES_TABLE} (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        conversation_key INTEGER NOT NULL,
-        role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
-        text TEXT NOT NULL,
-        timestamp INTEGER NOT NULL,
-        run_mode TEXT CHECK(run_mode IN ('chat', 'agent')),
-        agent_run_id TEXT,
-        selected_text TEXT,
-        selected_texts_json TEXT,
-        selected_text_sources_json TEXT,
-        selected_text_paper_contexts_json TEXT,
-        selected_text_note_contexts_json TEXT,
-        paper_contexts_json TEXT,
-        full_text_paper_contexts_json TEXT,
-        screenshot_images TEXT,
-        attachments_json TEXT,
-        model_name TEXT,
-        model_entry_id TEXT,
-        model_provider_label TEXT,
-        webchat_run_state TEXT,
-        webchat_completion_reason TEXT,
-        reasoning_summary TEXT,
-        reasoning_details TEXT
-      )`,
-    );
-
-    const columns = (await Zotero.DB.queryAsync(
-      `PRAGMA table_info(${CHAT_MESSAGES_TABLE})`,
-    )) as Array<{ name?: unknown }> | undefined;
-    const hasModelNameColumn = Boolean(
-      columns?.some((column) => column?.name === "model_name"),
-    );
-    if (!hasModelNameColumn) {
-      await Zotero.DB.queryAsync(
-        `ALTER TABLE ${CHAT_MESSAGES_TABLE}
-         ADD COLUMN model_name TEXT`,
-      );
-    }
-    const hasModelEntryIdColumn = Boolean(
-      columns?.some((column) => column?.name === "model_entry_id"),
-    );
-    if (!hasModelEntryIdColumn) {
-      await Zotero.DB.queryAsync(
-        `ALTER TABLE ${CHAT_MESSAGES_TABLE}
-         ADD COLUMN model_entry_id TEXT`,
-      );
-    }
-    const hasModelProviderLabelColumn = Boolean(
-      columns?.some((column) => column?.name === "model_provider_label"),
-    );
-    if (!hasModelProviderLabelColumn) {
-      await Zotero.DB.queryAsync(
-        `ALTER TABLE ${CHAT_MESSAGES_TABLE}
-         ADD COLUMN model_provider_label TEXT`,
-      );
-    }
-    const hasWebchatRunStateColumn = Boolean(
-      columns?.some((column) => column?.name === "webchat_run_state"),
-    );
-    if (!hasWebchatRunStateColumn) {
-      await Zotero.DB.queryAsync(
-        `ALTER TABLE ${CHAT_MESSAGES_TABLE}
-         ADD COLUMN webchat_run_state TEXT`,
-      );
-    }
-    const hasWebchatCompletionReasonColumn = Boolean(
-      columns?.some((column) => column?.name === "webchat_completion_reason"),
-    );
-    if (!hasWebchatCompletionReasonColumn) {
-      await Zotero.DB.queryAsync(
-        `ALTER TABLE ${CHAT_MESSAGES_TABLE}
-         ADD COLUMN webchat_completion_reason TEXT`,
-      );
-    }
-    const hasRunModeColumn = Boolean(
-      columns?.some((column) => column?.name === "run_mode"),
-    );
-    if (!hasRunModeColumn) {
-      await Zotero.DB.queryAsync(
-        `ALTER TABLE ${CHAT_MESSAGES_TABLE}
-         ADD COLUMN run_mode TEXT`,
-      );
-    }
-    const hasAgentRunIdColumn = Boolean(
-      columns?.some((column) => column?.name === "agent_run_id"),
-    );
-    if (!hasAgentRunIdColumn) {
-      await Zotero.DB.queryAsync(
-        `ALTER TABLE ${CHAT_MESSAGES_TABLE}
-         ADD COLUMN agent_run_id TEXT`,
-      );
-    }
-    const hasSelectedTextColumn = Boolean(
-      columns?.some((column) => column?.name === "selected_text"),
-    );
-    if (!hasSelectedTextColumn) {
-      await Zotero.DB.queryAsync(
-        `ALTER TABLE ${CHAT_MESSAGES_TABLE}
-         ADD COLUMN selected_text TEXT`,
-      );
-    }
-    const hasSelectedTextsJsonColumn = Boolean(
-      columns?.some((column) => column?.name === "selected_texts_json"),
-    );
-    if (!hasSelectedTextsJsonColumn) {
-      await Zotero.DB.queryAsync(
-        `ALTER TABLE ${CHAT_MESSAGES_TABLE}
-         ADD COLUMN selected_texts_json TEXT`,
-      );
-    }
-    const hasSelectedTextSourcesJsonColumn = Boolean(
-      columns?.some((column) => column?.name === "selected_text_sources_json"),
-    );
-    if (!hasSelectedTextSourcesJsonColumn) {
-      await Zotero.DB.queryAsync(
-        `ALTER TABLE ${CHAT_MESSAGES_TABLE}
-         ADD COLUMN selected_text_sources_json TEXT`,
-      );
-    }
-    const hasSelectedTextPaperContextsJsonColumn = Boolean(
-      columns?.some(
-        (column) => column?.name === "selected_text_paper_contexts_json",
-      ),
-    );
-    if (!hasSelectedTextPaperContextsJsonColumn) {
-      await Zotero.DB.queryAsync(
-        `ALTER TABLE ${CHAT_MESSAGES_TABLE}
-         ADD COLUMN selected_text_paper_contexts_json TEXT`,
-      );
-    }
-    const hasSelectedTextNoteContextsJsonColumn = Boolean(
-      columns?.some(
-        (column) => column?.name === "selected_text_note_contexts_json",
-      ),
-    );
-    if (!hasSelectedTextNoteContextsJsonColumn) {
-      await Zotero.DB.queryAsync(
-        `ALTER TABLE ${CHAT_MESSAGES_TABLE}
-         ADD COLUMN selected_text_note_contexts_json TEXT`,
-      );
-    }
-    const hasPaperContextsJsonColumn = Boolean(
-      columns?.some((column) => column?.name === "paper_contexts_json"),
-    );
-    if (!hasPaperContextsJsonColumn) {
-      await Zotero.DB.queryAsync(
-        `ALTER TABLE ${CHAT_MESSAGES_TABLE}
-         ADD COLUMN paper_contexts_json TEXT`,
-      );
-    }
-    const hasFullTextPaperContextsJsonColumn = Boolean(
-      columns?.some(
-        (column) => column?.name === "full_text_paper_contexts_json",
-      ),
-    );
-    if (!hasFullTextPaperContextsJsonColumn) {
-      await Zotero.DB.queryAsync(
-        `ALTER TABLE ${CHAT_MESSAGES_TABLE}
-         ADD COLUMN full_text_paper_contexts_json TEXT`,
-      );
-    }
-    const hasScreenshotImagesColumn = Boolean(
-      columns?.some((column) => column?.name === "screenshot_images"),
-    );
-    if (!hasScreenshotImagesColumn) {
-      await Zotero.DB.queryAsync(
-        `ALTER TABLE ${CHAT_MESSAGES_TABLE}
-         ADD COLUMN screenshot_images TEXT`,
-      );
-    }
-    const hasAttachmentsJsonColumn = Boolean(
-      columns?.some((column) => column?.name === "attachments_json"),
-    );
-    if (!hasAttachmentsJsonColumn) {
-      await Zotero.DB.queryAsync(
-        `ALTER TABLE ${CHAT_MESSAGES_TABLE}
-         ADD COLUMN attachments_json TEXT`,
-      );
-    }
+    await Zotero.DB.queryAsync(CHAT_MESSAGES_CREATE_SQL);
+    await rebuildChatMessagesTableIfNeeded();
 
     await Zotero.DB.queryAsync(
       `CREATE INDEX IF NOT EXISTS ${CHAT_MESSAGES_INDEX}

@@ -510,71 +510,6 @@
   cursor: default;
 }
 
-/* ---- Lock icon ---- */
-
-.llm-mode-lock {
-  appearance: none;
-  -moz-appearance: none;
-  border: none;
-  background: transparent;
-  color: var(--fill-tertiary);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin: 0 !important;
-  padding: 0 !important;
-  width: 16px;
-  min-width: 16px;
-  height: 16px;
-  flex: 0 0 16px;
-  border-radius: 3px;
-  font-size: 0;
-  line-height: 0;
-  vertical-align: middle;
-  align-self: center;
-  transition:
-    color 0.15s,
-    background 0.15s;
-}
-
-.llm-mode-lock[data-locked="true"] {
-  color: var(--color-accent);
-}
-
-.llm-mode-lock:not([data-locked="true"]):hover {
-  color: var(--fill-secondary);
-}
-
-.llm-mode-lock:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 1px;
-}
-
-.llm-mode-lock::before {
-  content: "";
-  display: block;
-  width: 11px;
-  height: 11px;
-  background-color: currentColor;
-  mask-image: url("icons/action-mode-lock.svg");
-  mask-repeat: no-repeat;
-  mask-position: center;
-  mask-size: contain;
-  -webkit-mask-image: url("icons/action-mode-lock.svg");
-  -webkit-mask-repeat: no-repeat;
-  -webkit-mask-position: center;
-  -webkit-mask-size: contain;
-  pointer-events: none;
-}
-
-/* Hide stale lock icons from inactive Zotero Reader tabs.
-   buildUI() marks non-current locks with [data-stale-tab].
-   !important prevents old-tab JS handlers from overriding. */
-.llm-mode-lock[data-stale-tab] {
-  display: none !important;
-}
-
 .llm-subtitle {
   font-size: var(--llm-fs-11);
   color: var(--fill-secondary);
@@ -631,20 +566,6 @@
   -webkit-mask-position: center;
   -webkit-mask-size: contain;
   pointer-events: none;
-}
-
-.llm-popout-btn {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  min-width: 28px;
-  height: 28px;
-  min-height: 28px;
-  font-size: 0;
-  line-height: 0;
-  padding: 0;
 }
 
 /* ---- Chat start page (shared layout for all modes) ---- */
@@ -774,23 +695,6 @@
 
 .llm-start-page-transitioning .llm-status-bar {
   transition: opacity 0.3s ease;
-}
-
-.llm-popout-btn::before {
-  content: "";
-  display: block;
-  width: 16px;
-  height: 16px;
-  background-color: currentColor;
-  mask-image: url("icons/action-popout.svg");
-  mask-repeat: no-repeat;
-  mask-position: center;
-  mask-size: contain;
-  -webkit-mask-image: url("icons/action-popout.svg");
-  -webkit-mask-repeat: no-repeat;
-  -webkit-mask-position: center;
-  -webkit-mask-size: contain;
-  pointer-events: none;
 }
 
 /* Context Section */
@@ -4467,15 +4371,6 @@
 
 .llm-paper-context-meta::before {
   content: "📚";
-}
-
-  display: block;
-  flex: 1 1 auto;
-  min-width: 0;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .llm-image-preview-meta:hover {

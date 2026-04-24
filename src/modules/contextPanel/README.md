@@ -15,7 +15,8 @@ Everything on the critical path should stay optimized for that flow.
 - `setupHandlers.ts`: runtime event wiring
 - `chat.ts`: send / load / render / stream orchestration
 - `pdfContext.ts`: paper text extraction and retrieval inputs
-- `notes.ts`: note export helpers
+- `leanPaperContextPlanner.ts`: paper-chat context assembly
+- `mineruCache.ts` / `mineruImages.ts`: MinerU paper-chat inputs
 
 ## Design Rules
 

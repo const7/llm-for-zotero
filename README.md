@@ -22,18 +22,23 @@ Core workflow kept:
 - ask questions in the reader side panel
 - stream answers
 - keep paper conversation history
-- use current-paper context, retrieval, screenshots, and file attachments
+- use current-paper context, reference picker, retrieval, prompt presets,
+  screenshots, and file attachments
 
-Still available but not treated as hot-path features:
+Provider paths kept:
 
+- API / Codex Auth / GitHub Copilot
 - webchat
+
+Paper parsing kept:
+
 - MinerU manual parsing / cache
-- note export
 
-Not a priority for this fork:
+Removed from this fork:
 
-- agent-centric workflows
-- standalone-first usage
+- agent workflows
+- standalone windows
+- note export / note editing workflows
 - template-style product surface inherited from upstream
 
 ## Installation
@@ -46,7 +51,7 @@ Not a priority for this fork:
 The addon identity in this fork is isolated from upstream:
 
 - addon name: `llm-for-zotero-lite`
-- addon id: `zotero-llm-lite@github.com.kun`
+- addon id: `zotero-llm-lite@github.com.const7`
 - prefs prefix: `extensions.zotero.llmforzoterolite`
 
 ## Configuration
@@ -115,6 +120,6 @@ update metadata and release links will also point to your fork.
 ## Notes For This Fork
 
 - README and docs are intentionally short and aligned to the lean profile.
-- If a feature exists in code but is not documented here, it should be treated
-  as secondary / cold-path behavior rather than the main product surface.
+- If a feature is not documented here, it should not be treated as part of the
+  product surface.
 - This fork is not trying to maintain upstream feature parity.

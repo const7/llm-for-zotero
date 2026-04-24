@@ -18,7 +18,6 @@ export type FluentMessageId =
   | 'llm-action-summarize'
   | 'llm-context-annotations'
   | 'llm-context-has-pdf'
-  | 'llm-context-notes'
   | 'llm-panel-context-label'
   | 'llm-panel-empty'
   | 'llm-panel-head'

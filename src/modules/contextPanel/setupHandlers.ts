@@ -28,7 +28,7 @@ import {
   ACTION_LAYOUT_DROPDOWN_ICON_WIDTH_PX,
   ACTION_LAYOUT_MODEL_WRAP_MIN_CHARS,
   ACTION_LAYOUT_MODEL_FULL_MAX_LINES,
-  GLOBAL_HISTORY_LIMIT,
+  PAPER_HISTORY_LIMIT,
   PREFERENCES_PANE_ID,
   MAX_UPLOAD_PDF_SIZE_BYTES,
 } from "./constants";
@@ -456,7 +456,6 @@ export function setupHandlers(
   panelRoot.tabIndex = 0;
   applyPanelFontScale(panelRoot);
 
-  const isNoteSession = () => false;
   const notifyConversationHistoryChanged = () => {
     try {
       hooks?.onConversationHistoryChanged?.();
@@ -702,7 +701,6 @@ export function setupHandlers(
     if (promptMenu) promptMenu.style.display = "none";
     setPromptMenuTarget(null);
   };
-  const closeExportMenu = () => {};
   let historyRowMenuTarget: {
     conversationKey: number;
   } | null = null;
@@ -721,7 +719,7 @@ export function setupHandlers(
     if (historyToggleBtn) {
       historyToggleBtn.setAttribute("aria-expanded", "false");
     }
-    globalHistoryLoadSeq += 1;
+    paperHistoryLoadSeq += 1;
     latestConversationHistory = [];
     historySearchLoadSeq += 1;
     historySearchQuery = "";
@@ -1063,10 +1061,8 @@ export function setupHandlers(
         const target = responseMenuTarget;
         closeResponseMenu();
         if (!target) return;
-        // Render through renderMarkdownForNote and copy both HTML
-        // (for rich-text paste into Zotero notes) and plain text
-        // (for plain-text editors).  Uses the selection if present,
-        // otherwise the full response.
+        // Copy both rendered HTML and plain markdown. Uses the selection if
+        // present, otherwise the full response.
         await copyRenderedMarkdownToClipboard(body, target.contentText);
         if (status) setStatus(status, t("Copied response"), "ready");
       });
@@ -1153,7 +1149,6 @@ export function setupHandlers(
         closePromptMenu();
         closeHistoryNewMenu();
         closeHistoryMenu();
-        closeExportMenu();
         const paneId =
           settingsBtn.dataset.preferencesPaneId || PREFERENCES_PANE_ID;
         Zotero.Utilities.Internal.openPreferences(paneId);
@@ -2524,7 +2519,7 @@ export function setupHandlers(
     number,
     Promise<HistorySearchDocument>
   >();
-  let globalHistoryLoadSeq = 0;
+  let paperHistoryLoadSeq = 0;
   let pendingHistoryDeletion: PendingHistoryDeletion | null = null;
   const pendingHistoryDeletionKeys = new Set<number>();
   const MESSAGE_TURN_UNDO_WINDOW_MS = 8000;
@@ -3296,7 +3291,7 @@ export function setupHandlers(
   };
 
   const invalidateLocalConversationHistory = () => {
-    globalHistoryLoadSeq += 1;
+    paperHistoryLoadSeq += 1;
     historySearchLoadSeq += 1;
     historySearchLoading = false;
     latestConversationHistory = [];
@@ -3314,30 +3309,6 @@ export function setupHandlers(
     if (!historyBar || !titleStatic || !item) {
       if (titleStatic) titleStatic.style.display = "";
       if (historyBar) historyBar.style.display = "none";
-      closeHistoryNewMenu();
-      closeHistoryMenu();
-      hideHistoryUndoToast();
-      invalidateLocalConversationHistory();
-      if (shouldNotifyHistoryConsumers) {
-        notifyConversationHistoryChanged();
-      }
-      return;
-    }
-    if (isNoteSession()) {
-      titleStatic.style.display = "none";
-      historyBar.style.display = "inline-flex";
-      if (historyNewBtn) {
-        historyNewBtn.style.display = "none";
-        historyNewBtn.setAttribute("aria-expanded", "false");
-      }
-      if (historyToggleBtn) {
-        historyToggleBtn.style.display = "none";
-        historyToggleBtn.setAttribute("aria-expanded", "false");
-      }
-      if (historyMenu) {
-        historyMenu.style.display = "none";
-        historyMenu.textContent = "";
-      }
       closeHistoryNewMenu();
       closeHistoryMenu();
       hideHistoryUndoToast();
@@ -3368,7 +3339,7 @@ export function setupHandlers(
     }
 
     const libraryID = getCurrentLibraryID();
-    const requestId = ++globalHistoryLoadSeq;
+    const requestId = ++paperHistoryLoadSeq;
     const paperEntries: ConversationHistoryEntry[] = [];
     const paperItem = resolveCurrentPaperBaseItem();
 
@@ -3382,12 +3353,12 @@ export function setupHandlers(
           summaries = await loadConversationHistoryScope({
             libraryID,
             paperItemID,
-            limit: GLOBAL_HISTORY_LIMIT,
+            limit: PAPER_HISTORY_LIMIT,
           });
         } catch (err) {
           ztoolkit.log("LLM: Failed to load paper history entries", err);
         }
-        if (requestId !== globalHistoryLoadSeq) return;
+        if (requestId !== paperHistoryLoadSeq) return;
         const seenPaperKeys = new Set<number>();
         for (const summary of summaries) {
           const conversationKey = Number(summary.conversationKey);
@@ -3453,7 +3424,7 @@ export function setupHandlers(
   };
 
   const switchPaperConversation = async (nextConversationKey?: number) => {
-    if (!item || isNoteSession()) return;
+    if (!item) return;
     persistDraftInputForCurrentConversation();
     const paperItem = resolveCurrentPaperBaseItem();
     if (!paperItem) return;
@@ -3517,7 +3488,6 @@ export function setupHandlers(
     closePromptMenu();
     closeResponseMenu();
     closeRetryModelMenu();
-    closeExportMenu();
     closeHistoryNewMenu();
     closeHistoryMenu();
     await ensureConversationLoaded(item);
@@ -3546,7 +3516,7 @@ export function setupHandlers(
       summaries = await listPaperConversations(
         libraryID,
         paperItemID,
-        GLOBAL_HISTORY_LIMIT,
+        PAPER_HISTORY_LIMIT,
         true,
       );
     } catch (err) {
@@ -3996,7 +3966,7 @@ export function setupHandlers(
   };
 
   const createAndSwitchPaperConversation = async () => {
-    if (!item || isNoteSession()) return;
+    if (!item) return;
     // Allow creating new paper conversations even if another is generating.
     closeHistoryNewMenu();
     const paperItem = resolveCurrentPaperBaseItem();
@@ -4118,7 +4088,7 @@ export function setupHandlers(
     historyNewBtn.addEventListener("click", (e: Event) => {
       e.preventDefault();
       e.stopPropagation();
-      if (!item || isNoteSession()) return;
+      if (!item) return;
       // Allow creating new conversations even if another is generating.
       closeModelMenu();
       closeReasoningMenu();
@@ -4126,7 +4096,6 @@ export function setupHandlers(
       closeSlashMenu();
       closeResponseMenu();
       closePromptMenu();
-      closeExportMenu();
       closeHistoryMenu();
 
       // [webchat] In webchat mode, "+" creates a new ChatGPT conversation
@@ -4184,7 +4153,7 @@ export function setupHandlers(
     historyToggleBtn.addEventListener("click", (e: Event) => {
       e.preventDefault();
       e.stopPropagation();
-      if (!item || isNoteSession()) return;
+      if (!item) return;
       // Allow history navigation even during generation.
       void (async () => {
         closeModelMenu();
@@ -4193,7 +4162,6 @@ export function setupHandlers(
         closeSlashMenu();
         closeResponseMenu();
         closePromptMenu();
-        closeExportMenu();
         closeHistoryNewMenu();
 
         // [webchat] Show ChatGPT conversation history
@@ -4355,7 +4323,6 @@ export function setupHandlers(
       closeSlashMenu();
       closeResponseMenu();
       closePromptMenu();
-      closeExportMenu();
       const mouse = e as MouseEvent;
       let { clientX, clientY } = mouse;
       if (
@@ -8436,7 +8403,6 @@ export function setupHandlers(
       closeHistoryMenu();
       closeResponseMenu();
       closePromptMenu();
-      closeExportMenu();
       openSlashMenuWithSelection();
       uploadBtn.setAttribute("aria-expanded", "true");
     });
@@ -8729,7 +8695,6 @@ export function setupHandlers(
     if (!item || !retryModelMenu) return;
     closeSlashMenu();
     closeResponseMenu();
-    closeExportMenu();
     closePromptMenu();
     closeHistoryNewMenu();
     closeHistoryMenu();
@@ -10057,7 +10022,6 @@ export function setupHandlers(
       e.preventDefault();
       e.stopPropagation();
       closePaperPicker();
-      closeExportMenu();
       closePromptMenu();
       closeHistoryNewMenu();
       closeHistoryMenu();

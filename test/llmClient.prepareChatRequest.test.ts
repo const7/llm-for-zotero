@@ -110,7 +110,7 @@ describe("llmClient prepareChatRequest", function () {
     assert.equal(input[input.length - 1]?.role, "user");
   });
 
-  it("merges non-agent chat system messages into a single leading system entry", async function () {
+  it("merges paper chat system messages into a single leading system entry", async function () {
     let capturedBody: Record<string, unknown> | null = null;
     (
       globalThis.Zotero.Prefs as { set: (key: string, value: unknown) => void }

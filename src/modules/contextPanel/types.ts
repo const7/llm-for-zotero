@@ -145,24 +145,11 @@ export type PdfChunkMeta = {
   leadingNoiseRemoved?: boolean;
 };
 
-export type ContextAssemblyMode = "full" | "retrieval";
 export type ContextAssemblyStrategy =
   | "paper-first-full"
   | "paper-manual-full"
   | "paper-explicit-retrieval"
-  | "paper-followup-retrieval"
-  | "general-full"
-  | "general-retrieval";
-
-export type ContextBudgetPlan = {
-  modelLimitTokens: number;
-  limitTokens: number;
-  softLimitTokens: number;
-  baseInputTokens: number;
-  outputReserveTokens: number;
-  reasoningReserveTokens: number;
-  contextBudgetTokens: number;
-};
+  | "paper-followup-retrieval";
 
 export type PaperContextCandidate = {
   paperKey: string;
@@ -183,17 +170,6 @@ export type PaperContextCandidate = {
   embeddingScore: number;
   hybridScore: number;
   evidenceScore: number;
-};
-
-export type MultiContextPlan = {
-  mode: ContextAssemblyMode;
-  strategy: ContextAssemblyStrategy;
-  contextText: string;
-  contextBudget: ContextBudgetPlan;
-  usedContextTokens: number;
-  selectedPaperCount: number;
-  selectedChunkCount: number;
-  assistantInstruction?: string;
 };
 
 export type PaperPortalItem = {
