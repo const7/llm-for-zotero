@@ -32,7 +32,7 @@ Provider paths kept:
 
 Paper parsing kept:
 
-- MinerU manual parsing / cache
+- MinerU cache as a paper-chat text source
 
 Anything outside this scope is intentionally not part of the product surface.
 
@@ -114,7 +114,7 @@ update metadata and release links will also point to your fork.
 
 ## Fork Policy
 
-- README and docs are intentionally short and aligned to the lean profile.
+- README and docs are intentionally short and aligned to the lite scope.
 - If a feature is not documented here, it should not be treated as part of the
   product surface.
 - This fork is not trying to maintain upstream feature parity.

@@ -31,27 +31,6 @@
     var(--stroke-secondary)
   );
   --llm-pdf-bg: color-mix(in srgb, #8b5cf6 10%, transparent);
-  /* Shared design tokens for interactive "user-action required" surfaces
-     (HITL review cards, progress cards, assignment rows, diff previews,
-     launch forms). Using tokens here keeps the aesthetic consistent across
-     every card that asks the user to do something. */
-  --llm-action-surface-bg: color-mix(
-    in srgb,
-    var(--fill-quinary, var(--fill-quaternary)) 88%,
-    transparent
-  );
-  --llm-action-surface-bg-strong: var(
-    --material-sidepane,
-    var(--material-background, rgba(120, 120, 120, 0.04))
-  );
-  --llm-action-surface-border: 1px solid
-    var(--stroke-secondary, rgba(120, 120, 120, 0.22));
-  --llm-action-surface-radius: 10px;
-  --llm-action-surface-padding: 12px 14px;
-  --llm-action-title-size: var(--llm-fs-13);
-  --llm-action-title-weight: 600;
-  --llm-action-label-size: var(--llm-fs-10);
-  --llm-action-label-letter-spacing: 0.04em;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -207,20 +186,6 @@
   pointer-events: none;
 }
 
-.llm-history-new-menu {
-  position: absolute;
-  z-index: 14;
-  display: none;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 148px;
-  background: color-mix(in srgb, var(--material-background) 94%, black 6%);
-  border: 1px solid var(--stroke-secondary);
-  border-radius: calc(8px * var(--llm-font-scale, 1));
-  padding: calc(4px * var(--llm-font-scale, 1));
-  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.24);
-}
-
 .llm-history-row-menu {
   position: absolute;
   z-index: 14;
@@ -235,7 +200,6 @@
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.24);
 }
 
-.llm-history-new-menu-item,
 .llm-history-row-menu-item {
   appearance: none;
   -moz-appearance: none;
@@ -255,14 +219,11 @@
   cursor: pointer;
 }
 
-.llm-history-new-menu-item:hover,
-.llm-history-new-menu-item:focus-visible,
 .llm-history-row-menu-item:hover,
 .llm-history-row-menu-item:focus-visible {
   background: var(--fill-quinary);
 }
 
-.llm-history-new-menu-item:disabled,
 .llm-history-row-menu-item:disabled {
   opacity: 0.5;
   cursor: not-allowed;
@@ -459,12 +420,6 @@
   cursor: default;
 }
 
-.llm-subtitle {
-  font-size: var(--llm-fs-11);
-  color: var(--fill-secondary);
-  margin-top: 2px;
-}
-
 .llm-btn-icon {
   display: inline-flex;
   align-items: center;
@@ -527,28 +482,6 @@
   overflow: visible;
 }
 
-/* When an action review card is present (user triggered /something from the
-   start page, so we haven't left start-page mode yet), restore chat-mode
-   sizing on the shell so the card's max-height: 100% has a real parent
-   height to bind to and its internal overflow can actually scroll. This
-   attribute is toggled by setupHandlers when a card is shown/removed —
-   JS-based rather than :has() to stay compatible across Gecko versions. */
-[data-has-action-card="true"][data-start-page-active="true"] .llm-chat-shell {
-  flex: 1 1 0;
-  height: auto;
-  min-height: 200px;
-  margin-top: 0;
-  overflow: hidden;
-}
-
-/* Hide the welcome HTML while a card is present — otherwise it shares the
-   messages flex-column with the card and the card shrinks to whatever
-   space is left. The welcome naturally comes back when the card closes
-   (attr cleared → this rule no longer matches). */
-[data-has-action-card="true"][data-start-page-active="true"] .llm-start-page {
-  display: none;
-}
-
 [data-start-page-active="true"] .llm-status-bar {
   display: none;
 }
@@ -574,42 +507,6 @@
   color: var(--fill-tertiary);
   margin-bottom: 32px;
   font-style: italic;
-}
-
-.llm-start-page-recommendations {
-  text-align: left;
-  max-width: 500px;
-  width: 100%;
-}
-
-.llm-start-page-rec-title {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--fill-secondary);
-  margin-bottom: 8px;
-  text-transform: uppercase;
-  letter-spacing: 0.3px;
-}
-
-.llm-start-page-rec-list {
-  margin: 0;
-  padding-left: 20px;
-  font-size: 12px;
-  color: var(--fill-tertiary);
-  line-height: 1.8;
-}
-
-.llm-start-page-rec-list li {
-  margin-bottom: 4px;
-}
-
-.llm-start-page-rec-list li strong {
-  color: var(--fill-secondary);
-}
-
-.llm-rec-reason {
-  opacity: 0.7;
-  font-size: 11px;
 }
 
 .llm-start-page-desc {
@@ -644,32 +541,6 @@
 
 .llm-start-page-transitioning .llm-status-bar {
   transition: opacity 0.3s ease;
-}
-
-/* Context Section */
-.llm-context-section {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.llm-context-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.llm-context-label {
-  font-size: var(--llm-fs-11);
-  font-weight: 500;
-  color: var(--fill-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-
-.llm-context-status {
-  font-size: var(--llm-fs-10);
-  color: var(--fill-tertiary);
 }
 
 .llm-context {
@@ -1154,7 +1025,7 @@
   color: #e74c3c;
 }
 
-/* --- Legacy section/card styles — retained for webchat history menu --- */
+/* --- WebChat history menu --- */
 
 .llm-history-menu-section-block {
   display: flex;
@@ -1246,29 +1117,10 @@
   padding: 1px 2px 2px;
 }
 
-.llm-history-menu-section-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 10px;
-  color: var(--fill-secondary);
-  font-size: 13px;
-  font-weight: 700;
-  line-height: 1;
-}
-
 .llm-history-menu-section:focus-visible {
   outline: 1px solid var(--color-accent);
   outline-offset: 1px;
   border-radius: 6px;
-}
-
-.llm-history-menu-section-label {
-  color: var(--fill-secondary);
-  font-size: var(--llm-fs-10);
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
 }
 
 .llm-history-menu-section-viewport {
@@ -1386,125 +1238,11 @@
   opacity: 0.5;
 }
 
-.llm-history-row-title-line {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-
-.llm-history-row-delete {
-  appearance: none;
-  -moz-appearance: none;
-  flex: 0 0 auto;
-  align-self: center;
-  border: 1px solid transparent;
-  background: transparent;
-  color: #ef4444;
-  font-size: 12px;
-  line-height: 1;
-  width: 26px;
-  height: 26px;
-  border-radius: 6px;
-  cursor: pointer;
-  margin-right: 6px;
-  display: grid;
-  place-items: center;
-  padding: 0;
-  box-shadow: none;
-  opacity: 0;
-  pointer-events: none;
-  transition:
-    opacity 120ms ease,
-    color 120ms ease,
-    border-color 120ms ease,
-    background 120ms ease,
-    transform 120ms ease;
-}
-
-.llm-history-row-delete::before {
-  content: "";
-  width: 18px;
-  height: 18px;
-  display: block;
-  background-color: currentColor;
-  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 6h18'/%3E%3Cpath d='M8 6V4h8v2'/%3E%3Cpath d='M19 6l-1 14H6L5 6'/%3E%3Cpath d='M10 11v6'/%3E%3Cpath d='M14 11v6'/%3E%3C/svg%3E");
-  -webkit-mask-repeat: no-repeat;
-  -webkit-mask-size: contain;
-  -webkit-mask-position: center;
-  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 6h18'/%3E%3Cpath d='M8 6V4h8v2'/%3E%3Cpath d='M19 6l-1 14H6L5 6'/%3E%3Cpath d='M10 11v6'/%3E%3Cpath d='M14 11v6'/%3E%3C/svg%3E");
-  mask-repeat: no-repeat;
-  mask-size: contain;
-  mask-position: center;
-}
-
-.llm-history-menu-row:hover .llm-history-row-delete,
-.llm-history-menu-row:focus-within .llm-history-row-delete,
-.llm-history-row-delete:focus-visible {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-.llm-history-row-delete:hover,
-.llm-history-row-delete:focus-visible {
-  color: #f87171;
-  background: rgba(239, 68, 68, 0.12);
-  border-color: rgba(239, 68, 68, 0.35);
-}
-
-.llm-history-row-delete:active {
-  transform: translateY(0.5px);
-}
-
-.llm-history-row-title {
-  display: block;
-  min-width: 0;
-  flex: 0 0 auto;
-  width: 100%;
-  color: var(--fill-primary);
-  font-size: var(--llm-fs-11);
-  font-weight: 600;
-  line-height: 1.28;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.llm-history-row-title-line .llm-history-row-title {
-  flex: 1 1 auto;
-  width: auto;
-}
-
-.llm-history-row-preview {
-  display: block;
-  min-width: 0;
-  color: var(--fill-secondary);
-  font-size: var(--llm-fs-10);
-  line-height: 1.28;
-  white-space: normal;
-  word-break: break-word;
-  overflow: hidden;
-  max-height: calc(1.28em * 2);
-}
-
 .llm-history-search-highlight {
   background: rgba(250, 204, 21, 0.72);
   color: inherit;
   border-radius: 3px;
   padding: 0 1px;
-}
-
-.llm-history-row-meta {
-  display: block;
-  min-width: 0;
-  flex: 0 0 auto;
-  width: 100%;
-  color: var(--fill-secondary);
-  font-size: var(--llm-fs-10);
-  line-height: 1.22;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .llm-history-menu-empty {
@@ -1707,10 +1445,6 @@
   line-height: 1.5;
   font-size: var(--llm-fs-12);
   user-select: text;
-}
-
-.llm-bubble.streaming {
-  white-space: pre-wrap;
 }
 
 .llm-bubble.user {
@@ -2165,33 +1899,6 @@
   color: var(--color-accent, #3584e4);
 }
 
-.llm-user-papers-item-badge-md {
-  background: color-mix(in srgb, #10b981 18%, transparent);
-  color: #10b981;
-}
-
-.llm-user-papers-item-key {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: fit-content;
-  max-width: 100%;
-  border-radius: 6px;
-  background: color-mix(
-    in srgb,
-    var(--color-accent) 10%,
-    var(--material-background)
-  );
-  color: var(--fill-primary);
-  font-size: var(--llm-fs-10);
-  font-weight: 600;
-  line-height: 1.2;
-  padding: 2px 6px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
 .llm-user-screenshots-bar:hover {
   color: var(--fill-primary);
 }
@@ -2349,7 +2056,6 @@
   color: var(--fill-tertiary);
 }
 
-.llm-edit-latest,
 .llm-retry-latest {
   appearance: none;
   -moz-appearance: none;
@@ -2376,8 +2082,6 @@
     opacity 120ms ease;
 }
 
-.llm-edit-latest:hover:not(:disabled),
-.llm-edit-latest:focus-visible,
 .llm-retry-latest:hover:not(:disabled),
 .llm-retry-latest:focus-visible {
   color: var(--fill-primary);
@@ -2385,24 +2089,9 @@
   opacity: 1;
 }
 
-.llm-edit-latest:disabled,
 .llm-retry-latest:disabled {
   opacity: 0.35;
   cursor: not-allowed;
-}
-
-.llm-copy-btn {
-  background: none;
-  border: none;
-  cursor: pointer;
-  padding: 2px 4px;
-  font-size: var(--llm-fs-11);
-  opacity: 0.6;
-  transition: opacity 0.15s;
-}
-
-.llm-copy-btn:hover {
-  opacity: 1;
 }
 
 .llm-reasoning {
@@ -3081,11 +2770,6 @@
   transform: translateY(-1px);
 }
 
-.llm-paper-chip-menu {
-  min-width: min(240px, calc(100vw - 24px));
-  max-width: min(360px, calc(100vw - 24px));
-}
-
 .llm-paper-chip-menu-row .llm-paper-picker-title,
 .llm-paper-chip-menu-row .llm-paper-picker-meta {
   white-space: normal;
@@ -3217,13 +2901,6 @@
   gap: 6px;
 }
 
-.llm-paper-picker-group-meta {
-  flex: 0 0 auto;
-  color: var(--fill-tertiary);
-  font-size: var(--llm-fs-10);
-  line-height: 1.2;
-}
-
 .llm-paper-picker-badge {
   flex: 0 0 auto;
   display: inline-flex;
@@ -3250,30 +2927,6 @@
 .llm-paper-context-chip-text .llm-paper-picker-badge {
   background: color-mix(in srgb, var(--color-accent, #3584e4) 14%, transparent);
   color: var(--color-accent, #3584e4);
-}
-
-.llm-paper-picker-group-chevron {
-  flex: 0 0 auto;
-  display: inline-block;
-  width: 12px;
-  height: 12px;
-  background-color: var(--fill-tertiary);
-  mask-repeat: no-repeat;
-  mask-position: center;
-  mask-size: contain;
-  -webkit-mask-repeat: no-repeat;
-  -webkit-mask-position: center;
-  -webkit-mask-size: contain;
-}
-
-.llm-paper-picker-group-chevron.llm-folder-closed {
-  mask-image: url("icons/folder-closed.svg");
-  -webkit-mask-image: url("icons/folder-closed.svg");
-}
-
-.llm-paper-picker-group-chevron.llm-folder-open {
-  mask-image: url("icons/folder-open.svg");
-  -webkit-mask-image: url("icons/folder-open.svg");
 }
 
 .llm-paper-picker-attachment-row {
@@ -3411,174 +3064,6 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-.llm-action-picker-description {
-  font-size: var(--llm-fs-11);
-  font-weight: 400;
-  color: var(--fill-secondary, #888);
-  line-height: 1.3;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  margin-left: 6px;
-  flex: 1;
-  min-width: 0;
-}
-
-.llm-action-picker-badge {
-  font-size: calc(10px * var(--llm-font-scale, 1));
-  font-weight: 500;
-  color: var(--fill-tertiary, #aaa);
-  white-space: nowrap;
-  margin-left: auto;
-  padding-left: 8px;
-  flex-shrink: 0;
-}
-
-.llm-action-picker-empty {
-  display: block;
-  color: var(--fill-tertiary);
-  font-size: var(--llm-fs-11);
-  line-height: 1.35;
-  padding: 8px;
-}
-
-/* ── Action HITL panel (legacy hidden container, kept for DOM compat) ──── */
-
-.llm-action-hitl-panel {
-  display: none;
-}
-
-/* ── Action inline card (rendered inside chatBox) ───────────────────────── */
-
-.llm-action-inline-card {
-  margin: 8px 0 4px;
-  padding: var(--llm-action-surface-padding);
-  border-radius: var(--llm-action-surface-radius);
-  border: var(--llm-action-surface-border);
-  background: var(--llm-action-surface-bg-strong);
-  /* IMPORTANT: no max-height, min-height, or overflow here.
-     `.llm-messages` is a flex column with overflow-y:auto — it handles all
-     scrolling natively. Every time I've tried to constrain the card itself
-     (max-height: 70vh, max-height: 100%, min-height: 0), I've broken a
-     different layout (card blows out of window; card barely visible; card
-     squeezed by sibling flex pressure). Leave it at natural size and let
-     the messages container scroll. */
-  flex: 0 0 auto;
-}
-
-/* ── Action progress indicator (in-thread "working" card) ─────────────── */
-
-.llm-action-progress-card {
-  margin: 8px 0;
-  padding: var(--llm-action-surface-padding);
-  border-radius: var(--llm-action-surface-radius);
-  border: var(--llm-action-surface-border);
-  background: var(--llm-action-surface-bg-strong);
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.llm-action-progress-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.llm-action-progress-title {
-  font-size: var(--llm-action-title-size);
-  font-weight: var(--llm-action-title-weight);
-  color: var(--fill-primary);
-  line-height: 1.3;
-}
-
-.llm-action-progress-typing {
-  padding: 0;
-}
-
-.llm-action-progress-step {
-  font-size: var(--llm-fs-11);
-  color: var(--fill-secondary);
-}
-
-.llm-action-progress-summary {
-  font-size: var(--llm-fs-10);
-  color: var(--fill-tertiary);
-  min-height: 0;
-}
-
-.llm-action-progress-summary:empty {
-  display: none;
-}
-
-/* ── Action launch form ─────────────────────────────────────────────────── */
-
-.llm-action-launch-form {
-  display: grid;
-  gap: 10px;
-  padding: var(--llm-action-surface-padding);
-}
-
-.llm-action-launch-form-header {
-  font-size: var(--llm-action-title-size);
-  font-weight: var(--llm-action-title-weight);
-  color: var(--fill-primary);
-  line-height: 1.3;
-}
-
-.llm-action-launch-form-label {
-  font-size: var(--llm-action-label-size);
-  letter-spacing: var(--llm-action-label-letter-spacing);
-  text-transform: uppercase;
-  font-weight: 700;
-  color: var(--fill-tertiary);
-  line-height: 1.3;
-}
-
-.llm-action-launch-form-input {
-  resize: vertical;
-  min-height: 52px;
-}
-
-.llm-action-launch-form-btns {
-  display: flex;
-  gap: 6px;
-  justify-content: flex-end;
-}
-
-.llm-action-launch-form-run-btn {
-  all: unset;
-  box-sizing: border-box;
-  cursor: pointer;
-  padding: 5px 14px;
-  border-radius: 8px;
-  font-size: var(--llm-fs-12);
-  font-weight: 500;
-  background: var(--color-accent, #3584e4);
-  color: #fff;
-}
-
-.llm-action-launch-form-run-btn:hover {
-  opacity: 0.88;
-}
-
-.llm-action-launch-form-cancel-btn {
-  all: unset;
-  box-sizing: border-box;
-  cursor: pointer;
-  padding: 5px 14px;
-  border-radius: 8px;
-  font-size: var(--llm-fs-12);
-  font-weight: 500;
-  color: var(--fill-secondary);
-  border: 1px solid var(--stroke-secondary, rgba(120, 120, 120, 0.35));
-}
-
-.llm-action-launch-form-cancel-btn:hover {
-  background: color-mix(in srgb, var(--material-background) 80%, var(--fill-quinary));
 }
 
 .llm-selected-context {
@@ -3840,11 +3325,6 @@
   border-color: #b91c1c;
 }
 
-.llm-action-btn-active {
-  border-color: var(--color-accent);
-  background: var(--color-accent10);
-}
-
 .llm-upload-file-btn,
 .llm-upload-file-btn.llm-action-icon-only {
   display: inline-flex;
@@ -3918,24 +3398,6 @@
   min-width: unset;
 }
 
-.llm-slash-menu-separator {
-  height: 1px;
-  background: var(--stroke-secondary, rgba(120, 120, 120, 0.25));
-  margin: 4px 6px;
-}
-
-.llm-slash-menu-section {
-  display: flex;
-  align-items: center;
-  min-height: calc(20px * var(--llm-font-scale, 1));
-  padding: calc(3px * var(--llm-font-scale, 1)) calc(8px * var(--llm-font-scale, 1));
-  font-size: var(--llm-fs-10);
-  line-height: 1.2;
-  font-weight: 600;
-  color: var(--fill-tertiary);
-  user-select: none;
-}
-
 .llm-upload-file-btn:hover:not(:disabled),
 .llm-model-btn:hover:not(:disabled),
 .llm-reasoning-btn:hover:not(:disabled),
@@ -3976,49 +3438,7 @@
   font-size: var(--llm-action-font-size);
 }
 
-.llm-send-icon {
-  font-size: var(--llm-fs-11);
-}
-
 /* Status */
-/* ---- Command row above textarea (active skill/action badge) ---- */
-.llm-command-row {
-  display: none;
-}
-
-.llm-command-row[data-active] {
-  display: flex;
-  /* Align chip text with textarea cursor: textarea padding-left (14px)
-     minus chip border (1px) and chip label padding-left (8px) = 5px. */
-  padding-left: 5px;
-}
-
-.llm-command-row .llm-paper-context-chip-header {
-  border: 1px solid color-mix(in srgb, #f59e0b 30%, var(--stroke-secondary));
-  border-radius: 8px;
-  background: color-mix(in srgb, #f59e0b 14%, var(--material-background));
-}
-
-.llm-command-row--skill .llm-paper-context-chip-header {
-  border-color: color-mix(in srgb, #8b5cf6 30%, var(--stroke-secondary));
-  background: color-mix(in srgb, #8b5cf6 14%, var(--material-background));
-}
-
-/* ---- Command badge in user chat bubble ---- */
-.llm-command-badge {
-  display: inline-block;
-  padding: 1px 6px;
-  border-radius: 4px;
-  background: color-mix(in srgb, var(--fill-secondary) 12%, transparent);
-  color: var(--fill-secondary);
-  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-  font-size: 0.92em;
-  font-weight: 500;
-  line-height: 1.4;
-  white-space: nowrap;
-  vertical-align: baseline;
-}
-
 .llm-status-bar {
   display: flex;
   align-items: baseline;
@@ -4279,8 +3699,7 @@
   opacity: 1;
 }
 
-.llm-model-menu-hint,
-.llm-reasoning-menu-hint {
+.llm-model-menu-hint {
   position: sticky;
   top: 0;
   z-index: 1;
@@ -4315,12 +3734,6 @@
   text-overflow: ellipsis;
 }
 
-.llm-model-menu-divider {
-  height: 1px;
-  margin: 4px 0;
-  background: var(--stroke-secondary);
-}
-
 .llm-model-menu-section,
 .llm-reasoning-menu-section {
   display: flex;
@@ -4335,8 +3748,7 @@
   user-select: none;
 }
 
-.llm-model-menu-empty,
-.llm-reasoning-menu-empty {
+.llm-model-menu-empty {
   padding: calc(4px * var(--llm-font-scale, 1))
     calc(8px * var(--llm-font-scale, 1));
   font-size: var(--llm-fs-11);
@@ -4425,10 +3837,6 @@
   content: "📄";
 }
 
-.llm-paper-context-meta::before {
-  content: "📚";
-}
-
 .llm-image-preview-meta:hover {
   color: var(--fill-primary);
 }
@@ -4480,27 +3888,14 @@
   gap: 6px;
 }
 
-.llm-paper-context-expanded {
-  display: grid;
-  grid-template-rows: auto;
-}
-
-.llm-paper-context-list {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 6px;
-}
-
 #llm-main[data-llm-action-layout-mode="half"] .llm-user-files-list,
 #llm-main[data-llm-action-layout-mode="half"] .llm-file-context-list,
-#llm-main[data-llm-action-layout-mode="half"] .llm-paper-context-list,
 #llm-main[data-llm-action-layout-mode="half"] .llm-user-papers-list {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 #llm-main[data-llm-action-layout-mode="full"] .llm-user-files-list,
 #llm-main[data-llm-action-layout-mode="full"] .llm-file-context-list,
-#llm-main[data-llm-action-layout-mode="full"] .llm-paper-context-list,
 #llm-main[data-llm-action-layout-mode="full"] .llm-user-papers-list {
   grid-template-columns: repeat(
     auto-fit,
@@ -4610,92 +4005,6 @@
 }
 
 .llm-file-context-remove:hover {
-  background: var(--fill-quaternary);
-  color: var(--fill-primary);
-}
-
-.llm-paper-context-item {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 2px 10px;
-  align-items: start;
-  min-height: 50px;
-  padding: 7px 9px;
-  border: 1px solid var(--stroke-secondary);
-  border-radius: 10px;
-  background: color-mix(
-    in srgb,
-    var(--material-background) 84%,
-    var(--fill-quinary)
-  );
-}
-
-.llm-paper-context-text {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-}
-
-.llm-paper-context-title {
-  display: block;
-  color: var(--fill-primary);
-  font-size: var(--llm-fs-11);
-  font-weight: 600;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.llm-paper-context-meta-info {
-  display: block;
-  color: var(--fill-tertiary);
-  font-size: var(--llm-fs-10);
-  line-height: 1.25;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.llm-paper-context-key {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: fit-content;
-  max-width: 100%;
-  border-radius: 6px;
-  background: color-mix(
-    in srgb,
-    var(--color-accent) 10%,
-    var(--material-background)
-  );
-  color: var(--fill-primary);
-  font-size: var(--llm-fs-10);
-  font-weight: 600;
-  line-height: 1.2;
-  padding: 2px 6px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.llm-paper-context-remove {
-  grid-column: 2;
-  appearance: none;
-  -moz-appearance: none;
-  width: 20px;
-  height: 20px;
-  border-radius: 999px;
-  border: none;
-  background: transparent;
-  color: var(--fill-tertiary);
-  font-size: var(--llm-fs-15);
-  line-height: 1;
-  cursor: pointer;
-  justify-self: end;
-  align-self: start;
-}
-
-.llm-paper-context-remove:hover {
   background: var(--fill-quaternary);
   color: var(--fill-primary);
 }

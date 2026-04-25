@@ -8,9 +8,6 @@
   xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
   xmlns:html="http://www.w3.org/1999/xhtml"
 >
-  <linkset>
-    <html:link rel="localization" href="__addonRef__-preferences.ftl" />
-  </linkset>
   <groupbox>
     <html:div style="display: flex; flex-direction: column; padding: 10px">
       <html:div
@@ -223,7 +220,7 @@
               MinerU PDF Parsing
             </html:span>
             <html:span style="font-size: 11.5px; color: var(--fill-secondary, #888); line-height: 1.5;">
-              Use MinerU as the paper-chat text source when you want higher quality structured PDF extraction.
+              Use existing MinerU cache as a structured paper-chat text source when available.
             </html:span>
           </html:div>
 
@@ -241,64 +238,8 @@
               id="__addonRef__-mineru-enabled"
               type="checkbox"
             ></html:input>
-            Enable MinerU PDF Parsing
+            Prefer MinerU cache when available
           </html:label>
-
-          <html:div
-            id="__addonRef__-mineru-sub-settings"
-            style="display: none; flex-direction: column; gap: 10px;"
-          >
-            <html:div style="display: flex; flex-direction: column; gap: 4px">
-              <html:label
-                for="__addonRef__-mineru-api-key"
-                style="display: block; font-weight: 600; font-size: 12px; color: var(--fill-primary, inherit); margin-bottom: 2px;"
-              >
-                API Key (Optional)
-              </html:label>
-              <html:input
-                id="__addonRef__-mineru-api-key"
-                type="password"
-                placeholder="Leave empty to use community quota (5/day)"
-                style="
-                  width: 100%;
-                  padding: 6px 10px;
-                  font-size: 13px;
-                  border: 1px solid var(--stroke-secondary, #c8c8c8);
-                  border-radius: 6px;
-                  box-sizing: border-box;
-                  background: Field;
-                  color: FieldText;
-                "
-              ></html:input>
-              <html:span style="font-size: 10.5px; color: var(--fill-secondary, #888); margin-top: 1px;">
-                Add your own MinerU key if you want direct parsing without relying on shared quota.
-              </html:span>
-            </html:div>
-
-            <html:div style="display: flex; align-items: center; gap: 8px;">
-              <html:button
-                id="__addonRef__-mineru-test"
-                type="button"
-                style="
-                  padding: 4px 10px;
-                  font-size: 12px;
-                  font-weight: 500;
-                  white-space: nowrap;
-                  background: transparent;
-                  color: var(--color-accent, #2563eb);
-                  border: 1px solid var(--color-accent, #2563eb);
-                  border-radius: 5px;
-                  cursor: pointer;
-                "
-              >
-                Test Connection
-              </html:button>
-              <html:span
-                id="__addonRef__-mineru-test-status"
-                style="font-size: 11.5px; display: none;"
-              ></html:span>
-            </html:div>
-          </html:div>
         </html:div>
       </html:div>
     </html:div>
