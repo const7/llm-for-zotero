@@ -1,12 +1,9 @@
 import type { ReasoningLevel as LLMReasoningLevel } from "../../utils/llmClient";
 import type {
   SelectedTextSource,
-  ChatAttachmentCategory,
   ChatAttachment,
   AdvancedModelParams,
   PaperContextRef,
-  OtherContextRef,
-  PaperConversationSummary,
 } from "../../shared/types";
 
 export type {
@@ -32,7 +29,6 @@ export interface Message {
   role: "user" | "assistant";
   text: string;
   timestamp: number;
-  selectedText?: string;
   selectedTextExpanded?: boolean;
   selectedTexts?: string[];
   selectedTextSources?: SelectedTextSource[];
@@ -99,7 +95,6 @@ export type CustomShortcut = {
 };
 export type ResolvedContextSource = {
   contextItem: Zotero.Item | null;
-  statusText: string;
 };
 
 export type PdfContext = {
@@ -225,24 +220,4 @@ export type SendQuestionOptions = {
   webchatSendPdf?: boolean;
   /** [webchat] When true, send the prompt into a fresh ChatGPT conversation. */
   webchatForceNewChat?: boolean;
-};
-
-export type EditRetryOptions = {
-  body: Element;
-  item: Zotero.Item;
-  displayQuestion: string;
-  selectedTexts?: string[];
-  selectedTextSources?: SelectedTextSource[];
-  selectedTextPaperContexts?: (PaperContextRef | undefined)[];
-  screenshotImages?: string[];
-  paperContexts?: PaperContextRef[];
-  fullTextPaperContexts?: PaperContextRef[];
-  attachments?: ChatAttachment[];
-  pdfUploadSystemMessages?: string[];
-  expected?: { conversationKey: number; userTimestamp: number; assistantTimestamp: number };
-  model?: string;
-  apiBase?: string;
-  apiKey?: string;
-  reasoning?: LLMReasoningConfig;
-  advanced?: AdvancedModelParams;
 };

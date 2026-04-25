@@ -6,7 +6,6 @@ import {
   getModelEntryById,
 } from "../../utils/modelProviders";
 import {
-  config,
   AUTO_SCROLL_BOTTOM_THRESHOLD,
   MAX_SELECTED_IMAGES,
   MAX_SELECTED_PAPER_CONTEXTS,
@@ -56,11 +55,9 @@ import {
   setPromptMenuTarget,
   chatHistory,
   loadedConversationKeys,
-  currentRequestId,
   activePaperConversationByPaper,
   draftInputCache,
   activeContextPanels,
-  activeContextPanelRawItems,
   activeContextPanelStateSync,
   inlineEditTarget,
   setInlineEditTarget,
@@ -79,19 +76,14 @@ import {
   resolvePromptText,
   getSelectedTextWithinBubble,
   getAttachmentTypeLabel,
-  normalizeSelectedTextSource,
 } from "./textUtils";
-import {
-  normalizeAttachmentContentHash,
-  normalizeSelectedTextPaperContexts,
-} from "./normalizers";
+import { normalizeAttachmentContentHash } from "./normalizers";
 import {
   positionMenuBelowButton,
   positionMenuAtPointer,
 } from "./menuPositioning";
 import {
   getAvailableModelEntries,
-  getStringPref,
   getSelectedModelEntryForItem,
   applyPanelFontScale,
   getAdvancedModelParamsForEntry,
@@ -119,10 +111,8 @@ import {
   getReasoningOptions,
   getSelectedReasoningForItem,
   retryLatestAssistantResponse,
-  editLatestUserMessageAndRetry,
   editUserTurnAndRetry,
   findLatestRetryPair,
-  type EditLatestTurnMarker,
 } from "./chat";
 import { shouldBackfillOlderChatMessages } from "./chatRenderWindow";
 import {
@@ -138,11 +128,9 @@ import {
   setSelectedTextContextEntries,
   setSelectedTextExpandedIndex,
 } from "./contextResolution";
-import { buildUI } from "./buildUI";
 import { renderShortcuts } from "./shortcuts";
 import {
   flashPageInLivePdfReader,
-  resolveCurrentSelectionPageLocationFromReader,
   scrollToExactQuoteInReader,
 } from "./livePdfSelectionLocator";
 import {
@@ -175,7 +163,7 @@ import {
   retainPinnedTextState as retainPinnedTextState_,
 } from "./contexts/textContextState";
 import { optimizeImageDataUrl } from "./imageOptimize";
-import { captureCurrentPdfPage, renderAllPdfPages } from "./pdfPageCapture";
+import { renderAllPdfPages } from "./pdfPageCapture";
 import {
   persistAttachmentBlob,
   readAttachmentBytes,
@@ -184,7 +172,6 @@ import {
   removeAttachmentFile,
   removeConversationAttachmentFiles,
 } from "./attachmentStorage";
-import { clearConversationSummary as clearConversationSummaryFromCache } from "./conversationSummaryCache";
 import {
   clearConversation as clearStoredConversation,
   clearConversationTitle,
@@ -200,15 +187,16 @@ import {
 } from "../../utils/chatStore";
 import {
   ATTACHMENT_GC_MIN_AGE_MS,
-  clearOwnerAttachmentRefs,
+  clearConversationAttachmentRefs,
   collectAndDeleteUnreferencedBlobs,
-  replaceOwnerAttachmentRefs,
+  replaceConversationAttachmentRefs,
 } from "../../utils/attachmentRefStore";
 import type {
   Message,
   ReasoningLevelSelection,
   ReasoningOption,
   AdvancedModelParams,
+  ChatAttachment,
   PaperContextRef,
   OtherContextRef,
   PaperContextSendMode,
@@ -244,7 +232,6 @@ import {
 import {
   getReasoningLevelDisplayLabel,
   isReasoningDisplayLabelActive,
-  getImageContextDisabledHint,
   isImageContextUnsupportedModel,
   getModelPdfSupport,
 } from "./setupHandlers/controllers/modelReasoningController";
@@ -287,11 +274,8 @@ import {
 import { createSendFlowController } from "./setupHandlers/controllers/sendFlowController";
 import { createClearConversationController } from "./setupHandlers/controllers/clearConversationController";
 import { loadConversationHistoryScope } from "./historyLoader";
-import {
-  shouldNotifyConversationHistoryConsumers,
-  shouldReloadConversationHistoryMenu,
-  type ConversationHistoryRefreshMode,
-} from "./historyRefreshPolicy";
+
+type ConversationHistoryRefreshMode = "selection" | "mutation" | "menu-open";
 
 /** Monotonic counter incremented every time setupHandlers rebuilds a panel. */
 let setupHandlersGeneration = 0;
@@ -311,13 +295,6 @@ export function setupHandlers(
   const resolvedInitialState = resolveInitialPanelItemState(initialItem);
   let item = resolvedInitialState.item;
   let basePaperItem = resolvedInitialState.basePaperItem;
-  const resolveLibraryIdFromItem = (
-    targetItem: Zotero.Item | null | undefined,
-  ): number => {
-    const parsed = Number(targetItem?.libraryID);
-    if (Number.isFinite(parsed) && parsed > 0) return Math.floor(parsed);
-    return resolveActiveLibraryID() || 0;
-  };
 
   const {
     inputBox,
@@ -332,7 +309,6 @@ export function setupHandlers(
     reasoningMenu,
     actionsRow,
     actionsLeft,
-    actionsRight,
     settingsBtn,
     clearBtn,
     titleStatic,
@@ -350,8 +326,6 @@ export function setupHandlers(
     slashMenu,
     slashUploadOption,
     slashReferenceOption,
-    slashPdfPageOption,
-    slashPdfMultiplePagesOption,
     imagePreview,
     selectedContextList,
     previewStrip,
@@ -436,9 +410,6 @@ export function setupHandlers(
   const ElementCtor = panelDoc.defaultView?.Element;
   const isElementNode = (value: unknown): value is Element =>
     Boolean(ElementCtor && value instanceof ElementCtor);
-  const headerTop = body.querySelector(
-    ".llm-header-top",
-  ) as HTMLDivElement | null;
   panelRoot.tabIndex = 0;
   applyPanelFontScale(panelRoot);
 
@@ -527,7 +498,6 @@ export function setupHandlers(
   };
   syncConversationIdentity();
 
-  let activeEditSession: EditLatestTurnMarker | null = null;
   let attachmentGcTimer: number | null = null;
   const scheduleAttachmentGc = (delayMs = 5_000) => {
     const win = body.ownerDocument?.defaultView;
@@ -673,7 +643,6 @@ export function setupHandlers(
   // handler on chatBox already keeps the snapshot up to date for programmatic
   // scroll changes.
 
-  let retryMenuAnchor: HTMLButtonElement | null = null;
   const closeResponseMenu = () => {
     if (responseMenu) responseMenu.style.display = "none";
     setResponseMenuTarget(null);
@@ -705,7 +674,6 @@ export function setupHandlers(
     historySearchLoadSeq += 1;
     historySearchQuery = "";
     historySearchExpanded = false;
-    historySearchLoading = false;
     historySearchDocumentCache.clear();
     historySearchDocumentTasks.clear();
     closeHistoryRowMenu();
@@ -726,7 +694,6 @@ export function setupHandlers(
     Boolean(historyMenu && historyMenu.style.display !== "none");
   const closeRetryModelMenu = () => {
     setFloatingMenuOpen(retryModelMenu, RETRY_MODEL_MENU_OPEN_CLASS, false);
-    retryMenuAnchor = null;
   };
 
   // Show floating "Quote" action when selecting assistant response text.
@@ -1426,18 +1393,6 @@ export function setupHandlers(
   const runWithChatScrollGuard = (fn: () => void) => {
     withScrollGuard(chatBox, conversationKey, fn);
   };
-  const EDIT_STALE_STATUS_TEXT = t(
-    "Edit target changed. Please edit latest prompt again.",
-  );
-  const getLatestEditablePair = async () => {
-    if (!item) return null;
-    await ensureConversationLoaded(item);
-    const key = getConversationKey(item);
-    const history = chatHistory.get(key) || [];
-    const pair = findLatestRetryPair(history);
-    if (!pair) return null;
-    return { conversationKey: key, pair };
-  };
 
   const resolveAutoLoadedPaperContext = (): PaperContextRef | null => {
     if (!item) return null;
@@ -1448,32 +1403,6 @@ export function setupHandlers(
     );
   };
 
-  let paperChipMenu: HTMLDivElement | null = null;
-  let paperChipMenuAnchor: HTMLDivElement | null = null;
-  let paperChipMenuSticky = false;
-  let paperChipMenuTarget: PaperContextRef | null = null;
-  let paperChipMenuHideTimer: number | null = null;
-  const clearPaperChipMenuHideTimer = () => {
-    if (paperChipMenuHideTimer === null) return;
-    const win = body.ownerDocument?.defaultView;
-    if (win) {
-      win.clearTimeout(paperChipMenuHideTimer);
-    } else {
-      clearTimeout(
-        paperChipMenuHideTimer as unknown as ReturnType<typeof setTimeout>,
-      );
-    }
-    paperChipMenuHideTimer = null;
-  };
-  const closePaperChipMenu = () => {
-    clearPaperChipMenuHideTimer();
-    if (paperChipMenu) {
-      paperChipMenu.style.display = "none";
-    }
-    paperChipMenuAnchor = null;
-    paperChipMenuTarget = null;
-    paperChipMenuSticky = false;
-  };
   const buildPaperChipAttachmentText = (
     paperContext: PaperContextRef,
   ): string => {
@@ -1562,155 +1491,6 @@ export function setupHandlers(
     }
     card.appendChild(rowMain);
     return card;
-  };
-  const ensurePaperChipMenu = (): HTMLDivElement | null => {
-    if (paperChipMenu?.isConnected) return paperChipMenu;
-    const ownerDoc = body.ownerDocument;
-    if (!ownerDoc) return null;
-    const menu = createElement(
-      ownerDoc,
-      "div",
-      "llm-model-menu llm-paper-chip-menu",
-    );
-    menu.style.display = "none";
-    menu.addEventListener("mouseenter", () => {
-      clearPaperChipMenuHideTimer();
-    });
-    menu.addEventListener("mouseleave", () => {
-      if (!paperChipMenuSticky) {
-        const win = body.ownerDocument?.defaultView;
-        if (!win) {
-          closePaperChipMenu();
-          return;
-        }
-        clearPaperChipMenuHideTimer();
-        paperChipMenuHideTimer = win.setTimeout(() => {
-          closePaperChipMenu();
-        }, 100);
-      }
-    });
-    menu.addEventListener("click", (e: Event) => {
-      const target = e.target as Element | null;
-      if (!target) return;
-      const card = target.closest(
-        ".llm-paper-chip-menu-row",
-      ) as HTMLButtonElement | null;
-      if (!card || !paperChipMenuTarget) return;
-      e.preventDefault();
-      e.stopPropagation();
-      void focusPaperContextInActiveTab(paperChipMenuTarget)
-        .then((focused) => {
-          if (!focused && status) {
-            setStatus(status, t("Could not focus this paper"), "error");
-          }
-        })
-        .catch((err) => {
-          ztoolkit.log("LLM: Failed to focus paper context from menu", err);
-          if (status) {
-            setStatus(status, t("Could not focus this paper"), "error");
-          }
-        });
-    });
-    body.appendChild(menu);
-    paperChipMenu = menu;
-    return menu;
-  };
-  const positionPaperChipMenuAboveAnchor = (
-    menu: HTMLDivElement,
-    anchor: HTMLElement,
-  ) => {
-    const win = body.ownerDocument?.defaultView;
-    if (!win) return;
-
-    const viewportMargin = 8;
-    const gap = 6;
-    const panelRect = body.getBoundingClientRect();
-    const minLeftBound = Math.max(
-      viewportMargin,
-      Math.round(panelRect.left) + 2,
-    );
-    const minTopBound = Math.max(viewportMargin, Math.round(panelRect.top) + 2);
-    const maxRightBound = Math.round(panelRect.right) - 2;
-    const maxBottomBound = Math.round(panelRect.bottom) - 2;
-    const anchorRect = anchor.getBoundingClientRect();
-    const availableWidth = Math.max(
-      160,
-      Math.floor(panelRect.width) - viewportMargin * 2 - 4,
-    );
-
-    menu.style.position = "fixed";
-    menu.style.display = "grid";
-    menu.style.visibility = "hidden";
-    menu.style.boxSizing = "border-box";
-    menu.style.maxWidth = `${availableWidth}px`;
-    menu.style.maxHeight = `${Math.max(120, Math.floor(panelRect.height) - viewportMargin * 2)}px`;
-    menu.style.overflowY = "auto";
-    menu.style.overflowX = "hidden";
-
-    const menuRect = menu.getBoundingClientRect();
-    const maxLeft = Math.max(
-      minLeftBound,
-      Math.min(
-        win.innerWidth - menuRect.width - viewportMargin,
-        maxRightBound - menuRect.width,
-      ),
-    );
-    const maxTop = Math.max(
-      minTopBound,
-      Math.min(
-        win.innerHeight - menuRect.height - viewportMargin,
-        maxBottomBound - menuRect.height,
-      ),
-    );
-    const preferredLeft =
-      anchorRect.left + menuRect.width <= maxRightBound
-        ? anchorRect.left
-        : anchorRect.right - menuRect.width;
-    const spaceAbove = anchorRect.top - minTopBound;
-    const spaceBelow = maxBottomBound - anchorRect.bottom;
-    const preferredTop =
-      spaceAbove >= menuRect.height || spaceAbove >= spaceBelow
-        ? anchorRect.top - menuRect.height - gap
-        : anchorRect.bottom + gap;
-    const left = Math.min(Math.max(minLeftBound, preferredLeft), maxLeft);
-    const top = Math.min(Math.max(minTopBound, preferredTop), maxTop);
-    menu.style.left = `${Math.round(left)}px`;
-    menu.style.top = `${Math.round(top)}px`;
-    menu.style.visibility = "visible";
-  };
-  const openPaperChipMenu = (
-    chip: HTMLDivElement,
-    paperContext: PaperContextRef,
-    options?: { sticky?: boolean },
-  ) => {
-    const menu = ensurePaperChipMenu();
-    const ownerDoc = body.ownerDocument;
-    if (!menu || !ownerDoc) return;
-    clearPaperChipMenuHideTimer();
-    paperChipMenuAnchor = chip;
-    paperChipMenuSticky = options?.sticky === true;
-    paperChipMenuTarget = paperContext;
-    menu.innerHTML = "";
-    menu.appendChild(
-      buildPaperChipMenuCard(ownerDoc, paperContext, {
-        contentSourceMode:
-          (chip.dataset.contentSource as PaperContentSourceMode) || "text",
-      }),
-    );
-    positionPaperChipMenuAboveAnchor(menu, chip);
-    menu.style.display = "grid";
-  };
-  const schedulePaperChipMenuClose = () => {
-    if (paperChipMenuSticky) return;
-    const win = body.ownerDocument?.defaultView;
-    if (!win) {
-      closePaperChipMenu();
-      return;
-    }
-    clearPaperChipMenuHideTimer();
-    paperChipMenuHideTimer = win.setTimeout(() => {
-      closePaperChipMenu();
-    }, 100);
   };
   const resolvePaperContextFromChipElement = (
     chip: HTMLElement,
@@ -1964,7 +1744,6 @@ export function setupHandlers(
 
   const updatePaperPreview = () => {
     if (!item || !paperPreview || !paperPreviewList) return;
-    closePaperChipMenu();
     const itemId = item.id;
     const selectedPapers = normalizePaperContextEntries(
       selectedPaperContextCache.get(itemId) || [],
@@ -2428,7 +2207,6 @@ export function setupHandlers(
   };
   let historySearchQuery = "";
   let historySearchExpanded = false;
-  let historySearchLoading = false;
   let historySearchLoadSeq = 0;
   const historySearchDocumentCache = new Map<number, HistorySearchDocument>();
   const historySearchDocumentTasks = new Map<
@@ -3135,7 +2913,6 @@ export function setupHandlers(
     historySearchLoadSeq += 1;
     historySearchExpanded = false;
     historySearchQuery = "";
-    historySearchLoading = false;
     renderPaperHistoryMenu();
     if (
       historyToggleBtn &&
@@ -3154,7 +2931,6 @@ export function setupHandlers(
       (entry) => !entry.isPendingDelete,
     );
     if (!normalizedSearchQuery) {
-      historySearchLoading = false;
       renderPaperHistoryMenu();
       if (
         historyToggleBtn &&
@@ -3170,7 +2946,6 @@ export function setupHandlers(
       (entry) => !historySearchDocumentCache.has(entry.conversationKey),
     );
     if (!missingEntries.length) {
-      historySearchLoading = false;
       renderPaperHistoryMenu();
       if (
         historyToggleBtn &&
@@ -3182,7 +2957,6 @@ export function setupHandlers(
       restoreHistorySearchInputFocus();
       return;
     }
-    historySearchLoading = true;
     renderPaperHistoryMenu();
     if (
       historyToggleBtn &&
@@ -3194,7 +2968,6 @@ export function setupHandlers(
     restoreHistorySearchInputFocus();
     await ensureHistorySearchDocuments(missingEntries);
     if (requestId !== historySearchLoadSeq) return;
-    historySearchLoading = false;
     renderPaperHistoryMenu();
     if (
       historyToggleBtn &&
@@ -3209,19 +2982,14 @@ export function setupHandlers(
   const invalidateLocalConversationHistory = () => {
     paperHistoryLoadSeq += 1;
     historySearchLoadSeq += 1;
-    historySearchLoading = false;
     latestPaperHistoryEntries = [];
   };
 
   const refreshPaperHistoryHeader = async (
     mode: ConversationHistoryRefreshMode = "mutation",
   ) => {
-    const shouldReloadMenuEntries = shouldReloadConversationHistoryMenu(
-      mode,
-      isHistoryMenuOpen(),
-    );
-    const shouldNotifyHistoryConsumers =
-      shouldNotifyConversationHistoryConsumers(mode);
+    const shouldReloadMenuEntries = mode === "menu-open" || isHistoryMenuOpen();
+    const shouldNotifyHistoryConsumers = mode !== "selection";
     if (!historyBar || !titleStatic || !item) {
       if (titleStatic) titleStatic.style.display = "";
       if (historyBar) historyBar.style.display = "none";
@@ -3396,7 +3164,6 @@ export function setupHandlers(
           );
     item = nextItem;
     syncConversationIdentity();
-    activeEditSession = null;
     inlineEditCleanup?.();
     setInlineEditCleanup(null);
     setInlineEditTarget(null);
@@ -3479,7 +3246,6 @@ export function setupHandlers(
     selectedModelCache.delete(conversationKey);
     selectedReasoningCache.delete(conversationKey);
     clearTransientComposeStateForItem(conversationKey);
-    clearConversationSummaryFromCache(conversationKey);
   };
 
   const finalizePaperConversationDeletion = async (
@@ -3521,7 +3287,7 @@ export function setupHandlers(
       ztoolkit.log("LLM: Failed to clear deleted paper conversation", err);
     }
     try {
-      await clearOwnerAttachmentRefs("conversation", conversationKey);
+      await clearConversationAttachmentRefs(conversationKey);
     } catch (err) {
       hasError = true;
       ztoolkit.log("LLM: Failed to clear deleted paper attachment refs", err);
@@ -3579,8 +3345,7 @@ export function setupHandlers(
     }
     try {
       const remainingHistory = chatHistory.get(pending.conversationKey) || [];
-      await replaceOwnerAttachmentRefs(
-        "conversation",
+      await replaceConversationAttachmentRefs(
         pending.conversationKey,
         collectAttachmentHashesFromMessages(remainingHistory),
       );
@@ -3617,7 +3382,6 @@ export function setupHandlers(
       chatHistory.set(pending.conversationKey, history);
     }
     if (item && getConversationKey(item) === pending.conversationKey) {
-      activeEditSession = null;
       refreshChatPreservingScroll();
     }
     if (status) setStatus(status, t("Turn restored"), "ready");
@@ -3646,7 +3410,7 @@ export function setupHandlers(
       return;
     }
     if (pendingHistoryDeletion) {
-      await finalizePendingHistoryDeletion("superseded");
+      await finalizePendingHistoryDeletion();
     }
     if (pendingTurnDeletion) {
       const sameTurn =
@@ -3669,7 +3433,6 @@ export function setupHandlers(
 
     history.splice(pair.userIndex, 2);
     chatHistory.set(target.conversationKey, history);
-    activeEditSession = null;
     refreshChatPreservingScroll();
 
     const pending: PendingTurnDeletion = {
@@ -3705,17 +3468,9 @@ export function setupHandlers(
     return pending;
   };
 
-  const finalizePendingHistoryDeletion = async (
-    reason: "timeout" | "superseded",
-  ) => {
+  const finalizePendingHistoryDeletion = async () => {
     const pending = clearPendingHistoryDeletion(false);
     if (!pending) return;
-    ztoolkit.log("LLM: Finalizing pending history deletion", {
-      reason,
-      conversationKey: pending.conversationKey,
-      libraryID: pending.libraryID,
-      title: pending.title,
-    });
     await finalizePaperConversationDeletion(pending);
     pendingHistoryDeletionKeys.delete(pending.conversationKey);
     await refreshPaperHistoryHeader("mutation");
@@ -3724,11 +3479,6 @@ export function setupHandlers(
   const undoPendingHistoryDeletion = async () => {
     const pending = clearPendingHistoryDeletion(true);
     if (!pending) return;
-    ztoolkit.log("LLM: Restoring pending history deletion", {
-      conversationKey: pending.conversationKey,
-      libraryID: pending.libraryID,
-      title: pending.title,
-    });
     if (pending.wasActive) {
       await switchToHistoryTarget({ conversationKey: pending.conversationKey });
       if (status) setStatus(status, t("Conversation restored"), "ready");
@@ -3818,7 +3568,7 @@ export function setupHandlers(
       if (pendingHistoryDeletion.conversationKey === entry.conversationKey) {
         return;
       }
-      await finalizePendingHistoryDeletion("superseded");
+      await finalizePendingHistoryDeletion();
     }
     if (pendingTurnDeletion) {
       await finalizePendingTurnDeletion("superseded");
@@ -3864,17 +3614,10 @@ export function setupHandlers(
       timeoutId: null,
     };
     pending.timeoutId = getWindowTimeout(() => {
-      void finalizePendingHistoryDeletion("timeout");
+      void finalizePendingHistoryDeletion();
     }, PAPER_HISTORY_UNDO_WINDOW_MS);
     pendingHistoryDeletion = pending;
 
-    ztoolkit.log("LLM: Queued history deletion", {
-      conversationKey: entry.conversationKey,
-      libraryID,
-      wasActive,
-      fallbackTarget,
-      expiresAt: pending.expiresAt,
-    });
     showHistoryUndoToast(entry.title);
     renderPaperHistoryMenuIfOpen();
     if (status)
@@ -3961,14 +3704,6 @@ export function setupHandlers(
       reuseReason = null;
     }
 
-    ztoolkit.log("LLM: + paper conversation action", {
-      libraryID,
-      paperItemID,
-      targetConversationKey,
-      action: reuseReason ? "reuse" : "create",
-      reason: reuseReason || "new",
-    });
-
     await switchPaperConversation(targetConversationKey);
     await refreshPaperHistoryHeader("mutation");
     if (status) {
@@ -4014,11 +3749,6 @@ export function setupHandlers(
       closePromptMenu();
       closeHistoryMenu();
 
-      // [webchat] In webchat mode, "+" creates a new ChatGPT conversation
-      const { selectedEntry: _debugEntry } = getSelectedModelInfo();
-      ztoolkit.log(
-        `[webchat] + clicked: authMode=${_debugEntry?.authMode}, entryId=${_debugEntry?.entryId}, isWebChat=${_debugEntry?.authMode === "webchat"}`,
-      );
       if (isWebChatMode()) {
         // Clear local chat panel and mark the relay as needing a new chat.
         // The next send carries an explicit force_new_chat intent to the relay,
@@ -4294,11 +4024,7 @@ export function setupHandlers(
     const { choices, groupedChoices } = getModelChoices();
     const selectedEntry = item ? getSelectedModelEntryForItem(item.id) : null;
     const currentModel =
-      selectedEntry?.model ||
-      choices[0]?.model ||
-      getStringPref("modelPrimary") ||
-      getStringPref("model") ||
-      "default";
+      selectedEntry?.model || choices[0]?.model || "default";
     const currentModelDisplay =
       selectedEntry?.displayModelLabel || currentModel;
     const currentModelHint = selectedEntry
@@ -4979,7 +4705,7 @@ export function setupHandlers(
       latestPair?.assistantMessage?.modelEntryId?.trim() || "";
     const latestAssistantProviderLabel =
       latestPair?.assistantMessage?.modelProviderLabel?.trim() || "";
-    const matchingLegacyEntries = latestAssistantModelName
+    const matchingModelOnlyEntries = latestAssistantModelName
       ? groupedChoices.flatMap((group) =>
           group.entries.filter(
             (entry) => entry.model === latestAssistantModelName,
@@ -5000,7 +4726,7 @@ export function setupHandlers(
             ? entry.model === latestAssistantModelName &&
               (latestAssistantProviderLabel
                 ? entry.providerLabel === latestAssistantProviderLabel
-                : matchingLegacyEntries.length === 1)
+                : matchingModelOnlyEntries.length === 1)
             : false;
         const option = createElement(
           body.ownerDocument as Document,
@@ -5450,35 +5176,14 @@ export function setupHandlers(
       const { relaySetCommand } = await import("../../webchat/relayServer");
       relaySetCommand({ type: "SCRAPE_HISTORY" });
 
-      const {
-        filterWebChatHistorySessionsForHostname,
-        getWebChatHistorySiteSyncEntry,
-        isWebChatHistorySiteFailure,
-        waitForFreshChatHistorySnapshot,
-      } = await import("../../webchat/client");
-      const snapshot = await waitForFreshChatHistorySnapshot(
+      const { waitForFreshChatHistorySnapshot } =
+        await import("../../webchat/client");
+      await waitForFreshChatHistorySnapshot(
         "",
         targetHostname,
         requestedAt,
         25_000,
       );
-      const sessions = filterWebChatHistorySessionsForHostname(
-        snapshot.sessions,
-        targetHostname,
-      );
-      const siteSyncEntry = getWebChatHistorySiteSyncEntry(
-        snapshot,
-        targetHostname,
-      );
-      if (sessions.length > 0) {
-        ztoolkit.log(
-          `[webchat] History warmed up: ${sessions.length} conversations`,
-        );
-      } else if (isWebChatHistorySiteFailure(siteSyncEntry)) {
-        ztoolkit.log(
-          `[webchat] History warm-up failed for ${targetHostname || "active site"}: ${siteSyncEntry?.status}`,
-        );
-      }
     } catch {
       /* ignore */
     }
@@ -5978,8 +5683,7 @@ export function setupHandlers(
     }
   };
 
-  type ActiveSlashToken = PaperSearchToken;
-  type PaperPickerMode = "search" | "empty";
+  type ActiveAtToken = PaperSearchToken;
   type PaperPickerRow =
     | {
         kind: "paper";
@@ -5992,8 +5696,6 @@ export function setupHandlers(
         attachmentIndex: number;
         depth: number;
       };
-  let paperPickerMode: PaperPickerMode = "empty";
-  let paperPickerEmptyMessage = "No references available.";
   let paperPickerGroups: PaperSearchGroupCandidate[] = [];
   let paperPickerGroupByItemId = new Map<number, PaperSearchGroupCandidate>();
   let paperPickerExpandedPaperKeys = new Set<number>();
@@ -6012,8 +5714,6 @@ export function setupHandlers(
     paperPickerDebounceTimer = null;
   };
   const resetPaperPickerState = () => {
-    paperPickerMode = "empty";
-    paperPickerEmptyMessage = "No references available.";
     paperPickerGroups = [];
     paperPickerGroupByItemId = new Map<number, PaperSearchGroupCandidate>();
     paperPickerExpandedPaperKeys = new Set<number>();
@@ -6021,14 +5721,13 @@ export function setupHandlers(
     paperPickerActiveRowIndex = 0;
   };
   // Paper picker is triggered by '@'; context actions are opened by the + button.
-  const getActiveAtToken = (): ActiveSlashToken | null => {
+  const getActiveAtToken = (): ActiveAtToken | null => {
     const caretEnd =
       typeof inputBox.selectionStart === "number"
         ? inputBox.selectionStart
         : inputBox.value.length;
     return parseAtSearchToken(inputBox.value, caretEnd);
   };
-  const getActiveSlashToken = (): ActiveSlashToken | null => getActiveAtToken();
   const isPaperPickerOpen = () =>
     Boolean(paperPicker && paperPicker.style.display !== "none");
   const closePaperPicker = (opts: { consumeToken?: boolean } = {}) => {
@@ -6181,8 +5880,6 @@ export function setupHandlers(
   const setPaperPickerSearchGroups = (
     groups: PaperSearchGroupCandidate[],
   ): void => {
-    paperPickerMode = groups.length ? "search" : "empty";
-    paperPickerEmptyMessage = "No papers matched.";
     paperPickerGroups = groups;
     paperPickerGroupByItemId = new Map<number, PaperSearchGroupCandidate>();
     paperPickerExpandedPaperKeys = new Set<number>();
@@ -6212,11 +5909,9 @@ export function setupHandlers(
         });
       });
     };
-    if (paperPickerMode === "search") {
-      paperPickerGroups.forEach((group) => {
-        appendPaperRow(group, 0);
-      });
-    }
+    paperPickerGroups.forEach((group) => {
+      appendPaperRow(group, 0);
+    });
 
     paperPickerRows = rows;
     if (!paperPickerRows.length) {
@@ -6376,7 +6071,6 @@ export function setupHandlers(
   const selectPaperPickerAttachment = (
     itemId: number,
     attachmentIndex: number,
-    selectionKind: "paper-single" | "attachment",
   ): boolean => {
     const selectedGroup = getPaperPickerGroupByItemId(itemId);
     if (!selectedGroup) return false;
@@ -6384,12 +6078,6 @@ export function setupHandlers(
     if (!selectedAttachment) return false;
     const contentType = selectedAttachment.contentType;
     const kind = resolvePickerItemKind(contentType);
-    ztoolkit.log("LLM: Picker selection", {
-      selectionKind,
-      kind,
-      itemId: selectedGroup.itemId,
-      contextItemId: selectedAttachment.contextItemId,
-    });
     if (kind === "pdf") {
       upsertPaperContext({
         itemId: selectedGroup.itemId,
@@ -6420,22 +6108,15 @@ export function setupHandlers(
     const row = getPaperPickerRowAt(index);
     if (!row) return false;
     if (row.kind === "attachment") {
-      return selectPaperPickerAttachment(
-        row.itemId,
-        row.attachmentIndex,
-        "attachment",
-      );
+      return selectPaperPickerAttachment(row.itemId, row.attachmentIndex);
     }
     const group = getPaperPickerGroupByItemId(row.itemId);
     if (!group) return false;
     if (group.attachments.length <= 1) {
-      return selectPaperPickerAttachment(row.itemId, 0, "paper-single");
+      return selectPaperPickerAttachment(row.itemId, 0);
     }
     if (!isPaperPickerGroupExpanded(row.itemId)) {
       togglePaperPickerGroupExpanded(row.itemId, true);
-      ztoolkit.log("LLM: Paper picker expanded group via keyboard", {
-        itemId: group.itemId,
-      });
       renderPaperPicker();
       return true;
     }
@@ -6504,21 +6185,16 @@ export function setupHandlers(
     if (!paperPicker || !paperPickerList) return;
     const ownerDoc = body.ownerDocument;
     if (!ownerDoc) return;
-    if (paperPickerMode === "empty") {
-      paperPickerList.innerHTML = "";
-      paperPicker.scrollTop = 0;
-      const empty = createElement(ownerDoc, "div", "llm-paper-picker-empty", {
-        textContent: paperPickerEmptyMessage,
-      });
-      paperPickerList.appendChild(empty);
-      paperPicker.style.display = "block";
-      return;
-    }
     rebuildPaperPickerRows();
     if (!paperPickerRows.length) {
-      paperPickerMode = "empty";
-      paperPickerEmptyMessage = "No papers matched.";
-      renderPaperPicker();
+      paperPickerList.innerHTML = "";
+      paperPicker.scrollTop = 0;
+      paperPickerList.appendChild(
+        createElement(ownerDoc, "div", "llm-paper-picker-empty", {
+          textContent: "No papers matched.",
+        }),
+      );
+      paperPicker.style.display = "block";
       return;
     }
     paperPickerList.innerHTML = "";
@@ -6682,7 +6358,7 @@ export function setupHandlers(
           const group = getPaperPickerGroupByItemId(row.itemId);
           if (!group) return;
           if (group.attachments.length <= 1) {
-            selectPaperPickerAttachment(row.itemId, 0, "paper-single");
+            selectPaperPickerAttachment(row.itemId, 0);
             return;
           }
           togglePaperPickerGroupExpanded(row.itemId);
@@ -6693,11 +6369,7 @@ export function setupHandlers(
           renderPaperPicker();
           return;
         }
-        selectPaperPickerAttachment(
-          row.itemId,
-          row.attachmentIndex,
-          "attachment",
-        );
+        selectPaperPickerAttachment(row.itemId, row.attachmentIndex);
       };
       option.addEventListener("mousedown", choosePaperRow);
       option.addEventListener("click", (e: Event) => {
@@ -6732,8 +6404,8 @@ export function setupHandlers(
     } catch {
       /* */
     }
-    const slashToken = getActiveSlashToken();
-    if (!slashToken) {
+    const atToken = getActiveAtToken();
+    if (!atToken) {
       closePaperPicker();
       return;
     }
@@ -6742,8 +6414,8 @@ export function setupHandlers(
     const runSearch = async () => {
       paperPickerDebounceTimer = null;
       if (!item) return;
-      const activeSlashToken = getActiveSlashToken();
-      if (!activeSlashToken) {
+      const activeAtToken = getActiveAtToken();
+      if (!activeAtToken) {
         closePaperPicker();
         return;
       }
@@ -6752,19 +6424,19 @@ export function setupHandlers(
         closePaperPicker();
         return;
       }
-      const normalizedQuery = normalizePaperSearchText(activeSlashToken.query);
+      const normalizedQuery = normalizePaperSearchText(activeAtToken.query);
       if (!normalizedQuery) {
         closePaperPicker({ consumeToken: false });
         return;
       }
       const paperResults = await searchPaperCandidates(
         libraryID,
-        activeSlashToken.query,
+        activeAtToken.query,
         undefined,
         20,
       );
       if (requestId !== paperPickerRequestSeq) return;
-      if (!getActiveSlashToken()) {
+      if (!getActiveAtToken()) {
         closePaperPicker();
         return;
       }
@@ -6896,6 +6568,113 @@ export function setupHandlers(
     });
   }
 
+  const encodeBytesBase64 = (bytes: Uint8Array): string => {
+    let binaryStr = "";
+    const chunkSize = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      binaryStr += String.fromCharCode(
+        ...bytes.subarray(i, Math.min(bytes.length, i + chunkSize)),
+      );
+    }
+    return btoa(binaryStr);
+  };
+
+  const resolvePdfFilePath = async (
+    paperContext: PaperContextRef,
+  ): Promise<string> => {
+    const attachment = Zotero.Items.get(paperContext.contextItemId);
+    if (
+      !attachment?.isAttachment?.() ||
+      attachment.attachmentContentType !== "application/pdf"
+    ) {
+      throw new Error("Not a PDF attachment");
+    }
+    const asyncPath = await (
+      attachment as unknown as {
+        getFilePathAsync?: () => Promise<string | false>;
+      }
+    ).getFilePathAsync?.();
+    if (asyncPath) return asyncPath as string;
+    if (
+      typeof (attachment as { getFilePath?: () => string | undefined })
+        .getFilePath === "function"
+    ) {
+      const filePath = (attachment as { getFilePath: () => string | undefined })
+        .getFilePath();
+      if (filePath) return filePath;
+    }
+    const attachmentPath = (attachment as unknown as { attachmentPath?: string })
+      .attachmentPath;
+    if (!attachmentPath) throw new Error("Could not locate PDF file");
+    return attachmentPath;
+  };
+
+  const resolvePdfBytes = async (
+    paperContext: PaperContextRef,
+  ): Promise<Uint8Array> =>
+    readAttachmentBytes(await resolvePdfFilePath(paperContext));
+
+  const resolvePdfPaperAttachments = async (
+    paperContexts: PaperContextRef[],
+  ): Promise<ChatAttachment[]> => {
+    const results: ChatAttachment[] = [];
+    for (const pc of paperContexts) {
+      try {
+        const filePath = await resolvePdfFilePath(pc);
+        const bytes = await readAttachmentBytes(filePath);
+        if (bytes.byteLength > MAX_UPLOAD_PDF_SIZE_BYTES) continue;
+        const fileName = filePath.split(/[\\/]/).pop() || "document.pdf";
+        const persisted = await persistAttachmentBlob(
+          fileName,
+          new Uint8Array(bytes),
+        );
+        results.push({
+          id: `pdf-paper-${pc.contextItemId}-${Date.now()}`,
+          name: fileName,
+          mimeType: "application/pdf",
+          sizeBytes: bytes.byteLength,
+          category: "pdf",
+          storedPath: persisted.storedPath,
+          contentHash: persisted.contentHash,
+        });
+      } catch (err) {
+        ztoolkit.log("LLM: Failed to resolve PDF paper attachment", err);
+      }
+    }
+    return results;
+  };
+
+  const renderPdfPagesAsImages = async (
+    paperContexts: PaperContextRef[],
+  ): Promise<string[]> => {
+    const dataUrls: string[] = [];
+    for (const pc of paperContexts) {
+      try {
+        const pages = await renderAllPdfPages(pc.contextItemId);
+        for (const page of pages) {
+          const bytes = await readAttachmentBytes(page.storedPath);
+          if (bytes.byteLength > 0) {
+            dataUrls.push(`data:image/png;base64,${encodeBytesBase64(bytes)}`);
+          }
+        }
+      } catch (err) {
+        ztoolkit.log("LLM: Failed to render PDF pages for", pc.contextItemId, err);
+      }
+    }
+    return dataUrls;
+  };
+
+  const uploadPdfForProvider = async (params: {
+    apiBase: string;
+    apiKey: string;
+    pdfBytes: Uint8Array;
+    fileName: string;
+  }) => {
+    const pdfUpload = await import("../../utils/pdfUploadPreprocessor");
+    const provider = pdfUpload.detectPdfUploadProvider(params.apiBase);
+    return pdfUpload.uploadPdfForProvider({ provider, ...params });
+  };
+
   const { doSend } = createSendFlowController({
     body,
     inputBox,
@@ -6915,134 +6694,13 @@ export function setupHandlers(
     ) => hasActivePdfFullTextPapers(currentItem, selectedPaperContexts),
     hasUploadedPdfInCurrentWebChatConversation,
     markWebChatPdfUploadedForCurrentConversation,
-    resolvePdfPaperAttachments: async (paperContexts) => {
-      const results: import("./types").ChatAttachment[] = [];
-      for (const pc of paperContexts) {
-        try {
-          const attachment = Zotero.Items.get(pc.contextItemId);
-          if (
-            !attachment?.isAttachment?.() ||
-            attachment.attachmentContentType !== "application/pdf"
-          )
-            continue;
-          const filePath = await (async () => {
-            const asyncPath = await (
-              attachment as unknown as {
-                getFilePathAsync?: () => Promise<string | false>;
-              }
-            ).getFilePathAsync?.();
-            if (asyncPath) return asyncPath as string;
-            if (
-              typeof (attachment as { getFilePath?: () => string | undefined })
-                .getFilePath === "function"
-            ) {
-              return (
-                attachment as { getFilePath: () => string | undefined }
-              ).getFilePath();
-            }
-            return (attachment as unknown as { attachmentPath?: string })
-              .attachmentPath;
-          })();
-          if (!filePath) continue;
-          const bytes = await readAttachmentBytes(filePath);
-          if (bytes.byteLength > MAX_UPLOAD_PDF_SIZE_BYTES) continue;
-          const fileName = filePath.split(/[\\/]/).pop() || "document.pdf";
-          const persisted = await persistAttachmentBlob(
-            fileName,
-            new Uint8Array(bytes),
-          );
-          results.push({
-            id: `pdf-paper-${pc.contextItemId}-${Date.now()}`,
-            name: fileName,
-            mimeType: "application/pdf",
-            sizeBytes: bytes.byteLength,
-            category: "pdf",
-            storedPath: persisted.storedPath,
-            contentHash: persisted.contentHash,
-          });
-        } catch (err) {
-          ztoolkit.log("LLM: Failed to resolve PDF paper attachment", err);
-        }
-      }
-      return results;
-    },
-    renderPdfPagesAsImages: async (paperContexts) => {
-      const dataUrls: string[] = [];
-      for (const pc of paperContexts) {
-        try {
-          const pages = await renderAllPdfPages(pc.contextItemId);
-          for (const page of pages) {
-            // Read the persisted PNG and convert to data URL for the image pipeline
-            const bytes = await readAttachmentBytes(page.storedPath);
-            if (bytes.byteLength > 0) {
-              // Encode in chunks to avoid "too many function arguments" with large images
-              let binaryStr = "";
-              const chunkSize = 0x8000;
-              for (let i = 0; i < bytes.length; i += chunkSize) {
-                binaryStr += String.fromCharCode(
-                  ...bytes.subarray(i, Math.min(bytes.length, i + chunkSize)),
-                );
-              }
-              const base64 = btoa(binaryStr);
-              dataUrls.push(`data:image/png;base64,${base64}`);
-            }
-          }
-        } catch (err) {
-          ztoolkit.log(
-            "LLM: Failed to render PDF pages for",
-            pc.contextItemId,
-            err,
-          );
-        }
-      }
-      return dataUrls;
-    },
+    resolvePdfPaperAttachments,
+    renderPdfPagesAsImages,
     getModelPdfSupport: (modelName, protocol, authMode, apiBase) =>
       getModelPdfSupport(modelName, protocol, authMode, apiBase),
-    uploadPdfForProvider: async (params) => {
-      const { detectPdfUploadProvider, uploadPdfForProvider } =
-        await import("../../utils/pdfUploadPreprocessor");
-      const provider = detectPdfUploadProvider(params.apiBase);
-      return uploadPdfForProvider({ provider, ...params });
-    },
-    resolvePdfBytes: async (pc) => {
-      const attachment = Zotero.Items.get(pc.contextItemId);
-      if (
-        !attachment?.isAttachment?.() ||
-        attachment.attachmentContentType !== "application/pdf"
-      ) {
-        throw new Error("Not a PDF attachment");
-      }
-      const filePath = await (async () => {
-        const asyncPath = await (
-          attachment as unknown as {
-            getFilePathAsync?: () => Promise<string | false>;
-          }
-        ).getFilePathAsync?.();
-        if (asyncPath) return asyncPath as string;
-        if (
-          typeof (attachment as { getFilePath?: () => string | undefined })
-            .getFilePath === "function"
-        )
-          return (
-            attachment as { getFilePath: () => string | undefined }
-          ).getFilePath();
-        return (attachment as unknown as { attachmentPath?: string })
-          .attachmentPath;
-      })();
-      if (!filePath) throw new Error("Could not locate PDF file");
-      return readAttachmentBytes(filePath);
-    },
-    encodeBytesBase64: (bytes: Uint8Array) => {
-      let binaryStr = "";
-      const chunkSize = 0x8000;
-      for (let i = 0; i < bytes.length; i += chunkSize) {
-        binaryStr += String.fromCharCode(
-          ...bytes.subarray(i, Math.min(bytes.length, i + chunkSize)),
-        );
-      }
-      return btoa(binaryStr);
-    },
+    uploadPdfForProvider,
+    resolvePdfBytes,
+    encodeBytesBase64,
     getSelectedFiles: (itemId) => selectedFileAttachmentCache.get(itemId) || [],
     getSelectedImages: (itemId) => selectedImageCache.get(itemId) || [],
     resolvePromptText,
@@ -7056,12 +6714,6 @@ export function setupHandlers(
     isImageContextUnsupportedModel,
     getSelectedReasoning,
     getAdvancedModelParams,
-    getActiveEditSession: () => activeEditSession,
-    setActiveEditSession: (nextEditSession) => {
-      activeEditSession = nextEditSession;
-    },
-    getLatestEditablePair,
-    editLatestUserMessageAndRetry,
     sendQuestion,
     retainPinnedImageState,
     retainPaperState,
@@ -7083,7 +6735,6 @@ export function setupHandlers(
           setStatus(status, message, level);
         }
       : undefined,
-    editStaleStatusText: EDIT_STALE_STATUS_TEXT,
   });
   const { clearCurrentConversation } = createClearConversationController({
     getConversationKey: () => (item ? getConversationKey(item) : null),
@@ -7104,7 +6755,7 @@ export function setupHandlers(
     },
     clearStoredConversation,
     resetConversationTitle: clearConversationTitle,
-    clearOwnerAttachmentRefs,
+    clearConversationAttachmentRefs,
     removeConversationAttachmentFiles,
     refreshChatPreservingScroll,
     refreshPaperHistoryHeader: () => {
@@ -7119,16 +6770,6 @@ export function setupHandlers(
     logError: (message, err) => {
       ztoolkit.log(message, err);
     },
-    // [webchat] Check if the currently selected model uses webchat auth
-    isWebChatActive: () => {
-      const { selectedEntry } = getSelectedModelInfo();
-      return selectedEntry?.authMode === "webchat";
-    },
-    getWebChatHost: () => {
-      const port = Zotero.Prefs.get("httpServer.port") || 23119;
-      return `http://127.0.0.1:${port}/llm-for-zotero-lite/webchat`;
-    },
-    markNextWebChatSendAsNewChat,
   });
   const executeSend = async () => {
     // If the inline edit widget is active, route through editUserTurnAndRetry
@@ -7169,15 +6810,13 @@ export function setupHandlers(
         getSelectedModelInfo().currentModel ||
         ""
       ).trim();
-      // Resolve PDF-mode papers with the same provider-capability rules as
-      // the normal send flow so edit+retry preserves multimodal context.
       const pdfSupport = getModelPdfSupport(
         activeModelName,
         selectedProfile?.providerProtocol,
         selectedProfile?.authMode,
         selectedProfile?.apiBase,
       );
-      const pdfAttachments: import("./types").ChatAttachment[] = [];
+      let pdfAttachments: ChatAttachment[] = [];
       const pdfPageImageDataUrls: string[] = [];
       const pdfUploadSystemMessages: string[] = [];
       if (pdfModePapers.length) {
@@ -7186,44 +6825,12 @@ export function setupHandlers(
           selectedProfile?.apiBase &&
           selectedProfile?.apiKey
         ) {
-          const { detectPdfUploadProvider, uploadPdfForProvider } =
-            await import("../../utils/pdfUploadPreprocessor");
-          const provider = detectPdfUploadProvider(selectedProfile.apiBase);
           for (const pc of pdfModePapers) {
             try {
-              const attachment = Zotero.Items.get(pc.contextItemId);
-              if (
-                !attachment?.isAttachment?.() ||
-                attachment.attachmentContentType !== "application/pdf"
-              ) {
-                continue;
-              }
-              const filePath = await (async () => {
-                const asyncPath = await (
-                  attachment as unknown as {
-                    getFilePathAsync?: () => Promise<string | false>;
-                  }
-                ).getFilePathAsync?.();
-                if (asyncPath) return asyncPath as string;
-                if (
-                  typeof (
-                    attachment as { getFilePath?: () => string | undefined }
-                  ).getFilePath === "function"
-                ) {
-                  return (
-                    attachment as { getFilePath: () => string | undefined }
-                  ).getFilePath();
-                }
-                return (attachment as unknown as { attachmentPath?: string })
-                  .attachmentPath;
-              })();
-              if (!filePath) continue;
-              const bytes = await readAttachmentBytes(filePath);
               const result = await uploadPdfForProvider({
-                provider,
                 apiBase: selectedProfile.apiBase,
                 apiKey: selectedProfile.apiKey,
-                pdfBytes: bytes,
+                pdfBytes: await resolvePdfBytes(pc),
                 fileName: (() => {
                   const raw = pc.attachmentTitle || pc.title || "document";
                   return /\.pdf$/i.test(raw) ? raw : `${raw}.pdf`;
@@ -7243,43 +6850,9 @@ export function setupHandlers(
         } else if (pdfSupport === "image_url") {
           for (const pc of pdfModePapers) {
             try {
-              const attachment = Zotero.Items.get(pc.contextItemId);
-              if (
-                !attachment?.isAttachment?.() ||
-                attachment.attachmentContentType !== "application/pdf"
-              ) {
-                continue;
-              }
-              const filePath = await (async () => {
-                const asyncPath = await (
-                  attachment as unknown as {
-                    getFilePathAsync?: () => Promise<string | false>;
-                  }
-                ).getFilePathAsync?.();
-                if (asyncPath) return asyncPath as string;
-                if (
-                  typeof (
-                    attachment as { getFilePath?: () => string | undefined }
-                  ).getFilePath === "function"
-                ) {
-                  return (
-                    attachment as { getFilePath: () => string | undefined }
-                  ).getFilePath();
-                }
-                return (attachment as unknown as { attachmentPath?: string })
-                  .attachmentPath;
-              })();
-              if (!filePath) continue;
-              const bytes = await readAttachmentBytes(filePath);
-              let binaryStr = "";
-              const chunkSize = 0x8000;
-              for (let i = 0; i < bytes.length; i += chunkSize) {
-                binaryStr += String.fromCharCode(
-                  ...bytes.subarray(i, Math.min(bytes.length, i + chunkSize)),
-                );
-              }
+              const bytes = await resolvePdfBytes(pc);
               pdfPageImageDataUrls.push(
-                `data:application/pdf;base64,${btoa(binaryStr)}`,
+                `data:application/pdf;base64,${encodeBytesBase64(bytes)}`,
               );
             } catch (err) {
               ztoolkit.log(
@@ -7290,83 +6863,11 @@ export function setupHandlers(
             }
           }
         } else if (pdfSupport === "vision") {
-          for (const pc of pdfModePapers) {
-            try {
-              const pages = await renderAllPdfPages(pc.contextItemId);
-              for (const page of pages) {
-                const bytes = await readAttachmentBytes(page.storedPath);
-                if (bytes.byteLength <= 0) continue;
-                let binaryStr = "";
-                const chunkSize = 0x8000;
-                for (let i = 0; i < bytes.length; i += chunkSize) {
-                  binaryStr += String.fromCharCode(
-                    ...bytes.subarray(i, Math.min(bytes.length, i + chunkSize)),
-                  );
-                }
-                pdfPageImageDataUrls.push(
-                  `data:image/png;base64,${btoa(binaryStr)}`,
-                );
-              }
-            } catch (err) {
-              ztoolkit.log(
-                "LLM: Failed to render PDF pages for edit",
-                pc.contextItemId,
-                err,
-              );
-            }
-          }
+          pdfPageImageDataUrls.push(
+            ...(await renderPdfPagesAsImages(pdfModePapers)),
+          );
         } else if (pdfSupport === "native") {
-          for (const pc of pdfModePapers) {
-            try {
-              const attachment = Zotero.Items.get(pc.contextItemId);
-              if (
-                !attachment?.isAttachment?.() ||
-                attachment.attachmentContentType !== "application/pdf"
-              )
-                continue;
-              const filePath = await (async () => {
-                const asyncPath = await (
-                  attachment as unknown as {
-                    getFilePathAsync?: () => Promise<string | false>;
-                  }
-                ).getFilePathAsync?.();
-                if (asyncPath) return asyncPath as string;
-                if (
-                  typeof (
-                    attachment as { getFilePath?: () => string | undefined }
-                  ).getFilePath === "function"
-                )
-                  return (
-                    attachment as { getFilePath: () => string | undefined }
-                  ).getFilePath();
-                return (attachment as unknown as { attachmentPath?: string })
-                  .attachmentPath;
-              })();
-              if (!filePath) continue;
-              const bytes = await readAttachmentBytes(filePath);
-              if (bytes.byteLength > MAX_UPLOAD_PDF_SIZE_BYTES) continue;
-              const fileName = filePath.split(/[\\/]/).pop() || "document.pdf";
-              const persisted = await persistAttachmentBlob(
-                fileName,
-                new Uint8Array(bytes),
-              );
-              pdfAttachments.push({
-                id: `pdf-paper-${pc.contextItemId}-${Date.now()}`,
-                name: fileName,
-                mimeType: "application/pdf",
-                sizeBytes: bytes.byteLength,
-                category: "pdf",
-                storedPath: persisted.storedPath,
-                contentHash: persisted.contentHash,
-              });
-            } catch (err) {
-              ztoolkit.log(
-                "LLM: Failed to resolve PDF paper for edit",
-                pc.contextItemId,
-                err,
-              );
-            }
-          }
+          pdfAttachments = await resolvePdfPaperAttachments(pdfModePapers);
         }
       }
       const selectedFiles = [
@@ -7662,7 +7163,7 @@ export function setupHandlers(
     ).__llmFontScaleShortcut = true;
   }
 
-  const openReferenceSlashFromMenu = () => {
+  const openReferenceAtSearchFromMenu = () => {
     if (!item) return;
     // Paper picker is now triggered by '@'
     const existingToken = getActiveAtToken();
@@ -7712,7 +7213,7 @@ export function setupHandlers(
       ) => unknown;
     } | null)?.openDialog;
     if (!win || typeof openDialog !== "function") {
-      openReferenceSlashFromMenu();
+      openReferenceAtSearchFromMenu();
       return;
     }
 
@@ -7751,7 +7252,7 @@ export function setupHandlers(
       await io.deferred.promise;
     } catch (err) {
       ztoolkit.log("LLM: native reference picker failed", err);
-      openReferenceSlashFromMenu();
+      openReferenceAtSearchFromMenu();
       return;
     }
 
@@ -7825,219 +7326,6 @@ export function setupHandlers(
     });
   }
 
-  if (slashPdfPageOption) {
-    slashPdfPageOption.addEventListener("click", async (e: Event) => {
-      e.preventDefault();
-      e.stopPropagation();
-      if (!item) return;
-      closeSlashMenu();
-      const { currentModel } = getSelectedModelInfo();
-      if (isImageContextUnsupportedModel(currentModel)) {
-        if (status)
-          setStatus(status, getImageContextDisabledHint(currentModel), "error");
-        return;
-      }
-      const currentImages = selectedImageCache.get(item.id) || [];
-      if (currentImages.length >= MAX_SELECTED_IMAGES) {
-        if (status)
-          setStatus(
-            status,
-            `Maximum ${MAX_SELECTED_IMAGES} images allowed`,
-            "error",
-          );
-        return;
-      }
-      if (status) setStatus(status, t("Capturing PDF page..."), "sending");
-      try {
-        const dataUrl = await captureCurrentPdfPage();
-        if (dataUrl) {
-          const win =
-            body.ownerDocument?.defaultView ||
-            (Zotero.getMainWindow?.() as Window | null);
-          const optimized = win
-            ? await optimizeImageDataUrl(win, dataUrl)
-            : dataUrl;
-          const existingImages = selectedImageCache.get(item.id) || [];
-          const nextImages = [...existingImages, optimized].slice(
-            0,
-            MAX_SELECTED_IMAGES,
-          );
-          selectedImageCache.set(item.id, nextImages);
-          const expandedBefore = selectedImagePreviewExpandedCache.get(item.id);
-          selectedImagePreviewExpandedCache.set(
-            item.id,
-            typeof expandedBefore === "boolean" ? expandedBefore : false,
-          );
-          selectedImagePreviewActiveIndexCache.set(
-            item.id,
-            nextImages.length - 1,
-          );
-          updateImagePreviewPreservingScroll();
-          if (status)
-            setStatus(status, `Page captured (${nextImages.length})`, "ready");
-        } else {
-          if (status)
-            setStatus(
-              status,
-              t("No PDF page found — open a PDF in the reader first"),
-              "error",
-            );
-          updateImagePreviewPreservingScroll();
-        }
-      } catch (err) {
-        ztoolkit.log("PDF page capture error:", err);
-        if (status) setStatus(status, t("PDF page capture failed"), "error");
-        updateImagePreviewPreservingScroll();
-      }
-    });
-  }
-
-  if (slashPdfMultiplePagesOption) {
-    slashPdfMultiplePagesOption.addEventListener("click", async (e: Event) => {
-      e.preventDefault();
-      e.stopPropagation();
-      if (!item) return;
-      closeSlashMenu();
-      const { currentModel } = getSelectedModelInfo();
-      if (isImageContextUnsupportedModel(currentModel)) {
-        if (status)
-          setStatus(status, getImageContextDisabledHint(currentModel), "error");
-        return;
-      }
-      const currentImages = selectedImageCache.get(item.id) || [];
-      const remaining = MAX_SELECTED_IMAGES - currentImages.length;
-      if (remaining <= 0) {
-        if (status)
-          setStatus(
-            status,
-            `Maximum ${MAX_SELECTED_IMAGES} images allowed`,
-            "error",
-          );
-        return;
-      }
-      // Get page count from the active PDF
-      const { getPdfPageCount, parsePageRanges, capturePdfPages } =
-        await import("./pdfPageCapture");
-      const totalPages = getPdfPageCount();
-      if (totalPages <= 0) {
-        if (status)
-          setStatus(
-            status,
-            t("No PDF page found — open a PDF in the reader first"),
-            "error",
-          );
-        return;
-      }
-      // Prompt user for page ranges via ztoolkit dialog
-      const win =
-        body.ownerDocument?.defaultView ||
-        (Zotero.getMainWindow?.() as Window | null);
-      if (!win) return;
-      const dialogData: Record<string, unknown> = {
-        pageRangeValue: `1-${Math.min(totalPages, remaining)}`,
-        loadCallback: () => {
-          return;
-        },
-        unloadCallback: () => {
-          return;
-        },
-      };
-      const pageDialog = new ztoolkit.Dialog(2, 1)
-        .addCell(0, 0, {
-          tag: "label",
-          namespace: "html",
-          properties: {
-            innerHTML: `${t("Enter page numbers or ranges (e.g. 1-5, 8, 12):")} (1-${totalPages})`,
-          },
-          styles: { display: "block", marginBottom: "8px" },
-        })
-        .addCell(
-          1,
-          0,
-          {
-            tag: "input",
-            namespace: "html",
-            id: "llm-pdf-page-range-input",
-            attributes: {
-              "data-bind": "pageRangeValue",
-              "data-prop": "value",
-              type: "text",
-            },
-            styles: { width: "300px" },
-          },
-          false,
-        )
-        .addButton("OK", "ok")
-        .addButton("Cancel", "cancel")
-        .setDialogData(dialogData)
-        .open(t("Select PDF pages"));
-      addon.data.dialog = pageDialog;
-      await (dialogData as { unloadLock: { promise: Promise<void> } })
-        .unloadLock.promise;
-      addon.data.dialog = undefined;
-      if ((dialogData as { _lastButtonId?: string })._lastButtonId !== "ok")
-        return;
-      const rawInput = String(
-        (dialogData as { pageRangeValue?: string }).pageRangeValue || "",
-      ).trim();
-      if (!rawInput) return;
-      const pageNumbers = parsePageRanges(rawInput, totalPages).slice(
-        0,
-        remaining,
-      );
-      if (!pageNumbers.length) {
-        if (status) setStatus(status, "No valid pages selected", "error");
-        return;
-      }
-      if (status) setStatus(status, t("Capturing PDF pages..."), "sending");
-      try {
-        const dataUrls = await capturePdfPages(pageNumbers, {
-          onProgress: (current, total) => {
-            if (status)
-              setStatus(
-                status,
-                `${t("Capturing PDF pages...")} ${current}/${total}`,
-                "sending",
-              );
-          },
-        });
-        if (dataUrls.length > 0) {
-          const optimized: string[] = [];
-          for (const dataUrl of dataUrls) {
-            optimized.push(
-              win ? await optimizeImageDataUrl(win, dataUrl) : dataUrl,
-            );
-          }
-          const existingImages = selectedImageCache.get(item.id) || [];
-          const nextImages = [...existingImages, ...optimized].slice(
-            0,
-            MAX_SELECTED_IMAGES,
-          );
-          selectedImageCache.set(item.id, nextImages);
-          const expandedBefore = selectedImagePreviewExpandedCache.get(item.id);
-          selectedImagePreviewExpandedCache.set(
-            item.id,
-            typeof expandedBefore === "boolean" ? expandedBefore : true,
-          );
-          selectedImagePreviewActiveIndexCache.set(
-            item.id,
-            nextImages.length - 1,
-          );
-          updateImagePreviewPreservingScroll();
-          if (status)
-            setStatus(status, `${dataUrls.length} pages captured`, "ready");
-        } else {
-          if (status) setStatus(status, t("PDF page capture failed"), "error");
-          updateImagePreviewPreservingScroll();
-        }
-      } catch (err) {
-        ztoolkit.log("PDF multiple pages capture error:", err);
-        if (status) setStatus(status, t("PDF page capture failed"), "error");
-        updateImagePreviewPreservingScroll();
-      }
-    });
-  }
-
   const openModelMenu = () => {
     if (!modelMenu || !modelBtn) return;
     if ((modelBtn as HTMLButtonElement).disabled) return;
@@ -8097,7 +7385,6 @@ export function setupHandlers(
       closeRetryModelMenu();
       return;
     }
-    retryMenuAnchor = anchor;
     positionFloatingMenu(body, retryModelMenu, anchor);
     setFloatingMenuOpen(retryModelMenu, RETRY_MODEL_MENU_OPEN_CLASS, true);
   };
@@ -8233,37 +7520,6 @@ export function setupHandlers(
   );
   bodyWithPaperPickerDismiss.__llmPaperPickerDismissHandler =
     dismissPaperPickerOnOutsidePointerDown;
-
-  const bodyWithPaperChipDismiss = body as Element & {
-    __llmPaperChipDismissHandler?: (event: PointerEvent) => void;
-  };
-  if (bodyWithPaperChipDismiss.__llmPaperChipDismissHandler) {
-    panelDoc.removeEventListener(
-      "pointerdown",
-      bodyWithPaperChipDismiss.__llmPaperChipDismissHandler,
-      true,
-    );
-  }
-  const dismissPaperChipOnOutsidePointerDown = (e: PointerEvent) => {
-    if (typeof e.button === "number" && e.button !== 0) return;
-    if (
-      !paperChipMenuSticky ||
-      !paperChipMenu ||
-      paperChipMenu.style.display === "none"
-    )
-      return;
-    const target = e.target as Node | null;
-    if (target && paperChipMenu.contains(target)) return;
-    if (target && paperChipMenuAnchor?.contains(target)) return;
-    closePaperChipMenu();
-  };
-  panelDoc.addEventListener(
-    "pointerdown",
-    dismissPaperChipOnOutsidePointerDown,
-    true,
-  );
-  bodyWithPaperChipDismiss.__llmPaperChipDismissHandler =
-    dismissPaperChipOnOutsidePointerDown;
 
   if (chatBox) {
     chatBox.addEventListener("click", (e: Event) => {
@@ -8408,7 +7664,6 @@ export function setupHandlers(
             RETRY_MODEL_MENU_OPEN_CLASS,
             false,
           );
-          retryMenuAnchor = null;
         }
       }
       if (me.button === 0) {
@@ -8707,7 +7962,6 @@ export function setupHandlers(
           "ready",
         );
       }
-      closePaperChipMenu();
       return;
     });
     paperPreview.addEventListener("contextmenu", (e: Event) => {
@@ -8758,7 +8012,6 @@ export function setupHandlers(
           nextIsFullText,
         );
       }
-      closePaperChipMenu();
       if (status) {
         if (isWebChatMode() && contentSource === "pdf") {
           setStatus(
@@ -9387,7 +8640,6 @@ export function setupHandlers(
       closePromptMenu();
       closeHistoryNewMenu();
       closeHistoryMenu();
-      activeEditSession = null;
       if (!item) return;
 
       // [webchat] "Exit" button → restore previous model and leave webchat mode

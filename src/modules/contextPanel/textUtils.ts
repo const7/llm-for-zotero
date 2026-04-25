@@ -13,7 +13,7 @@ export { normalizeSelectedTextSource } from "./normalizers";
 
 export const DEFAULT_SELECTED_TEXT_PROMPT =
   "Please explain this selected text.";
-export const DEFAULT_FILE_ANALYSIS_PROMPT = "Please analyze attached files.";
+const DEFAULT_FILE_ANALYSIS_PROMPT = "Please analyze attached files.";
 
 export function getSelectedTextSourceIcon(source: SelectedTextSource): string {
   if (source === "model") return "🧠";
@@ -123,7 +123,7 @@ export function isLikelyCorruptedSelectedText(text: string): boolean {
   return false;
 }
 
-export function buildQuestionWithSelectedText(
+function buildQuestionWithSelectedText(
   selectedText: string,
   userPrompt: string,
 ): string {
@@ -294,7 +294,7 @@ export function setStatus(
   statusEl.className = `llm-status llm-status-${variant}`;
 }
 
-export function formatTokenCount(tokens: number): string {
+function formatTokenCount(tokens: number): string {
   if (tokens < 0) return "0";
   if (tokens < 1000) return `${tokens}`;
   if (tokens < 10000) return `${(tokens / 1000).toFixed(1).replace(/\.0$/, "")}k`;
@@ -308,18 +308,6 @@ export function setTokenUsage(el: HTMLElement, sessionTokens: number): void {
 
 export function clampNumber(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
-}
-
-export function getCurrentLocalTimestamp(): string {
-  return new Intl.DateTimeFormat("en-US", {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    month: "2-digit",
-    day: "2-digit",
-    year: "numeric",
-    hour12: false,
-  }).format(new Date());
 }
 
 /**

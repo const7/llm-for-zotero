@@ -5,9 +5,8 @@ import type {
   ChatAttachment,
   PaperContextRef,
   SelectedTextContext,
+  SelectedTextSource,
 } from "../../types";
-import type { SelectedTextSource } from "../../types";
-import type { EditLatestTurnMarker, EditLatestTurnResult } from "../../chat";
 import type { ReasoningConfig as LLMReasoningConfig } from "../../../../utils/llmClient";
 
 type StatusLevel = "ready" | "warning" | "error";
@@ -20,19 +19,6 @@ type SelectedProfile = {
   providerLabel: string;
   authMode?: "api_key" | "codex_auth" | "copilot_auth" | "webchat";
   providerProtocol?: ProviderProtocol;
-};
-
-type LatestEditablePair = {
-  conversationKey: number;
-  pair: {
-    userMessage: {
-      timestamp: number;
-    };
-    assistantMessage: {
-      timestamp: number;
-      streaming?: boolean;
-    };
-  };
 };
 
 type SendFlowControllerDeps = {
@@ -99,12 +85,6 @@ type SendFlowControllerDeps = {
   getAdvancedModelParams: (
     entryId: string | undefined,
   ) => AdvancedModelParams | undefined;
-  getActiveEditSession: () => EditLatestTurnMarker | null;
-  setActiveEditSession: (value: EditLatestTurnMarker | null) => void;
-  getLatestEditablePair: () => Promise<LatestEditablePair | null>;
-  editLatestUserMessageAndRetry: (
-    opts: import("../../types").EditRetryOptions,
-  ) => Promise<EditLatestTurnResult>;
   sendQuestion: (
     opts: import("../../types").SendQuestionOptions,
   ) => Promise<void>;
@@ -121,7 +101,6 @@ type SendFlowControllerDeps = {
   refreshPaperHistoryHeader: () => void;
   persistDraftInput: () => void;
   setStatusMessage?: (message: string, level: StatusLevel) => void;
-  editStaleStatusText: string;
   // [webchat]
   hasActivePdfFullTextPapers?: (item: Zotero.Item, paperContexts?: any[]) => boolean;
   hasUploadedPdfInCurrentWebChatConversation?: () => boolean;
@@ -132,12 +111,6 @@ type SendFlowControllerDeps = {
 export function createSendFlowController(deps: SendFlowControllerDeps): {
   doSend: () => Promise<void>;
 } {
-  const shouldUseLeanChatFastPath = (
-    profile: SelectedProfile | null,
-  ): boolean => {
-    return profile?.authMode !== "webchat";
-  };
-
   const doSend = async () => {
     const item = deps.getItem();
     if (!item) return;
@@ -161,208 +134,13 @@ export function createSendFlowController(deps: SendFlowControllerDeps): {
       item,
       allSelectedPaperContexts,
     );
-    const earlyProfile = deps.getSelectedProfile();
-    const isLeanChatFastPath = shouldUseLeanChatFastPath(
-      earlyProfile,
-    ) && pdfModePaperContexts.length === 0;
-    if (isLeanChatFastPath) {
-      const selectedFiles = deps.getSelectedFiles(item.id);
-      const fullTextPaperContexts = deps.getFullTextPaperContexts(
-        item,
-        allSelectedPaperContexts,
-      );
-      const hasPaperComposeState = true;
-      if (
-        !text &&
-        !primarySelectedText &&
-        !allSelectedPaperContexts.length &&
-        !selectedFiles.length
-      ) {
-        return;
-      }
-      const promptText = deps.resolvePromptText(
-        text,
-        primarySelectedText,
-        selectedFiles.length > 0 || allSelectedPaperContexts.length > 0,
-      );
-      if (!promptText) return;
-      const resolvedPromptText =
-        !text &&
-        !primarySelectedText &&
-        allSelectedPaperContexts.length > 0 &&
-        !selectedFiles.length
-          ? "Please analyze selected papers."
-          : promptText;
-      const composedQuestionBase = primarySelectedText
-        ? deps.buildQuestionWithSelectedTextContexts(
-            selectedTexts,
-            selectedTextSources,
-            resolvedPromptText,
-            {
-              selectedTextPaperContexts,
-              includePaperAttribution: false,
-            },
-          )
-        : resolvedPromptText;
-      const composedQuestion = deps.buildModelPromptWithFileContext(
-        composedQuestionBase,
-        selectedFiles,
-      );
-      const displayQuestion = primarySelectedText
-        ? resolvedPromptText
-        : text || resolvedPromptText;
-      const titleSeed =
-        deps.normalizeConversationTitleSeed(text) ||
-        deps.normalizeConversationTitleSeed(resolvedPromptText);
-      if (titleSeed) {
-        void deps
-          .touchPaperConversationTitle(deps.getConversationKey(item), titleSeed)
-          .catch((err) => {
-            ztoolkit.log("LLM: Failed to touch paper conversation title", err);
-          });
-      }
-
-      const selectedImages = deps
-        .getSelectedImages(item.id)
-        .slice(0, MAX_SELECTED_IMAGES);
-      const activeModelName = (
-        earlyProfile?.model ||
-        deps.getCurrentModelName() ||
-        ""
-      ).trim();
-      const images = deps.isImageContextUnsupportedModel(activeModelName)
-        ? []
-        : selectedImages;
-      const selectedReasoning = deps.getSelectedReasoning();
-      const advancedParams = deps.getAdvancedModelParams(earlyProfile?.entryId);
-      const activeEditSession = deps.getActiveEditSession();
-      if (activeEditSession) {
-        const latest = await deps.getLatestEditablePair();
-        if (!latest) {
-          deps.setActiveEditSession(null);
-          deps.setStatusMessage?.("No editable latest prompt", "error");
-          return;
-        }
-        const { conversationKey: latestKey, pair } = latest;
-        if (
-          pair.assistantMessage.streaming ||
-          activeEditSession.conversationKey !== latestKey ||
-          activeEditSession.userTimestamp !== pair.userMessage.timestamp ||
-          activeEditSession.assistantTimestamp !== pair.assistantMessage.timestamp
-        ) {
-          deps.setActiveEditSession(null);
-          deps.setStatusMessage?.(deps.editStaleStatusText, "error");
-          return;
-        }
-        const editResult = await deps.editLatestUserMessageAndRetry({
-          body: deps.body,
-          item,
-          displayQuestion,
-          selectedTexts: selectedTexts.length ? selectedTexts : undefined,
-          selectedTextSources: selectedTexts.length
-            ? selectedTextSources
-            : undefined,
-          selectedTextPaperContexts: selectedTexts.length
-            ? selectedTextPaperContexts
-            : undefined,
-          screenshotImages: images,
-          paperContexts: allSelectedPaperContexts,
-          fullTextPaperContexts,
-          attachments: selectedFiles.length ? selectedFiles : undefined,
-          expected: activeEditSession,
-          model: earlyProfile?.model,
-          apiBase: earlyProfile?.apiBase,
-          apiKey: earlyProfile?.apiKey,
-          reasoning: selectedReasoning,
-          advanced: advancedParams,
-        });
-        if (editResult !== "ok") {
-          if (editResult === "stale") {
-            deps.setActiveEditSession(null);
-            deps.setStatusMessage?.(deps.editStaleStatusText, "error");
-            return;
-          }
-          if (editResult === "missing") {
-            deps.setActiveEditSession(null);
-            deps.setStatusMessage?.("No editable latest prompt", "error");
-            return;
-          }
-          deps.setStatusMessage?.("Failed to save edited prompt", "error");
-          return;
-        }
-        deps.inputBox.value = "";
-        deps.persistDraftInput();
-        deps.retainPinnedImageState(item.id);
-        if (hasPaperComposeState) {
-          deps.consumePaperModeState(item.id);
-          deps.retainPaperState(item.id);
-          deps.updatePaperPreviewPreservingScroll();
-        }
-        if (selectedFiles.length) {
-          deps.retainPinnedFileState(item.id);
-          deps.updateFilePreviewPreservingScroll();
-        }
-        deps.updateImagePreviewPreservingScroll();
-        if (primarySelectedText) {
-          deps.retainPinnedTextState(textContextConversationKey);
-          deps.updateSelectedTextPreviewPreservingScroll();
-        }
-        deps.setActiveEditSession(null);
-        deps.scheduleAttachmentGc();
-        deps.refreshPaperHistoryHeader();
-        return;
-      }
-
-      deps.inputBox.value = "";
-      deps.persistDraftInput();
-      deps.retainPinnedImageState(item.id);
-      if (selectedFiles.length) {
-        deps.retainPinnedFileState(item.id);
-        deps.updateFilePreviewPreservingScroll();
-      }
-      deps.updateImagePreviewPreservingScroll();
-      if (primarySelectedText) {
-        deps.retainPinnedTextState(textContextConversationKey);
-        deps.updateSelectedTextPreviewPreservingScroll();
-      }
-
-      const sendTask = deps.sendQuestion({
-        body: deps.body,
-        item,
-        question: composedQuestion,
-        images,
-        model: earlyProfile?.model,
-        apiBase: earlyProfile?.apiBase,
-        apiKey: earlyProfile?.apiKey,
-        reasoning: selectedReasoning,
-        advanced: advancedParams,
-        displayQuestion,
-        selectedTexts: selectedTexts.length ? selectedTexts : undefined,
-        selectedTextSources: selectedTexts.length ? selectedTextSources : undefined,
-        selectedTextPaperContexts: selectedTexts.length
-          ? selectedTextPaperContexts
-          : undefined,
-        paperContexts: allSelectedPaperContexts,
-        fullTextPaperContexts,
-        attachments: selectedFiles.length ? selectedFiles : undefined,
-      });
-      if (hasPaperComposeState) {
-        deps.consumePaperModeState(item.id);
-        deps.retainPaperState(item.id);
-        deps.updatePaperPreviewPreservingScroll();
-      }
-      const win = deps.body.ownerDocument?.defaultView;
-      if (win) {
-        win.setTimeout(() => {
-          deps.refreshPaperHistoryHeader();
-        }, 120);
-      }
-      await sendTask;
-      deps.refreshPaperHistoryHeader();
-      return;
-    }
-
-    // Papers in PDF mode are sent as file attachments, not through the text pipeline
+    const selectedProfile = deps.getSelectedProfile();
+    const isWebChat = selectedProfile?.authMode === "webchat";
+    const activeModelName = (
+      selectedProfile?.model ||
+      deps.getCurrentModelName() ||
+      ""
+    ).trim();
     const pdfModeKeySet = new Set(
       pdfModePaperContexts.map((p) => `${p.itemId}:${p.contextItemId}`),
     );
@@ -373,43 +151,41 @@ export function createSendFlowController(deps: SendFlowControllerDeps): {
       item,
       selectedPaperContexts,
     );
-    // Resolve PDF-mode papers based on model capability
-    const isWebChat = earlyProfile?.authMode === "webchat";
-    const earlyModelName = (
-      earlyProfile?.model || deps.getCurrentModelName() || ""
-    ).trim();
-    const pdfSupport = deps.getModelPdfSupport(
-      earlyModelName, earlyProfile?.providerProtocol, earlyProfile?.authMode, earlyProfile?.apiBase,
-    );
     let pdfFileAttachments: ChatAttachment[] = [];
     let pdfPageImageDataUrls: string[] = [];
     let pdfUploadSystemMessages: string[] = [];
-    // [webchat] Skip provider-capability PDF processing — webchat handles PDF
-    // through its own pipeline (sendPdf → relay → extension → attachPDF).
     if (pdfModePaperContexts.length && !isWebChat) {
+      const pdfSupport = deps.getModelPdfSupport(
+        activeModelName,
+        selectedProfile?.providerProtocol,
+        selectedProfile?.authMode,
+        selectedProfile?.apiBase,
+      );
       if (pdfSupport === "none") {
         deps.setStatusMessage?.(
           "This model does not support PDF or image input. PDF papers were skipped.",
           "error",
         );
-      } else if (pdfSupport === "upload" && earlyProfile?.apiBase && earlyProfile?.apiKey) {
-        // Qwen/Kimi: upload PDF to provider, inject file reference as system message.
-        // For Qwen (DashScope), only qwen-long supports PDF upload.
-        const isQwen = (earlyProfile.apiBase || "").toLowerCase().includes("dashscope");
-        const isQwenLong = /^qwen-long(?:[.-]|$)/i.test(earlyModelName);
+      } else if (
+        pdfSupport === "upload" &&
+        selectedProfile?.apiBase &&
+        selectedProfile.apiKey
+      ) {
+        const isQwen = selectedProfile.apiBase.toLowerCase().includes("dashscope");
+        const isQwenLong = /^qwen-long(?:[.-]|$)/i.test(activeModelName);
         if (isQwen && !isQwenLong) {
           deps.setStatusMessage?.(
-            `Only qwen-long supports PDF upload on DashScope. Current model: ${earlyModelName}. PDF papers were skipped.`,
+            `Only qwen-long supports PDF upload on DashScope. Current model: ${activeModelName}. PDF papers were skipped.`,
             "error",
           );
         } else {
           deps.inputBox.disabled = true;
-          deps.setStatusMessage?.(`Uploading PDF to ${earlyModelName}...`, "ready");
+          deps.setStatusMessage?.(`Uploading PDF to ${activeModelName}...`, "ready");
           for (const pc of pdfModePaperContexts) {
             try {
               const result = await deps.uploadPdfForProvider({
-                apiBase: earlyProfile.apiBase,
-                apiKey: earlyProfile.apiKey,
+                apiBase: selectedProfile.apiBase,
+                apiKey: selectedProfile.apiKey,
                 pdfBytes: await deps.resolvePdfBytes(pc),
                 fileName: (() => {
                   const raw = pc.attachmentTitle || pc.title || "document";
@@ -427,8 +203,6 @@ export function createSendFlowController(deps: SendFlowControllerDeps): {
           }
         }
       } else if (pdfSupport === "image_url") {
-        // Tier 3 (third-party): encode full PDF as base64 data URI and send
-        // as image_url — relay services pass this through.
         deps.inputBox.disabled = true;
         deps.setStatusMessage?.(
           `PDF upload via third-party provider may not work. Attempting base64 encoding...`,
@@ -441,26 +215,25 @@ export function createSendFlowController(deps: SendFlowControllerDeps): {
             pdfPageImageDataUrls.push(`data:application/pdf;base64,${base64}`);
           } catch (err) {
             ztoolkit.log("LLM: PDF base64 encoding failed for", pc.contextItemId, err);
-            // Fall back to vision (render pages as images) for this paper
             const fallback = await deps.renderPdfPagesAsImages([pc]);
             pdfPageImageDataUrls.push(...fallback);
           }
         }
         deps.setStatusMessage?.(`Sending ${pdfPageImageDataUrls.length} PDF(s)...`, "ready");
       } else if (pdfSupport === "vision") {
-        if (deps.isImageContextUnsupportedModel(earlyModelName)) {
+        if (deps.isImageContextUnsupportedModel(activeModelName)) {
           deps.setStatusMessage?.(
             "This model does not support image input. PDF pages will be sent as text.",
             "warning",
           );
         } else {
           deps.inputBox.disabled = true;
-          deps.setStatusMessage?.(`PDF will be sent as page images (vision mode) for ${earlyModelName}...`, "ready");
+          deps.setStatusMessage?.(`PDF will be sent as page images (vision mode) for ${activeModelName}...`, "ready");
           pdfPageImageDataUrls = await deps.renderPdfPagesAsImages(pdfModePaperContexts);
           deps.setStatusMessage?.(`Sending ${pdfPageImageDataUrls.length} page image(s)...`, "ready");
         }
       } else {
-        deps.setStatusMessage?.(`Sending native PDF to ${earlyModelName}...`, "ready");
+        deps.setStatusMessage?.(`Sending native PDF to ${activeModelName}...`, "ready");
         pdfFileAttachments = await deps.resolvePdfPaperAttachments(pdfModePaperContexts);
       }
       deps.inputBox.disabled = false;
@@ -469,7 +242,6 @@ export function createSendFlowController(deps: SendFlowControllerDeps): {
       ...deps.getSelectedFiles(item.id),
       ...pdfFileAttachments,
     ];
-    const hasPaperComposeState = true;
 
     if (
       !text &&
@@ -522,90 +294,28 @@ export function createSendFlowController(deps: SendFlowControllerDeps): {
       void deps
         .touchPaperConversationTitle(deps.getConversationKey(item), titleSeed)
         .catch((err) => {
-          ztoolkit.log("LLM: Failed to touch paper conversation title", err);
-        });
+        ztoolkit.log("LLM: Failed to touch paper conversation title", err);
+      });
     }
 
-    const selectedProfile = deps.getSelectedProfile();
-    const activeModelName = (
-      selectedProfile?.model ||
-      deps.getCurrentModelName() ||
-      ""
-    ).trim();
     const selectedImages = deps
       .getSelectedImages(item.id)
       .slice(0, MAX_SELECTED_IMAGES);
     const images = [
-      ...(deps.isImageContextUnsupportedModel(activeModelName) ? [] : selectedImages),
+      ...(deps.isImageContextUnsupportedModel(activeModelName)
+        ? []
+        : selectedImages),
       ...pdfPageImageDataUrls,
-    ];
+    ].slice(0, MAX_SELECTED_IMAGES);
     const selectedReasoning = deps.getSelectedReasoning();
     const advancedParams = deps.getAdvancedModelParams(selectedProfile?.entryId);
-
-    const activeEditSession = deps.getActiveEditSession();
-    if (activeEditSession) {
-      const latest = await deps.getLatestEditablePair();
-      if (!latest) {
-        deps.setActiveEditSession(null);
-        deps.setStatusMessage?.("No editable latest prompt", "error");
-        return;
-      }
-      const { conversationKey: latestKey, pair } = latest;
-      if (
-        pair.assistantMessage.streaming ||
-        activeEditSession.conversationKey !== latestKey ||
-        activeEditSession.userTimestamp !== pair.userMessage.timestamp ||
-        activeEditSession.assistantTimestamp !== pair.assistantMessage.timestamp
-      ) {
-        deps.setActiveEditSession(null);
-        deps.setStatusMessage?.(deps.editStaleStatusText, "error");
-        return;
-      }
-
-      const editResult = await deps.editLatestUserMessageAndRetry({
-        body: deps.body,
-        item,
-        displayQuestion,
-        selectedTexts: selectedTexts.length ? selectedTexts : undefined,
-        selectedTextSources: selectedTexts.length ? selectedTextSources : undefined,
-        selectedTextPaperContexts: selectedTexts.length ? selectedTextPaperContexts : undefined,
-        screenshotImages: images,
-        paperContexts: selectedPaperContexts,
-        fullTextPaperContexts,
-        attachments: selectedFiles.length ? selectedFiles : undefined,
-        pdfUploadSystemMessages: pdfUploadSystemMessages.length
-          ? pdfUploadSystemMessages
-          : undefined,
-        expected: activeEditSession,
-        model: selectedProfile?.model,
-        apiBase: selectedProfile?.apiBase,
-        apiKey: selectedProfile?.apiKey,
-        reasoning: selectedReasoning,
-        advanced: advancedParams,
-      });
-      if (editResult !== "ok") {
-        if (editResult === "stale") {
-          deps.setActiveEditSession(null);
-          deps.setStatusMessage?.(deps.editStaleStatusText, "error");
-          return;
-        }
-        if (editResult === "missing") {
-          deps.setActiveEditSession(null);
-          deps.setStatusMessage?.("No editable latest prompt", "error");
-          return;
-        }
-        deps.setStatusMessage?.("Failed to save edited prompt", "error");
-        return;
-      }
-
+    const clearDraftAndRetainContext = (): void => {
       deps.inputBox.value = "";
       deps.persistDraftInput();
       deps.retainPinnedImageState(item.id);
-      if (hasPaperComposeState) {
-        deps.consumePaperModeState(item.id);
-        deps.retainPaperState(item.id);
-        deps.updatePaperPreviewPreservingScroll();
-      }
+      deps.consumePaperModeState(item.id);
+      deps.retainPaperState(item.id);
+      deps.updatePaperPreviewPreservingScroll();
       if (selectedFiles.length) {
         deps.retainPinnedFileState(item.id);
         deps.updateFilePreviewPreservingScroll();
@@ -615,27 +325,10 @@ export function createSendFlowController(deps: SendFlowControllerDeps): {
         deps.retainPinnedTextState(textContextConversationKey);
         deps.updateSelectedTextPreviewPreservingScroll();
       }
-      deps.setActiveEditSession(null);
-      deps.scheduleAttachmentGc();
-      deps.refreshPaperHistoryHeader();
-      return;
-    }
+    };
 
-    deps.inputBox.value = "";
-    deps.persistDraftInput();
-    deps.retainPinnedImageState(item.id);
-    if (selectedFiles.length) {
-      deps.retainPinnedFileState(item.id);
-      deps.updateFilePreviewPreservingScroll();
-    }
-    deps.updateImagePreviewPreservingScroll();
-    if (primarySelectedText) {
-      deps.retainPinnedTextState(textContextConversationKey);
-      deps.updateSelectedTextPreviewPreservingScroll();
-    }
+    clearDraftAndRetainContext();
 
-    // [webchat] Determine whether to send PDF and/or force a new chat
-    // (isWebChat already computed early from earlyProfile)
     const webchatForceNewChat = isWebChat
       ? (deps.consumeWebChatForceNewChatIntent?.() ?? false)
       : false;
@@ -668,15 +361,10 @@ export function createSendFlowController(deps: SendFlowControllerDeps): {
       webchatSendPdf,
       webchatForceNewChat,
     });
-    if (hasPaperComposeState) {
-      deps.consumePaperModeState(item.id);
-      deps.retainPaperState(item.id);
-      deps.updatePaperPreviewPreservingScroll();
-    }
     const win = deps.body.ownerDocument?.defaultView;
     if (win) {
       win.setTimeout(() => {
-          deps.refreshPaperHistoryHeader();
+        deps.refreshPaperHistoryHeader();
       }, 120);
     }
     await sendTask;

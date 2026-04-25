@@ -1,5 +1,3 @@
-const REASONING_PROFILE_TABLE_VERSION = 6;
-
 export type ReasoningProvider =
   | "openai"
   | "gemini"
@@ -420,12 +418,6 @@ const ANTHROPIC_THINKING_PROFILE: ProviderProfile = {
       high: 10000,
     },
   },
-};
-
-const UNSUPPORTED_PROFILE: ProviderProfile = {
-  supportsReasoning: false,
-  defaultLevel: null,
-  options: [],
 };
 
 const PROFILE_RULES: Record<

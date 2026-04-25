@@ -14,9 +14,7 @@ import {
   relayLoadChat,
   relayGetHistorySnapshot,
   relayGetScrapedTranscriptSnapshot,
-  relayGetScrapedMessages,
   relayGetStateSnapshot,
-  relayGetReportedMode,
   type RelayHistorySiteSyncEntry,
   type RelayCompletionReason,
   type RelayRunState,
@@ -552,12 +550,6 @@ export type WebChatHistorySnapshot = {
 
 export type WebChatScrapedTranscriptSnapshot = ScrapedTranscriptSnapshot;
 
-export async function fetchChatHistory(
-  host: string,
-): Promise<WebChatHistorySession[]> {
-  return (await fetchChatHistorySnapshot(host)).sessions;
-}
-
 export async function fetchChatHistorySnapshot(
   _host: string,
 ): Promise<WebChatHistorySnapshot> {
@@ -937,35 +929,6 @@ function mapScrapedMessage(m: { role: string; text: string; thinking?: string })
     kind: m.role === "user" ? "user" : "bot",
     thinking: m.thinking,
   };
-}
-
-// ---------------------------------------------------------------------------
-// Scraped messages (direct state access)
-// ---------------------------------------------------------------------------
-
-export async function fetchScrapedMessages(
-  _host: string,
-  timeoutMs = 10_000,
-): Promise<Array<{ role: string; text: string }>> {
-  const deadline = Date.now() + timeoutMs;
-
-  while (Date.now() < deadline) {
-    const messages = relayGetScrapedTranscriptSnapshot()?.messages || relayGetScrapedMessages();
-    if (messages && messages.length > 0) {
-      return messages;
-    }
-    await new Promise((r) => setTimeout(r, 1000));
-  }
-  return [];
-}
-
-// ---------------------------------------------------------------------------
-// Reported mode (direct state access)
-// ---------------------------------------------------------------------------
-
-/** Get the ChatGPT mode reported back by the extension. */
-export function getReportedMode(): string | null {
-  return relayGetReportedMode();
 }
 
 // ---------------------------------------------------------------------------

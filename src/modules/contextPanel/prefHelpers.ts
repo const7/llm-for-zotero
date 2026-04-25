@@ -8,14 +8,11 @@ import {
 import type { CustomShortcut, ReasoningLevelSelection } from "./types";
 import { selectedModelCache, panelFontScalePercent } from "./state";
 import {
-  deriveProviderLabel,
   getDefaultModelEntry,
   getLastUsedModelEntryId,
   getModelEntryById,
-  getModelProviderGroups,
   getRuntimeModelEntries,
   setLastUsedModelEntryId,
-  type ModelProviderGroup,
   type RuntimeModelEntry,
 } from "../../utils/modelProviders";
 import {
@@ -38,17 +35,6 @@ function getZoteroPrefs(): ZoteroPrefsAPI | null {
 export function getStringPref(key: string): string {
   const value = getZoteroPrefs()?.get?.(`${config.prefsPrefix}.${key}`, true);
   return typeof value === "string" ? value : "";
-}
-
-export function getBoolPref(key: string, defaultValue = false): boolean {
-  const value = getZoteroPrefs()?.get?.(`${config.prefsPrefix}.${key}`, true);
-  if (typeof value === "boolean") return value;
-  if (typeof value === "string") {
-    const normalized = value.trim().toLowerCase();
-    if (normalized === "true") return true;
-    if (normalized === "false") return false;
-  }
-  return defaultValue;
 }
 
 const LAST_REASONING_LEVEL_PREF_KEY = "lastUsedReasoningLevel";
@@ -136,10 +122,6 @@ export function removeLastUsedPaperConversationKey(
   removeRememberedPaperConversationKey(libraryID, paperItemID);
 }
 
-export function getModelConfigGroups(): ModelProviderGroup[] {
-  return getModelProviderGroups();
-}
-
 export function getAvailableModelEntries(): RuntimeModelEntry[] {
   return getRuntimeModelEntries();
 }
@@ -184,13 +166,6 @@ export function getAdvancedModelParamsForEntry(
 ): RuntimeModelEntry["advanced"] | undefined {
   const selected = getModelEntryById(entryId);
   return selected?.advanced;
-}
-
-export function getProviderLabelForSettings(
-  apiBase: string,
-  providerIndex: number,
-): string {
-  return deriveProviderLabel(apiBase, providerIndex);
 }
 
 export function applyPanelFontScale(panel: HTMLElement | null): void {

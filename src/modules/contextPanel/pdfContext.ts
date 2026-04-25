@@ -1,9 +1,7 @@
 import {
   callEmbeddings,
-  EmbeddingUnsupportedError,
   getResolvedEmbeddingConfig,
   checkEmbeddingAvailability,
-  getEmbeddingUnavailableReason,
 } from "../../utils/llmClient";
 import { estimateTextTokens } from "../../utils/modelInputCap";
 import {
@@ -21,7 +19,6 @@ import {
 } from "./constants";
 import {
   buildPaperQuoteCitationGuidance,
-  formatPaperCitationLabel,
   formatPaperSourceLabel,
 } from "./paperAttribution";
 import { pdfTextCache, pdfTextLoadingTasks } from "./state";
@@ -168,8 +165,8 @@ async function cachePDFText(item: Zotero.Item) {
           pdfText = result.text;
           sourceType = "zotero-worker";
         }
-      } catch (e) {
-        ztoolkit.log("PDF extraction failed:", e);
+      } catch {
+        // Fall back to an empty context for this paper.
       }
     }
 
@@ -233,8 +230,7 @@ async function cachePDFText(item: Zotero.Item) {
 
       });
     }
-  } catch (e) {
-    ztoolkit.log("Error caching PDF:", e);
+  } catch {
     pdfTextCache.set(item.id, {
       title: "",
       chunks: [],
@@ -267,31 +263,10 @@ export async function ensurePDFTextCached(item: Zotero.Item): Promise<void> {
 }
 
 
-/**
- * Reset embedding failure markers on all cached PdfContexts.
- * Called when the user changes embedding provider config in preferences,
- * so subsequent queries re-attempt embeddings with the new settings.
- */
 export function resetEmbeddingFailedFlags(): void {
   pdfTextCache.forEach((ctx) => {
     ctx.embeddingFailureKey = undefined;
   });
-}
-
-export function invalidateCachedContextText(itemId: number): void {
-  if (!Number.isFinite(itemId) || itemId <= 0) return;
-  const normalizedItemId = Math.floor(itemId);
-  pdfTextCache.delete(normalizedItemId);
-  pdfTextLoadingTasks.delete(normalizedItemId);
-  // Clear embedding cache — chunks will change when MinerU content is refreshed,
-  // so cached embeddings are stale. Do NOT delete MinerU files themselves:
-  // this function is called right after writeMineruCacheFiles(), so deleting
-  // the MinerU directory would destroy the freshly written content.
-  import("./embeddingCache")
-    .then(({ clearEmbeddingCache }) => clearEmbeddingCache(normalizedItemId))
-    .catch((e) => {
-      ztoolkit.log("Embedding cache invalidation failed:", e);
-    });
 }
 
 // ── Markdown-aware chunking (MinerU only) ─────────────────────────────────────
@@ -867,28 +842,6 @@ function resolveChunkKind(params: {
   return normalizedText ? "body" : "unknown";
 }
 
-function getSupportLevelLabel(chunkKind: PdfChunkKind | undefined): string {
-  switch (chunkKind) {
-    case "abstract":
-    case "results":
-    case "discussion":
-    case "conclusion":
-      return "likely direct";
-    case "methods":
-    case "introduction":
-    case "body":
-    case "figure-caption":
-    case "table-caption":
-      return "contextual";
-    case "references":
-      return "background only";
-    case "appendix":
-      return "weak or peripheral";
-    default:
-      return "contextual";
-  }
-}
-
 export function buildChunkMetadata(
   chunks: string[],
   sourceType?: "mineru" | "zotero-worker",
@@ -924,61 +877,6 @@ export function buildChunkMetadata(
     });
   }
   return chunkMeta;
-}
-
-function buildCompactPaperSourceLabel(ref: PaperContextRef): string {
-  const verbose = normalizeEvidenceText(formatPaperCitationLabel(ref));
-  if (verbose && !/^paper\b/i.test(verbose)) {
-    return verbose
-      .replace(/\set al\.,?/gi, "")
-      .replace(/,/g, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-  }
-  if (ref.citationKey) {
-    return normalizeEvidenceText(ref.citationKey);
-  }
-  return /^paper\b/i.test(verbose) ? verbose : "Paper";
-}
-
-function buildEvidenceAnchor(
-  chunkText: string,
-  sectionLabel?: string,
-  chunkKind: PdfChunkKind = "body",
-  fallbackAnchor?: string,
-): string {
-  if (fallbackAnchor) {
-    return fallbackAnchor;
-  }
-  const textWithoutHeading = trimLeadingSectionHeading(chunkText, sectionLabel);
-  const cleaned = cleanLeadingEvidenceNoise(textWithoutHeading, chunkKind);
-  return buildEvidenceAnchorFromText(cleaned.text);
-}
-
-export function formatSuggestedEvidenceCitation(
-  paper: PaperContextRef,
-  candidate: Pick<
-    PaperContextCandidate,
-    "chunkText" | "sectionLabel" | "chunkKind" | "anchorText"
-  >,
-): string {
-  const citationParts = [buildCompactPaperSourceLabel(paper)];
-  const sectionLabel =
-    candidate.sectionLabel ||
-    matchSectionHeading(candidate.chunkText)?.label;
-  if (sectionLabel) {
-    citationParts.push(sectionLabel);
-  }
-  const anchor = buildEvidenceAnchor(
-    candidate.chunkText,
-    sectionLabel,
-    candidate.chunkKind || "body",
-    candidate.anchorText,
-  );
-  if (anchor) {
-    citationParts.push(`"${anchor}"`);
-  }
-  return `(${citationParts.join(", ")})`;
 }
 
 function tokenizeText(text: string): string[] {
@@ -1156,17 +1054,7 @@ async function ensureEmbeddings(
     try {
       return await embedTexts(pdfContext.chunks);
     } catch (err) {
-      if (err instanceof EmbeddingUnsupportedError) {
-        ztoolkit.log(
-          `[Semantic Search] Provider "${(err as EmbeddingUnsupportedError).providerLabel}" does not support embeddings. ` +
-            "Configure a separate embedding provider in Settings → Customization. Falling back to keyword search.",
-        );
-      } else {
-        ztoolkit.log(
-          "[Semantic Search] Embedding generation failed:",
-          err,
-        );
-      }
+      void err;
       return null;
     }
   })();
@@ -1187,8 +1075,7 @@ async function ensureEmbeddings(
     if (itemId != null && result.length > 0) {
       const dims = result[0].length;
       saveCachedEmbeddings(itemId, chunkHash, embeddingModel, providerKey, dims, result).catch(
-        (err) =>
-          ztoolkit.log("[Semantic Search] Embedding cache write failed:", err),
+        () => {},
       );
     }
     return result.length === chunkCount;
@@ -1199,45 +1086,6 @@ async function ensureEmbeddings(
     pdfContext.embeddingFailureKey = embeddingAttemptKey;
   }
   return false;
-}
-
-/**
- * Pre-generate embeddings for a paper in the background.
- * Called from the multi-context planner so embeddings are cached even when
- * the system uses full-text mode (which skips the retrieval pipeline).
- * Fire-and-forget — callers should NOT await this.
- */
-export function preGenerateEmbeddings(
-  pdfContext: PdfContext | undefined,
-  itemId: number,
-): void {
-  if (!pdfContext || !pdfContext.chunks.length) return;
-  if (!shouldTryEmbeddings()) return;
-  let embeddingConfig: ReturnType<typeof getResolvedEmbeddingConfig>;
-  try {
-    embeddingConfig = getResolvedEmbeddingConfig();
-  } catch {
-    return;
-  }
-  // Already loaded or in-flight for this exact embedding config — nothing to do
-  if (
-    pdfContext.embeddings?.length &&
-    pdfContext.embeddingCacheKey === embeddingConfig.cacheKey
-  ) {
-    return;
-  }
-  if (
-    pdfContext.embeddingPromise &&
-    pdfContext.embeddingPromiseKey === embeddingConfig.attemptKey
-  ) {
-    return;
-  }
-
-  ensureEmbeddings(pdfContext, itemId).catch((err) => {
-    if (typeof ztoolkit !== "undefined") {
-      ztoolkit.log("[Semantic Search] Background embedding pre-generation failed:", err);
-    }
-  });
 }
 
 export function buildPaperKey(ref: PaperContextRef): string {
@@ -1357,14 +1205,7 @@ function shouldTryEmbeddings(): boolean {
   if (enabledPref !== true && enabledPref !== "true") return false;
 
   // Delegate to the centralized availability check in llmClient.
-  const available = checkEmbeddingAvailability();
-  if (!available && typeof ztoolkit !== "undefined") {
-    const reason = getEmbeddingUnavailableReason();
-    if (reason) {
-      ztoolkit.log(`[Semantic Search] Embeddings unavailable: ${reason}`);
-    }
-  }
-  return available;
+  return checkEmbeddingAvailability();
 }
 
 // ── Intent-driven evidence heuristics ────────────────────────────────────────
@@ -1585,8 +1426,8 @@ export async function buildPaperRetrievalCandidates(
             embedRank![idx] = rank + 1;
           });
         }
-      } catch (err) {
-        ztoolkit.log("Query embedding failed:", err);
+      } catch {
+        // Keyword retrieval remains available when semantic retrieval fails.
       }
     }
   }
@@ -1723,34 +1564,4 @@ export function renderEvidencePack(params: {
 
   if (blocks.length <= 1) return "";
   return blocks.join("\n\n---\n\n");
-}
-
-export function renderClaimEvidencePack(params: {
-  paper: PaperContextRef;
-  candidates: PaperContextCandidate[];
-}): string {
-  const { paper, candidates } = params;
-  if (!candidates.length) return "";
-  const lines = [
-    "Claim Evidence:",
-    "",
-    ...buildPaperQuoteCitationGuidance(),
-    "The full paper remains available in paper chat.",
-    "Use the evidence snippets below as the primary grounding for this claim assessment.",
-    "Do not treat references or background citations as direct empirical evidence.",
-    "If the evidence is indirect or mixed, say so explicitly.",
-    "",
-  ];
-  candidates.forEach((candidate, index) => {
-    lines.push(`Evidence snippet ${index + 1}`);
-    lines.push(
-      `Support level: ${getSupportLevelLabel(candidate.chunkKind).toLowerCase()}`,
-    );
-    lines.push(`Section: ${candidate.sectionLabel || "Unlabeled body text"}`);
-    lines.push(`Source label: ${formatPaperSourceLabel(paper)}`);
-    lines.push("Quoted evidence:");
-    lines.push(formatMarkdownBlockquote(buildEvidenceQuoteText(candidate)));
-    lines.push("");
-  });
-  return lines.join("\n").trimEnd();
 }

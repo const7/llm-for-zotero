@@ -29,7 +29,7 @@ describe("textUtils selected text prompt composition", function () {
     assert.include(prompt, "User question:\nWhat does this mean?");
   });
 
-  it("keeps legacy single-pdf prompt shape when attribution is not requested", function () {
+  it("keeps single-pdf prompt shape when attribution is not requested", function () {
     const prompt = buildQuestionWithSelectedTextContexts(
       ["A selected text snippet."],
       ["pdf"],

@@ -1,46 +1,13 @@
-/**
- * Context Panel Module
- *
- * This is the main entry point for the LLM context panel, which provides
- * a chat interface in Zotero's reader/library side panel.
- *
- * The module is split into focused sub-modules:
- * - constants.ts   – shared constants
- * - types.ts       – shared type definitions
- * - state.ts       – module-level mutable state
- * - buildUI.ts     – UI construction
- * - setupHandlers.ts – event handler wiring
- * - chat.ts        – conversation logic, send/refresh
- * - shortcuts.ts   – shortcut rendering and management
- * - imageOptimize.ts – image context compression before model requests
- * - pdfContext.ts   – PDF text extraction, chunking, BM25, embeddings
- * - leanPaperContextPlanner.ts – paper-chat context assembly
- * - mineruCache.ts / mineruImages.ts – MinerU paper-chat inputs
- * - contextResolution.ts – tab/reader context resolution
- * - menuPositioning.ts   – dropdown/context menu positioning
- * - prefHelpers.ts – preference access helpers
- * - textUtils.ts   – text sanitization, formatting
- */
-
 import { getLocaleID } from "../../utils/locale";
 import { config, PANE_ID } from "./constants";
-import type { Message } from "./types";
 import {
   activeContextPanels,
   activeContextPanelRawItems,
   activeContextPanelStateSync,
-  chatHistory,
-  loadedConversationKeys,
   readerContextPanelRegistered,
   setReaderContextPanelRegistered,
   recentReaderSelectionCache,
 } from "./state";
-import { clearConversation as clearStoredConversation } from "../../utils/chatStore";
-import {
-  ATTACHMENT_GC_MIN_AGE_MS,
-  clearOwnerAttachmentRefs,
-  collectAndDeleteUnreferencedBlobs,
-} from "../../utils/attachmentRefStore";
 import { normalizeSelectedText, setStatus } from "./textUtils";
 import { t } from "../../utils/i18n";
 import { buildUI } from "./buildUI";
@@ -57,7 +24,7 @@ import {
   getFirstSelectionFromReader,
   getSelectionFromDocument,
 } from "./readerSelection";
-import { resolveReaderPopupPaperContext } from "./readerPopup";
+import { resolvePaperContextRefFromAttachment } from "./paperAttribution";
 import { resolveInitialPanelItemState } from "./portalScope";
 import { createLatestOnlyTaskScheduler } from "./latestOnlyTaskScheduler";
 
@@ -157,13 +124,11 @@ export function registerReaderContextPanel() {
       l10nID: getLocaleID("llm-panel-sidenav-tooltip"),
       icon: `chrome://${config.addonRef}/content/icons/icon-20.png`,
     },
-    onInit: ({ setEnabled, tabType }) => {
+    onInit: ({ setEnabled }) => {
       setEnabled(true);
-      ztoolkit.log(`LLM: panel init tabType=${tabType}`);
     },
-    onItemChange: ({ setEnabled, tabType, item }) => {
+    onItemChange: ({ setEnabled }) => {
       setEnabled(true);
-      ztoolkit.log(`LLM: panel itemChange tabType=${tabType}`);
       // Refresh the cached tab ID (side effect of getActiveReaderForSelectedTab)
       getActiveReaderForSelectedTab();
       return true;
@@ -215,11 +180,8 @@ export function registerReaderContextPanel() {
         /* ignore */
       }
     },
-    onAsyncRender: async ({ body, item, setEnabled, tabType }) => {
+    onAsyncRender: async ({ body, item, setEnabled }) => {
       setEnabled(true);
-      ztoolkit.log(
-        `LLM: panel asyncRender tabType=${tabType} hasItem=${Boolean(item)}`,
-      );
 
       const resolvedInitialState = resolveInitialPanelItemState(item);
       const resolvedItem = resolvedInitialState.item;
@@ -327,13 +289,11 @@ export function registerReaderSelectionTracking() {
       const addTextToPanel = async () => {
         const effectiveSelectedText = resolveSelectedTextForPopupAction();
         if (!effectiveSelectedText) {
-          ztoolkit.log("LLM: Add Text popup action skipped (no selection)");
           return;
         }
         const selectionContext = resolveSelectionContext();
         const item = selectionContext.item;
         if (!item) {
-          ztoolkit.log("LLM: Add Text popup action skipped (no reader item)");
           return;
         }
         try {
@@ -399,10 +359,11 @@ export function registerReaderSelectionTracking() {
             Number.isFinite(readerLibraryID) && readerLibraryID > 0
               ? Math.floor(readerLibraryID)
               : 0;
-          const readerPaperContext = resolveReaderPopupPaperContext(
-            item,
-            getActiveContextAttachmentFromTabs(),
-          );
+          const readerPaperContext =
+            resolvePaperContextRefFromAttachment(item) ||
+            resolvePaperContextRefFromAttachment(
+              getActiveContextAttachmentFromTabs(),
+            );
           const readerPaperItemID =
             readerPaperContext && Number.isFinite(readerPaperContext.itemId)
               ? Math.floor(readerPaperContext.itemId)
@@ -748,27 +709,4 @@ export function registerReaderSelectionTracking() {
     config.addonID,
   );
   readerAPI.__llmSelectionTrackingRegistered = true;
-}
-
-export function clearConversation(itemId: number) {
-  chatHistory.set(itemId, []);
-  loadedConversationKeys.add(itemId);
-  void clearStoredConversation(itemId).catch((err) => {
-    ztoolkit.log("LLM: Failed to clear persisted chat history", err);
-  });
-  void clearOwnerAttachmentRefs("conversation", itemId).catch((err) => {
-    ztoolkit.log(
-      "LLM: Failed to clear persisted conversation attachment refs",
-      err,
-    );
-  });
-  void collectAndDeleteUnreferencedBlobs(ATTACHMENT_GC_MIN_AGE_MS).catch(
-    (err) => {
-      ztoolkit.log("LLM: Failed to collect unreferenced attachment blobs", err);
-    },
-  );
-}
-
-export function getConversationHistory(itemId: number): Message[] {
-  return chatHistory.get(itemId) || [];
 }

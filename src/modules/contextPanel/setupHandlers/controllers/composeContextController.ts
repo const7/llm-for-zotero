@@ -84,7 +84,7 @@ export function formatPaperContextChipLabel(
   if (contentSourceMode === "text") return `${base} - Text`;
   if (contentSourceMode === "mineru") return `${base} - MD`;
   if (contentSourceMode === "pdf") return `${base} - PDF`;
-  // Fallback (no mode specified) — legacy behavior
+  // No explicit source mode: keep the compact paper label.
   const attachmentTitle = resolveMultiPdfAttachmentTitle(paperContext);
   return attachmentTitle ? `${base} - ${attachmentTitle}` : base;
 }

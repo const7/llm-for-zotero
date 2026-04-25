@@ -44,13 +44,7 @@ import {
 } from "../utils/llmClient";
 import { resetEmbeddingFailedFlags } from "./contextPanel/pdfContext";
 import { joinLocalPath } from "../utils/localPath";
-import {
-  isMineruEnabled,
-  getMineruApiKey,
-  setMineruEnabled,
-  setMineruApiKey,
-} from "../utils/mineruConfig";
-import { testMineruConnection } from "../utils/mineruClient";
+import { isMineruEnabled, setMineruEnabled } from "../utils/mineruConfig";
 
 type PrefKey = "systemPrompt";
 
@@ -326,51 +320,6 @@ async function readCodexAccessToken(): Promise<string> {
   return token;
 }
 
-function extractTextFromCodexSSE(raw: string): string {
-  const lines = raw.split(/\r?\n/);
-  let out = "";
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed.startsWith("data:")) continue;
-    const payload = trimmed.slice(5).trim();
-    if (!payload || payload === "[DONE]") continue;
-    try {
-      const parsed = JSON.parse(payload) as {
-        type?: string;
-        delta?: string;
-        response?: {
-          output_text?: string;
-          output?: Array<{
-            content?: Array<{ type?: string; text?: string }>;
-          }>;
-        };
-      };
-      if (typeof parsed.delta === "string") {
-        out += parsed.delta;
-      }
-      const completedText = parsed.response?.output_text;
-      if (typeof completedText === "string" && completedText.trim()) {
-        out += completedText;
-      }
-      const outputItems = parsed.response?.output || [];
-      for (const item of outputItems) {
-        const content = item.content || [];
-        for (const part of content) {
-          if (
-            (part.type === "output_text" || part.type === "text") &&
-            typeof part.text === "string"
-          ) {
-            out += part.text;
-          }
-        }
-      }
-    } catch (_err) {
-      continue;
-    }
-  }
-  return out.trim();
-}
-
 // ── Style tokens ───────────────────────────────────────────────────
 
 // Inputs use CSS system colors (Field / FieldText) so they automatically
@@ -431,7 +380,6 @@ const ADV_ROW_STYLE =
 
 export async function registerPrefsScripts(_window: Window | undefined | null) {
   if (!_window) {
-    ztoolkit.log("Preferences window not available");
     return;
   }
 
@@ -512,12 +460,6 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
   ) as HTMLTextAreaElement | null;
   if (systemPrompt?.placeholder) {
     systemPrompt.placeholder = t(systemPrompt.placeholder);
-  }
-  const mineruApiKeyEl = doc.querySelector(
-    `#${config.addonRef}-mineru-api-key`,
-  ) as HTMLInputElement | null;
-  if (mineruApiKeyEl?.placeholder) {
-    mineruApiKeyEl.placeholder = t(mineruApiKeyEl.placeholder);
   }
   // Translate language dropdown options
   const localeSelectEl = doc.querySelector(
@@ -1774,7 +1716,7 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
         models: [
           { value: "text-embedding-3-small", label: "text-embedding-3-small", pricing: "$0.02 / 1M tokens" },
           { value: "text-embedding-3-large", label: "text-embedding-3-large", pricing: "$0.13 / 1M tokens" },
-          { value: "text-embedding-ada-002", label: "text-embedding-ada-002 (legacy)", pricing: "$0.10 / 1M tokens" },
+          { value: "text-embedding-ada-002", label: "text-embedding-ada-002", pricing: "$0.10 / 1M tokens" },
         ],
       },
       gemini: {
@@ -1805,8 +1747,7 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
     const writeEmbPref = (key: string, val: string | boolean) =>
       Zotero.Prefs.set(`${config.prefsPrefix}.${key}`, val, true);
 
-    // Read the current embedding provider; migrates legacy or unset
-    // values to a concrete provider on first open.
+    // Read the current embedding provider and choose a concrete default on first open.
     const resolveEmbeddingProvider = (): string => {
       const stored = readEmbPref("embeddingProvider");
       if (stored === "openai" || stored === "gemini" || stored === "custom") {
@@ -1825,7 +1766,6 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
       return "gemini";
     };
 
-    // Toggle visibility (same pattern as MinerU)
     const syncSemanticVisibility = () => {
       semanticSearchSubSettings.style.display = semanticSearchToggle.checked
         ? "flex"
@@ -2151,67 +2091,11 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
   const mineruEnabledInput = doc.querySelector(
     `#${config.addonRef}-mineru-enabled`,
   ) as HTMLInputElement | null;
-  const mineruSubSettings = doc.querySelector(
-    `#${config.addonRef}-mineru-sub-settings`,
-  ) as HTMLDivElement | null;
-  const mineruApiKeyInput = doc.querySelector(
-    `#${config.addonRef}-mineru-api-key`,
-  ) as HTMLInputElement | null;
-  const mineruTestBtn = doc.querySelector(
-    `#${config.addonRef}-mineru-test`,
-  ) as HTMLButtonElement | null;
-  const mineruTestStatus = doc.querySelector(
-    `#${config.addonRef}-mineru-test-status`,
-  ) as HTMLSpanElement | null;
   if (mineruEnabledInput) {
     mineruEnabledInput.checked = isMineruEnabled();
-    const syncSubVisibility = () => {
-      if (mineruSubSettings) {
-        mineruSubSettings.style.display = mineruEnabledInput.checked
-          ? "flex"
-          : "none";
-      }
-    };
-    syncSubVisibility();
     mineruEnabledInput.addEventListener("change", () => {
       setMineruEnabled(mineruEnabledInput.checked);
-      syncSubVisibility();
     });
-  }
-
-  if (mineruApiKeyInput) {
-    mineruApiKeyInput.value = getMineruApiKey();
-    mineruApiKeyInput.addEventListener("input", () => {
-      setMineruApiKey(mineruApiKeyInput.value);
-    });
-  }
-
-  if (mineruTestBtn && mineruTestStatus) {
-    const runMineruTest = async () => {
-      const apiKey = getMineruApiKey().trim();
-      if (!apiKey) {
-        mineruTestStatus.style.display = "inline";
-        mineruTestStatus.textContent = t("Enter an API key first");
-        mineruTestStatus.style.color = "var(--fill-secondary, #888)";
-        return;
-      }
-      mineruTestBtn.disabled = true;
-      mineruTestStatus.style.display = "inline";
-      mineruTestStatus.textContent = t("Testing…");
-      mineruTestStatus.style.color = "var(--fill-secondary, #888)";
-      try {
-        await testMineruConnection(apiKey);
-        mineruTestStatus.textContent = t("✓ Connection successful");
-        mineruTestStatus.style.color = "green";
-      } catch (error) {
-        mineruTestStatus.textContent = `\u2717 ${(error as Error).message}`;
-        mineruTestStatus.style.color = "red";
-      } finally {
-        mineruTestBtn.disabled = false;
-      }
-    };
-    mineruTestBtn.addEventListener("click", () => void runMineruTest());
-    mineruTestBtn.addEventListener("command", () => void runMineruTest());
   }
 
   // ── Language selector ────────────────────────────────────────────

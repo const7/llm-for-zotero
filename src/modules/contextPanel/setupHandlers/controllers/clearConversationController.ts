@@ -10,19 +10,13 @@ type ClearConversationControllerDeps = {
   markConversationLoaded: (conversationKey: number) => void;
   clearStoredConversation: (conversationKey: number) => Promise<void>;
   resetConversationTitle: (conversationKey: number) => Promise<void>;
-  clearOwnerAttachmentRefs: (
-    ownerType: "conversation",
-    ownerKey: number,
-  ) => Promise<void>;
+  clearConversationAttachmentRefs: (conversationKey: number) => Promise<void>;
   removeConversationAttachmentFiles: (conversationKey: number) => Promise<void>;
   refreshChatPreservingScroll: () => void;
   refreshPaperHistoryHeader: () => void | Promise<void>;
   scheduleAttachmentGc: () => void;
   setStatusMessage?: (message: string, level: StatusLevel) => void;
   logError?: (message: string, error: unknown) => void;
-  isWebChatActive?: () => boolean; // [webchat]
-  getWebChatHost?: () => string; // [webchat]
-  markNextWebChatSendAsNewChat?: () => void; // [webchat]
 };
 
 export function createClearConversationController(
@@ -62,10 +56,7 @@ export function createClearConversationController(
       deps.logError?.("LLM: Failed to reset conversation title", err);
     }
     try {
-      await deps.clearOwnerAttachmentRefs(
-        "conversation",
-        normalizedConversationKey,
-      );
+      await deps.clearConversationAttachmentRefs(normalizedConversationKey);
     } catch (err) {
       deps.logError?.("LLM: Failed to clear conversation attachment refs", err);
     }

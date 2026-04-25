@@ -75,14 +75,6 @@ function decodeFileUrlSegments(pathname: string): string[] {
     .map((segment) => decodeURIComponent(segment));
 }
 
-export function isUncPath(path: string | undefined): boolean {
-  return parseLocalPath(path).kind === "unc";
-}
-
-export function isWindowsDriveAbsolutePath(path: string | undefined): boolean {
-  return parseLocalPath(path).kind === "windows-drive";
-}
-
 export function joinLocalPath(...parts: string[]): string {
   const filtered = parts.filter((part) => Boolean(part));
   if (!filtered.length) return "";

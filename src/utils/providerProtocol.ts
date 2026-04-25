@@ -110,7 +110,7 @@ export function getProviderProtocolSpec(
   return found;
 }
 
-export function inferLegacyProviderProtocol(params: {
+function inferProviderProtocolFromEndpoint(params: {
   authMode?: string;
   apiBase?: string;
 }): ProviderProtocol {
@@ -125,7 +125,7 @@ export function inferLegacyProviderProtocol(params: {
     : "openai_chat_compat";
 }
 
-export function normalizeProviderProtocol(
+function normalizeProviderProtocol(
   value: unknown,
   fallback: ProviderProtocol = "openai_chat_compat",
 ): ProviderProtocol {
@@ -139,7 +139,7 @@ export function normalizeProviderProtocolForAuthMode(params: {
   fallback?: ProviderProtocol;
   model?: string;
 }): ProviderProtocol {
-  const inferred = inferLegacyProviderProtocol(params);
+  const inferred = inferProviderProtocolFromEndpoint(params);
   const fallback = params.fallback || inferred;
   const normalized = normalizeProviderProtocol(params.protocol, fallback);
   if (params.authMode === "codex_auth") {
@@ -158,12 +158,6 @@ export function normalizeProviderProtocolForAuthMode(params: {
     return fallback === "codex_responses" ? inferred : fallback;
   }
   return normalized;
-}
-
-export function supportsProviderProtocolFileInputs(
-  protocol: ProviderProtocol,
-): boolean {
-  return getProviderProtocolSpec(protocol).fileInputs;
 }
 
 export function getProviderCapabilityClass(params: {

@@ -17,7 +17,7 @@ describe("providerProtocol", function () {
     );
   });
 
-  it("infers legacy responses endpoints without upgrading non-responses URLs", function () {
+  it("infers responses endpoints without upgrading chat URLs", function () {
     assert.equal(
       normalizeProviderProtocolForAuthMode({
         authMode: "api_key",

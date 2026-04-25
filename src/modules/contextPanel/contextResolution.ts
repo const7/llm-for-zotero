@@ -1,5 +1,4 @@
 import {
-  sanitizeText,
   normalizeSelectedText,
   isLikelyCorruptedSelectedText,
   setStatus,
@@ -22,7 +21,6 @@ import type {
   SelectedTextSource,
   PaperContextRef,
 } from "./types";
-import { formatPaperCitationLabel } from "./paperAttribution";
 import {
   buildPinnedSelectedTextKey,
   isPinnedSelectedText,
@@ -78,19 +76,13 @@ function isTabsState(value: unknown): value is ZoteroTabsState {
   );
 }
 
-function getZoteroTabsStateWithSource(): {
-  tabs: ZoteroTabsState | null;
-  source: string;
-} {
-  const candidates: Array<{ source: string; value: unknown }> = [];
-  const push = (source: string, value: unknown) => {
-    candidates.push({ source, value });
+function getZoteroTabsState(): ZoteroTabsState | null {
+  const candidates: unknown[] = [];
+  const push = (value: unknown) => {
+    candidates.push(value);
   };
 
-  push(
-    "local.Zotero.Tabs",
-    (Zotero as unknown as { Tabs?: ZoteroTabsState }).Tabs,
-  );
+  push((Zotero as unknown as { Tabs?: ZoteroTabsState }).Tabs);
 
   let mainWindow: any = null;
   try {
@@ -99,9 +91,9 @@ function getZoteroTabsStateWithSource(): {
     void _error;
   }
   if (mainWindow) {
-    push("mainWindow.Zotero.Tabs", mainWindow.Zotero?.Tabs);
-    push("mainWindow.Zotero_Tabs", mainWindow.Zotero_Tabs);
-    push("mainWindow.Tabs", mainWindow.Tabs);
+    push(mainWindow.Zotero?.Tabs);
+    push(mainWindow.Zotero_Tabs);
+    push(mainWindow.Tabs);
   }
 
   let activePaneWindow: any = null;
@@ -112,8 +104,8 @@ function getZoteroTabsStateWithSource(): {
     void _error;
   }
   if (activePaneWindow) {
-    push("activePaneWindow.Zotero.Tabs", activePaneWindow.Zotero?.Tabs);
-    push("activePaneWindow.Zotero_Tabs", activePaneWindow.Zotero_Tabs);
+    push(activePaneWindow.Zotero?.Tabs);
+    push(activePaneWindow.Zotero_Tabs);
   }
 
   let anyMainWindow: any = null;
@@ -124,41 +116,32 @@ function getZoteroTabsStateWithSource(): {
     void _error;
   }
   if (anyMainWindow) {
-    push("mainWindows[0].Zotero.Tabs", anyMainWindow.Zotero?.Tabs);
-    push("mainWindows[0].Zotero_Tabs", anyMainWindow.Zotero_Tabs);
+    push(anyMainWindow.Zotero?.Tabs);
+    push(anyMainWindow.Zotero_Tabs);
   }
 
   try {
     const wmRecent = (Services as any).wm?.getMostRecentWindow?.(
       "navigator:browser",
     ) as any;
-    push("wm:navigator:browser.Zotero.Tabs", wmRecent?.Zotero?.Tabs);
-    push("wm:navigator:browser.Zotero_Tabs", wmRecent?.Zotero_Tabs);
+    push(wmRecent?.Zotero?.Tabs);
+    push(wmRecent?.Zotero_Tabs);
   } catch (_error) {
     void _error;
   }
   try {
     const wmAny = (Services as any).wm?.getMostRecentWindow?.("") as any;
-    push("wm:any.Zotero.Tabs", wmAny?.Zotero?.Tabs);
-    push("wm:any.Zotero_Tabs", wmAny?.Zotero_Tabs);
+    push(wmAny?.Zotero?.Tabs);
+    push(wmAny?.Zotero_Tabs);
   } catch (_error) {
     void _error;
   }
 
   const globalAny = globalThis as any;
-  push("globalThis.Zotero_Tabs", globalAny.Zotero_Tabs);
-  push("globalThis.window.Zotero_Tabs", globalAny.window?.Zotero_Tabs);
+  push(globalAny.Zotero_Tabs);
+  push(globalAny.window?.Zotero_Tabs);
 
-  for (const candidate of candidates) {
-    if (isTabsState(candidate.value)) {
-      return { tabs: candidate.value, source: candidate.source };
-    }
-  }
-  return { tabs: null, source: "none" };
-}
-
-function getZoteroTabsState(): ZoteroTabsState | null {
-  return getZoteroTabsStateWithSource().tabs;
+  return candidates.find(isTabsState) || null;
 }
 
 /**
@@ -166,7 +149,7 @@ function getZoteroTabsState(): ZoteroTabsState | null {
  * getZoteroTabsState.  Returns true if a select() call was made.
  */
 export function selectZoteroTab(tabId: string | number): boolean {
-  const { tabs, source } = getZoteroTabsStateWithSource();
+  const tabs = getZoteroTabsState();
   if (!tabs) return false;
   const tabsAny = tabs as unknown as {
     select?: (id: string | number) => void;
@@ -174,10 +157,9 @@ export function selectZoteroTab(tabId: string | number): boolean {
   if (typeof tabsAny.select === "function") {
     try {
       tabsAny.select(tabId);
-      ztoolkit.log(`[LLM] selectZoteroTab: selected "${tabId}" via ${source}`);
       return true;
     } catch (err) {
-      ztoolkit.log(`[LLM] selectZoteroTab: error selecting "${tabId}" via ${source} — ${err}`);
+      ztoolkit.log(`[LLM] selectZoteroTab failed for "${tabId}"`, err);
     }
   }
   return false;
@@ -274,12 +256,6 @@ function isSupportedContextAttachment(
   );
 }
 
-function getContextItemLabel(item: Zotero.Item): string {
-  const title = sanitizeText(item.getField("title") || "").trim();
-  if (title) return title;
-  return `Attachment ${item.id}`;
-}
-
 function getFirstPdfChildAttachment(
   item: Zotero.Item | null | undefined,
 ): Zotero.Item | null {
@@ -299,22 +275,14 @@ export function resolveContextSourceItem(
 ): ResolvedContextSource {
   const activeItem = getActiveContextAttachmentFromTabs();
   if (activeItem) {
-    const label = getContextItemLabel(activeItem);
-    return {
-      contextItem: activeItem,
-      statusText: `Using context: ${label} (active tab)`,
-    };
+    return { contextItem: activeItem };
   }
 
   if (
     panelItem.isAttachment() &&
     panelItem.attachmentContentType === "application/pdf"
   ) {
-    const label = getContextItemLabel(panelItem);
-    return {
-      contextItem: panelItem,
-      statusText: `using the selected ${label} as context`,
-    };
+    return { contextItem: panelItem };
   }
 
   const parentItem =
@@ -323,30 +291,10 @@ export function resolveContextSourceItem(
       : panelItem;
   const firstPdfChild = getFirstPdfChildAttachment(parentItem);
   if (firstPdfChild && parentItem) {
-    const parentTitle =
-      sanitizeText(parentItem.getField("title") || "").trim() ||
-      `Item ${parentItem.id}`;
-    return {
-      contextItem: firstPdfChild,
-      statusText: `using first child item from ${parentTitle} as context`,
-    };
+    return { contextItem: firstPdfChild };
   }
 
-  const selectedTab = getZoteroTabsState();
-  const selectedId =
-    selectedTab?.selectedID === undefined || selectedTab?.selectedID === null
-      ? ""
-      : `${selectedTab.selectedID}`;
-  const activeTab = Array.isArray(selectedTab?._tabs)
-    ? selectedTab!._tabs!.find((tab) => `${tab?.id || ""}` === selectedId)
-    : null;
-  const dataKeys = activeTab?.data
-    ? Object.keys(activeTab.data).slice(0, 6)
-    : [];
-  return {
-    contextItem: null,
-    statusText: `No active tab PDF context (tab=${selectedTab?.selectedID ?? "?"}, type=${selectedTab?.selectedType ?? "?"}, tabType=${activeTab?.type ?? "?"}, dataKeys=${dataKeys.join("|") || "-"})`,
-  };
+  return { contextItem: null };
 }
 
 export function getItemSelectionCacheKeys(
@@ -440,14 +388,6 @@ export function getSelectedTextContextEntries(
   return normalizeSelectedTextContexts(raw);
 }
 
-export function setSelectedTextContexts(itemId: number, texts: string[]): void {
-  const normalized = texts
-    .map((text) => normalizeSelectedText(text))
-    .filter(Boolean)
-    .map((text) => ({ text, source: "pdf" as const }));
-  setSelectedTextContextEntries(itemId, normalized);
-}
-
 function normalizeSelectedTextPageLocation(
   location?: SelectedTextPageLocation | null,
 ): SelectedTextPageLocation | undefined {
@@ -520,72 +460,6 @@ export function setSelectedTextContextEntries(
     return;
   }
   selectedTextCache.set(itemId, normalized);
-}
-
-function areSelectedTextContextsEquivalent(
-  left: SelectedTextContext,
-  right: SelectedTextContext,
-): boolean {
-  const leftPaperKey = left.paperContext
-    ? `${left.paperContext.itemId}:${left.paperContext.contextItemId}`
-    : "";
-  const rightPaperKey = right.paperContext
-    ? `${right.paperContext.itemId}:${right.paperContext.contextItemId}`
-    : "";
-  return (
-    left.text === right.text &&
-    left.source === right.source &&
-    leftPaperKey === rightPaperKey &&
-    (left.contextItemId || 0) === (right.contextItemId || 0) &&
-    (left.pageIndex ?? -1) === (right.pageIndex ?? -1) &&
-    (left.pageLabel || "") === (right.pageLabel || "")
-  );
-}
-
-export function syncSelectedTextContextForSource(
-  itemId: number,
-  text: string,
-  source: SelectedTextSource,
-  options?: {
-    paperContext?: PaperContextRef | null;
-    location?: SelectedTextPageLocation | null;
-  },
-): boolean {
-  const normalizedSource = normalizeSelectedTextSource(source);
-  const existingContexts = getSelectedTextContextEntries(itemId);
-  const retainedContexts = existingContexts.filter(
-    (entry) => entry.source !== normalizedSource,
-  );
-  const normalizedText = normalizeSelectedText(text || "");
-  if (!normalizedText) {
-    if (retainedContexts.length === existingContexts.length) {
-      return false;
-    }
-    setSelectedTextContextEntries(itemId, retainedContexts);
-    selectedTextPreviewExpandedCache.delete(itemId);
-    return true;
-  }
-
-  const nextContext = buildSelectedTextContext(
-    normalizedText,
-    normalizedSource,
-    options?.paperContext,
-    options?.location,
-  );
-  const existingContext = existingContexts.find(
-    (entry) => entry.source === normalizedSource,
-  );
-  if (
-    existingContext &&
-    retainedContexts.length === existingContexts.length - 1 &&
-    areSelectedTextContextsEquivalent(existingContext, nextContext)
-  ) {
-    return false;
-  }
-
-  setSelectedTextContextEntries(itemId, [...retainedContexts, nextContext]);
-  selectedTextPreviewExpandedCache.delete(itemId);
-  return true;
 }
 
 export function appendSelectedTextContextForItem(
@@ -712,7 +586,6 @@ export function applySelectedTextPreview(body: Element, itemId: number) {
   if (!previewList) return;
 
   const selectedContexts = getSelectedTextContextEntries(itemId);
-  const panelRoot = body.querySelector("#llm-main") as HTMLDivElement | null;
   prunePinnedSelectedTextKeys(pinnedSelectedTextKeys, itemId, selectedContexts);
   if (!selectedContexts.length) {
     previewList.style.display = "none";

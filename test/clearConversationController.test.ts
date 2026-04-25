@@ -37,8 +37,8 @@ describe("clearConversationController", function () {
       resetConversationTitle: async (conversationKey) => {
         calls.push(`title:${conversationKey}`);
       },
-      clearOwnerAttachmentRefs: async (_ownerType, ownerKey) => {
-        calls.push(`refs:${ownerKey}`);
+      clearConversationAttachmentRefs: async (conversationKey) => {
+        calls.push(`refs:${conversationKey}`);
       },
       removeConversationAttachmentFiles: async (conversationKey) => {
         calls.push(`files:${conversationKey}`);
@@ -104,7 +104,7 @@ describe("clearConversationController", function () {
       resetConversationTitle: async () => {
         called = true;
       },
-      clearOwnerAttachmentRefs: async () => {
+      clearConversationAttachmentRefs: async () => {
         called = true;
       },
       removeConversationAttachmentFiles: async () => {

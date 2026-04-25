@@ -66,7 +66,6 @@ describe("leanPaperContextPlanner", function () {
       },
       {
         resolveContextSourceItem: () => ({
-          statusText: "Loading paper context",
           contextItem: { id: activePaper.contextItemId } as Zotero.Item,
         }),
         resolvePaperContextRefFromAttachment: () => activePaper,
@@ -137,7 +136,6 @@ describe("leanPaperContextPlanner", function () {
       },
       {
         resolveContextSourceItem: () => ({
-          statusText: "Loading paper context",
           contextItem: { id: activePaper.contextItemId } as Zotero.Item,
         }),
         resolvePaperContextRefFromAttachment: () => activePaper,
@@ -207,7 +205,6 @@ describe("leanPaperContextPlanner", function () {
       },
       {
         resolveContextSourceItem: () => ({
-          statusText: "Loading paper context",
           contextItem: null,
         }),
         resolvePaperContextRefFromAttachment: () => null,

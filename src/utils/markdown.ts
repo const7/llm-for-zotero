@@ -263,7 +263,6 @@ function hasBalancedInlineDelimiter(text: string, delimiter: string): boolean {
 /** Split text into independent blocks for isolated rendering */
 function splitIntoBlocks(text: string): TextBlock[] {
   const blocks: TextBlock[] = [];
-  const remaining = text;
 
   // First, extract fenced code blocks (they're atomic)
   const codeBlockRegex = /```(\w*)\n?([\s\S]*?)```/g;

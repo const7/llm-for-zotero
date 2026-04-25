@@ -13,7 +13,6 @@ import {
   getOpenAIReasoningProfileForModel,
   getQwenReasoningProfileForModel,
   getReasoningDefaultLevelForModel,
-  getRuntimeReasoningOptionsForModel,
   shouldUseDeepseekThinkingPayload,
   supportsReasoningForModel,
 } from "./reasoningProfiles";
@@ -21,14 +20,10 @@ import type {
   ReasoningProvider,
   ReasoningLevel,
   OpenAIReasoningEffort,
-  OpenAIReasoningProfile,
-  GeminiThinkingParam,
-  GeminiThinkingValue,
   GeminiReasoningOption,
   GeminiReasoningProfile,
   AnthropicReasoningProfile,
   QwenReasoningProfile,
-  RuntimeReasoningOption,
 } from "./reasoningProfiles";
 import {
   EMBEDDINGS_ENDPOINT,
@@ -54,7 +49,6 @@ import {
 } from "./modelProviders";
 import {
   detectProviderPreset,
-  getProviderPreset,
   isGrokApiBase,
   providerSupportsResponsesEndpoint,
 } from "./providerPresets";
@@ -118,8 +112,6 @@ export type ChatParams = {
   context?: string;
   history?: ChatMessage[];
   signal?: AbortSignal;
-  /** Base64 data URL of an image to include with the prompt (legacy single-image field) */
-  image?: string;
   /** Base64 data URLs to include with the prompt */
   images?: string[];
   /** Override model for this request */
@@ -247,8 +239,6 @@ function getApiConfig(overrides?: {
   const prefApiBase =
     defaultEntry?.apiBase ||
     defaultProviderGroup?.apiBase ||
-    getPref("apiBasePrimary") ||
-    getPref("apiBase") ||
     "";
   const resolvedApiBase =
     overrides?.apiBase ||
@@ -263,16 +253,10 @@ function getApiConfig(overrides?: {
     overrides?.apiKey ||
     defaultEntry?.apiKey ||
     defaultProviderGroup?.apiKey ||
-    getPref("apiKeyPrimary") ||
-    getPref("apiKey") ||
     ""
   ).trim();
-  const modelPrimary =
-    defaultEntry?.model ||
-    getPref("modelPrimary") ||
-    getPref("model") ||
-    DEFAULT_MODEL;
-  const model = (overrides?.model || modelPrimary).trim();
+  const defaultModel = defaultEntry?.model || DEFAULT_MODEL;
+  const model = (overrides?.model || defaultModel).trim();
   const embeddingModel = getPref("embeddingModel") || DEFAULT_EMBEDDING_MODEL;
   const customSystemPrompt = getPref("systemPrompt") || "";
   const storedProviderProtocol =
@@ -368,21 +352,6 @@ export function getResolvedEmbeddingConfig(): ResolvedEmbeddingConfig {
     cacheKey,
     attemptKey: `${cacheKey}:auth=${fingerprintEmbeddingSecret(apiKey)}`,
   };
-}
-
-/**
- * Returns the currently configured embedding model name.
- */
-export function getEmbeddingModelName(): string {
-  const explicit = (getPref("embeddingModel") || "").toString().trim();
-  if (explicit) return explicit as string;
-
-  try {
-    return getResolvedEmbeddingConfig().model;
-  } catch {
-    // No embedding provider configured
-  }
-  return DEFAULT_EMBEDDING_MODEL;
 }
 
 type IOUtilsLike = {
@@ -936,7 +905,7 @@ function isCopilotModelUsable(m: CopilotModelEntry): boolean {
   ) {
     return false;
   }
-  // Exclude internal/legacy duplicates (model_picker_enabled=false with no category)
+  // Exclude internal duplicate entries hidden from the model picker.
   if (m.model_picker_enabled === false && !m.model_picker_category) return false;
   // Exclude Codex IDE-only models that are not usable via the general API.
   if (typeof m.id === "string" && /-codex($|-)/i.test(m.id)) return false;
@@ -1022,8 +991,8 @@ export async function readLocalFileBytes(path: string): Promise<Uint8Array> {
       const data = await zoteroFile.getContentsAsync(normalizedPath);
       const bytes = coerceToBytes(data);
       if (bytes) return bytes;
-    } catch (err) {
-      ztoolkit.log("LLM: Zotero.File.getContentsAsync failed", err);
+    } catch {
+      // Try the next Zotero/local file API.
     }
   }
   if (zoteroFile?.getBinaryContentsAsync) {
@@ -1032,8 +1001,8 @@ export async function readLocalFileBytes(path: string): Promise<Uint8Array> {
       const data = await zoteroFile.getBinaryContentsAsync(normalizedPath);
       const bytes = coerceToBytes(data);
       if (bytes) return bytes;
-    } catch (err) {
-      ztoolkit.log("LLM: Zotero.File.getBinaryContentsAsync failed", err);
+    } catch {
+      // Try fetch(file://) below.
     }
   }
 
@@ -1045,13 +1014,8 @@ export async function readLocalFileBytes(path: string): Promise<Uint8Array> {
       if (res.ok) {
         return new Uint8Array(await res.arrayBuffer());
       }
-      ztoolkit.log(
-        "LLM: fetch(file://) returned non-OK status",
-        res.status,
-        res.statusText,
-      );
-    } catch (err) {
-      ztoolkit.log("LLM: fetch(file://) failed", err);
+    } catch {
+      // The final error lists every attempted local file reader.
     }
   }
 
@@ -1260,13 +1224,6 @@ async function uploadAttachmentForResponses(params: {
           "Content-Type": uploadRequest.contentType,
         }
       : headers;
-    if (uploadRequest.mode === "manual") {
-      ztoolkit.log(
-        "LLM: Uploading attachment via manual multipart fallback",
-        params.attachment.name,
-      );
-    }
-
     const res = await getFetch()(filesUrl, {
       method: "POST",
       headers: requestHeaders,
@@ -1365,10 +1322,6 @@ function buildMessages(
       }
     }
   }
-  if (typeof params.image === "string" && params.image.trim()) {
-    imageUrls.push(params.image.trim());
-  }
-
   // Build user message - with image(s) if provided (vision API format)
   if (imageUrls.length) {
     const contentParts: (TextContent | ImageContent)[] = [
@@ -1446,7 +1399,6 @@ function getReasoningReserveTokens(reasoning?: ReasoningConfig): number {
 export function estimateAvailableContextBudget(params: {
   prompt: string;
   history?: ChatMessage[];
-  image?: string;
   images?: string[];
   model: string;
   reasoning?: ReasoningConfig;
@@ -1469,7 +1421,6 @@ export function estimateAvailableContextBudget(params: {
     {
       prompt: params.prompt,
       history: params.history,
-      image: params.image,
       images: params.images,
     },
     params.systemPrompt
@@ -1665,7 +1616,7 @@ function resolveOpenAIReasoningEffort(
   provider: "openai" | "grok",
   level: ReasoningLevel,
   modelName?: string,
-  apiBase?: string,
+  _apiBase?: string,
 ): OpenAIReasoningEffort | null {
   const profile =
     provider === "grok"
@@ -2796,7 +2747,7 @@ async function callNativeProtocol(params: {
  */
 export async function callLLM(params: ChatParams): Promise<string> {
   const prepared = prepareChatRequest(params);
-  const { apiBase, apiKey, authMode, model, messages, inputCap, providerProtocol } = prepared;
+  const { apiBase, apiKey, authMode, model, messages, providerProtocol } = prepared;
   if (providerProtocol === "anthropic_messages" || providerProtocol === "gemini_native") {
     return callNativeProtocol({
       protocol: providerProtocol,
@@ -2823,16 +2774,6 @@ export async function callLLM(params: ChatParams): Promise<string> {
     apiKey,
     signal: params.signal,
   });
-  if (inputCap.capped) {
-    ztoolkit.log("LLM: Applied model-aware input cap", {
-      model,
-      beforeTokens: inputCap.estimatedBeforeTokens,
-      afterTokens: inputCap.estimatedAfterTokens,
-      capTokens: inputCap.limitTokens,
-      softCapTokens: inputCap.softLimitTokens,
-      effects: inputCap.effects,
-    });
-  }
   const useResponses = providerProtocol === "responses_api" || providerProtocol === "codex_responses";
   // Only upload files via /v1/files for providers that actually host that endpoint.
   // Third-party relays using responses_api get inline base64 instead (via buildResponsesInput).
@@ -2895,7 +2836,7 @@ export async function callLLMStream(
   onUsage?: (usage: UsageStats) => void,
 ): Promise<string> {
   const prepared = prepareChatRequest(params);
-  const { apiBase, apiKey, authMode, model, messages, inputCap, providerProtocol } = prepared;
+  const { apiBase, apiKey, authMode, model, messages, providerProtocol } = prepared;
   if (providerProtocol === "anthropic_messages" || providerProtocol === "gemini_native") {
     return callNativeProtocol({
       protocol: providerProtocol,
@@ -2912,16 +2853,6 @@ export async function callLLMStream(
     apiKey,
     signal: params.signal,
   });
-  if (inputCap.capped) {
-    ztoolkit.log("LLM: Applied model-aware input cap", {
-      model,
-      beforeTokens: inputCap.estimatedBeforeTokens,
-      afterTokens: inputCap.estimatedAfterTokens,
-      capTokens: inputCap.limitTokens,
-      softCapTokens: inputCap.softLimitTokens,
-      effects: inputCap.effects,
-    });
-  }
   if (authMode === "codex_auth" && Array.isArray(params.attachments) && params.attachments.length) {
     throw new Error(
       "codex auth currently does not support file attachments in this plugin v1.",

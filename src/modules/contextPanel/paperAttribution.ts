@@ -114,19 +114,6 @@ export function buildPaperQuoteCitationGuidance(
   ];
 }
 
-export function formatPaperContextReferenceLabel(
-  paperContext: PaperContextRef | null | undefined,
-): string {
-  if (!paperContext) return "Paper";
-  const citation = formatPaperCitationLabel(paperContext);
-  const attachmentTitle = normalizeText(paperContext.attachmentTitle || "");
-  const paperTitle = normalizeText(paperContext.title || "");
-  const parts = [citation];
-  if (paperTitle) parts.push(paperTitle);
-  if (attachmentTitle) parts.push(`Attachment: ${attachmentTitle}`);
-  return parts.join(" - ");
-}
-
 export function resolvePaperContextRefFromAttachment(
   contextItem: Zotero.Item | null | undefined,
 ): PaperContextRef | null {

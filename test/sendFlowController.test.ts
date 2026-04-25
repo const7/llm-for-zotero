@@ -31,16 +31,14 @@ describe("sendFlowController", function () {
     } as HTMLTextAreaElement;
     let draftValue = inputBox.value;
     let sendCalled = 0;
-    let editCalled = 0;
     let retainImageCalled = 0;
     let retainPaperStateCalled = 0;
     let consumePaperModeStateCalled = 0;
     let retainFileCalled = 0;
     let retainTextCalled = 0;
     let persistDraftInputCalls = 0;
-    let setActiveEditSessionCalls = 0;
     let lastSentQuestion = "";
-    let lastEditPdfUploadSystemMessages: string[] | undefined;
+    let lastPdfUploadSystemMessages: string[] | undefined;
     let resolvePdfPaperAttachmentsCalls = 0;
     let renderPdfPagesAsImagesCalls = 0;
     let uploadPdfForProviderCalls = 0;
@@ -90,19 +88,10 @@ describe("sendFlowController", function () {
       isImageContextUnsupportedModel: () => false,
       getSelectedReasoning: () => undefined,
       getAdvancedModelParams: () => undefined,
-      getActiveEditSession: () => null,
-      setActiveEditSession: () => {
-        setActiveEditSessionCalls += 1;
-      },
-      getLatestEditablePair: async () => null,
-      editLatestUserMessageAndRetry: async (opts: any) => {
-        editCalled += 1;
-        lastEditPdfUploadSystemMessages = opts.pdfUploadSystemMessages;
-        return "ok" as const;
-      },
       sendQuestion: async (opts: any) => {
         sendCalled += 1;
         lastSentQuestion = opts.question;
+        lastPdfUploadSystemMessages = opts.pdfUploadSystemMessages;
       },
       retainPinnedImageState: () => {
         retainImageCalled += 1;
@@ -140,14 +129,12 @@ describe("sendFlowController", function () {
       inputBox,
       getCounts: () => ({
         sendCalled,
-        editCalled,
         retainImageCalled,
         retainPaperStateCalled,
         consumePaperModeStateCalled,
         retainFileCalled,
         retainTextCalled,
         persistDraftInputCalls,
-        setActiveEditSessionCalls,
         resolvePdfPaperAttachmentsCalls,
         renderPdfPagesAsImagesCalls,
         uploadPdfForProviderCalls,
@@ -155,8 +142,8 @@ describe("sendFlowController", function () {
       getDraftValue: () => draftValue,
       getLastSend: () => ({
         lastSentQuestion,
+        lastPdfUploadSystemMessages,
       }),
-      getLastEditPdfUploadSystemMessages: () => lastEditPdfUploadSystemMessages,
     };
   }
 
@@ -167,7 +154,6 @@ describe("sendFlowController", function () {
 
     assert.equal(inputBox.value, "");
     assert.equal(counts.sendCalled, 1);
-    assert.equal(counts.editCalled, 0);
     assert.equal(counts.retainImageCalled, 1);
     assert.equal(counts.consumePaperModeStateCalled, 1);
     assert.equal(counts.retainPaperStateCalled, 1);
@@ -175,40 +161,8 @@ describe("sendFlowController", function () {
     assert.equal(counts.retainTextCalled, 1);
   });
 
-  it("uses retain-pinned callbacks for edit-latest flow", async function () {
-    const { controller, inputBox, getCounts } = createBaseDeps({
-      getActiveEditSession: () => ({
-        conversationKey: item.id,
-        userTimestamp: 10,
-        assistantTimestamp: 20,
-      }),
-      getLatestEditablePair: async () => ({
-        conversationKey: item.id,
-        pair: {
-          userMessage: { timestamp: 10 },
-          assistantMessage: { timestamp: 20, streaming: false },
-        },
-      }),
-    });
-    await controller.doSend();
-    const counts = getCounts();
-
-    assert.equal(inputBox.value, "");
-    assert.equal(counts.sendCalled, 0);
-    assert.equal(counts.editCalled, 1);
-    assert.equal(counts.retainImageCalled, 1);
-    assert.equal(counts.consumePaperModeStateCalled, 1);
-    assert.equal(counts.retainPaperStateCalled, 1);
-    assert.equal(counts.retainFileCalled, 1);
-    assert.equal(counts.retainTextCalled, 1);
-    assert.isAtLeast(counts.setActiveEditSessionCalls, 1);
-  });
-
-  it("passes provider-uploaded PDF context through latest-turn edit retries", async function () {
-    const {
-      controller,
-      getLastEditPdfUploadSystemMessages,
-    } = createBaseDeps({
+  it("passes provider-uploaded PDF context through normal sends", async function () {
+    const { controller, getLastSend } = createBaseDeps({
       getSelectedFiles: () => [],
       getFullTextPaperContexts: () => [],
       getPdfModePaperContexts: () => [selectedPaper],
@@ -227,65 +181,17 @@ describe("sendFlowController", function () {
         systemMessageContent: "uploaded pdf context",
         label: "Uploaded",
       }),
-      getActiveEditSession: () => ({
-        conversationKey: item.id,
-        userTimestamp: 10,
-        assistantTimestamp: 20,
-      }),
-      getLatestEditablePair: async () => ({
-        conversationKey: item.id,
-        pair: {
-          userMessage: { timestamp: 10 },
-          assistantMessage: { timestamp: 20, streaming: false },
-        },
-      }),
     });
 
     await controller.doSend();
 
-    assert.deepEqual(getLastEditPdfUploadSystemMessages(), [
+    assert.deepEqual(getLastSend().lastPdfUploadSystemMessages, [
       "uploaded pdf context",
     ]);
   });
 
   it("persists the cleared draft before preview sync in normal send flow", async function () {
     const { controller, inputBox, getCounts, getDraftValue } = createBaseDeps({
-      updatePaperPreviewPreservingScroll: () => {
-        inputBox.value = getDraftValue();
-      },
-      updateFilePreviewPreservingScroll: () => {
-        inputBox.value = getDraftValue();
-      },
-      updateImagePreviewPreservingScroll: () => {
-        inputBox.value = getDraftValue();
-      },
-      updateSelectedTextPreviewPreservingScroll: () => {
-        inputBox.value = getDraftValue();
-      },
-    });
-
-    await controller.doSend();
-    const counts = getCounts();
-
-    assert.equal(getDraftValue(), "");
-    assert.equal(inputBox.value, "");
-    assert.equal(counts.persistDraftInputCalls, 1);
-  });
-
-  it("persists the cleared draft before preview sync in edit flow", async function () {
-    const { controller, inputBox, getCounts, getDraftValue } = createBaseDeps({
-      getActiveEditSession: () => ({
-        conversationKey: item.id,
-        userTimestamp: 10,
-        assistantTimestamp: 20,
-      }),
-      getLatestEditablePair: async () => ({
-        conversationKey: item.id,
-        pair: {
-          userMessage: { timestamp: 10 },
-          assistantMessage: { timestamp: 20, streaming: false },
-        },
-      }),
       updatePaperPreviewPreservingScroll: () => {
         inputBox.value = getDraftValue();
       },

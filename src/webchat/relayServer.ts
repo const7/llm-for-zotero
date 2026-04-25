@@ -19,6 +19,7 @@
  *   POST /llm-for-zotero-lite/webchat/chat_history
  *   POST /llm-for-zotero-lite/webchat/update_chat_history
  *   POST /llm-for-zotero-lite/webchat/update_chat_url
+ *   POST /llm-for-zotero-lite/webchat/update_mode
  *   POST /llm-for-zotero-lite/webchat/load_chat
  */
 
@@ -157,8 +158,6 @@ export interface RelayState {
   }>;
   activeSessionId: string | null;
   pendingCommand: PendingCommand | null;
-  /** [webchat] Actual ChatGPT mode reported back by the extension. */
-  reported_mode: string | null;
   /** [webchat] Set by cancel button — polled separately so it works during active pipeline. */
   stopRequested: boolean;
   /** [webchat] Active target site: "chatgpt" | "deepseek". Set by the plugin when submitting queries. */
@@ -236,7 +235,6 @@ if (!Z._webchatRelay) {
       responses: [],
       activeSessionId: null,
       pendingCommand: null,
-      reported_mode: null,
       stopRequested: false,
       active_target: null,
     },
@@ -535,7 +533,6 @@ function resetState() {
   S().responses = [];
   S().activeSessionId = null;
   S().pendingCommand = null;
-  S().reported_mode = null;
   setScrapedTranscript(null);
 }
 
@@ -1231,11 +1228,8 @@ const UpdateChatUrlEndpoint = createEndpoint(["POST"], () => {
   return jsonReply({ ok: true });
 });
 
-// POST /update_mode — extension reports ChatGPT's actual thinking mode
-const UpdateModeEndpoint = createEndpoint(["POST"], (opts) => {
-  const body = parseBody(opts.data);
-  const mode = body.mode as string | undefined;
-  if (mode) S().reported_mode = mode;
+// POST /update_mode
+const UpdateModeEndpoint = createEndpoint(["POST"], () => {
   return jsonReply({ ok: true });
 });
 
@@ -1365,18 +1359,6 @@ export function relaySubmitQuery(opts: {
   return { ok: true, seq: S().query.seq };
 }
 
-/** Peek at the pending query without consuming it. */
-export function relayPollQuery(): {
-  status: RelayState["status"];
-  query: RelayState["query"] | null;
-} {
-  expireStaleClaimIfNeeded();
-  if (S().status === "pending") {
-    return { status: "pending", query: copyQueryState() };
-  }
-  return { status: S().status, query: null };
-}
-
 /** Claim the current pending query for an extension attempt. */
 export function relayClaimQuery(seq: number): {
   ok: boolean;
@@ -1402,68 +1384,6 @@ export function relayClaimQuery(seq: number): {
     ok: true,
     query: copyQueryState(),
   };
-}
-
-/** Advance the claimed query to the reported delivery phase. */
-export function relayAckQueryPhase(
-  seq: number,
-  phase: RelayQueryPhase,
-  attempt?: number,
-): { ok: boolean; reason?: string } {
-  expireStaleClaimIfNeeded();
-  if (seq !== S().active_seq) {
-    return { ok: false, reason: "seq_mismatch" };
-  }
-  if (typeof attempt === "number" && attempt !== S().active_attempt) {
-    return { ok: false, reason: "attempt_mismatch" };
-  }
-  if (phaseOrder(phase) < phaseOrder(S().query.phase)) {
-    return { ok: false, reason: "phase_regression" };
-  }
-
-  S().query.phase = phase;
-  if (
-    phase === "claimed" ||
-    phase === "prompt_applied" ||
-    phase === "submitted" ||
-    phase === "streaming"
-  ) {
-    S().running_since = Date.now();
-  }
-  if (phase === "submitted" && !S().run_state) {
-    S().run_state = "submitted";
-  }
-  if (phase === "submitted") {
-    S().turn_status = "submitted";
-  }
-  return { ok: true };
-}
-
-/** Release a claimed query back to pending before ChatGPT accepts it. */
-export function relayReleaseQuery(
-  seq: number,
-  attempt?: number,
-): { ok: boolean; reason?: string } {
-  if (seq !== S().active_seq) {
-    return { ok: false, reason: "seq_mismatch" };
-  }
-  if (typeof attempt === "number" && attempt !== S().active_attempt) {
-    return { ok: false, reason: "attempt_mismatch" };
-  }
-  if (!isPreSubmitPhase(S().query.phase)) {
-    return { ok: false, reason: "already_submitted" };
-  }
-
-  S().status = "pending";
-  S().query.phase = "pending";
-  S().active_seq = 0;
-  S().active_attempt = 0;
-  S().running_since = 0;
-  S().partial_text = null;
-  S().partial_thinking = null;
-  resetPerTurnTracking();
-
-  return { ok: true };
 }
 
 /** Poll for response directly from relay state (no HTTP). */
@@ -1668,19 +1588,9 @@ export function relayGetHistorySnapshot(): {
   };
 }
 
-/** Get the reported ChatGPT mode (set by extension via /update_mode). */
-export function relayGetReportedMode(): string | null {
-  return S().reported_mode;
-}
-
 /** Get the latest scraped transcript snapshot directly (no HTTP). */
 export function relayGetScrapedTranscriptSnapshot(): ScrapedTranscriptSnapshot | null {
   return cloneScrapedTranscriptSnapshot(getScrapedTranscript());
-}
-
-/** Get scraped messages directly (no HTTP). */
-export function relayGetScrapedMessages(): ScrapedChatMessage[] | null {
-  return relayGetScrapedTranscriptSnapshot()?.messages || null;
 }
 
 /** Test-only visibility into the relay state. */
@@ -1739,10 +1649,6 @@ export function registerWebChatRelay(): void {
   for (const [path, EndpointClass] of Object.entries(ENDPOINTS)) {
     Zotero.Server.Endpoints[path] = EndpointClass;
   }
-  const port = Zotero.Prefs.get("httpServer.port") || 23119;
-  ztoolkit.log(
-    `[webchat] Relay registered: ${Object.keys(ENDPOINTS).length} endpoints on port ${port}`,
-  );
 }
 
 /**

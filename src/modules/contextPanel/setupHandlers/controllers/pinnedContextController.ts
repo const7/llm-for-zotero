@@ -351,18 +351,6 @@ export function togglePinnedPaper(
   return true;
 }
 
-export function removePinnedPaper(
-  pinnedKeysByOwner: Map<number, Set<string>>,
-  ownerId: number,
-  paperContext: PaperContextRef,
-): void {
-  const key = buildPinnedPaperKey(paperContext);
-  if (!key) return;
-  const keys = getReadonlyPinnedKeySet(pinnedKeysByOwner, ownerId);
-  if (!keys?.size) return;
-  keys.delete(key);
-  cleanupPinnedOwnerIfEmpty(pinnedKeysByOwner, ownerId);
-}
 
 export function retainPinnedPapers(
   pinnedKeysByOwner: Map<number, Set<string>>,

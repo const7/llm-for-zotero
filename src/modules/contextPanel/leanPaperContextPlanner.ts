@@ -36,7 +36,6 @@ export type LeanPaperContextPlanParams = {
 
 export type LeanPaperContextPlanDeps = {
   resolveContextSourceItem: (item: Zotero.Item) => {
-    statusText: string;
     contextItem: Zotero.Item | null;
   };
   resolvePaperContextRefFromAttachment: (
@@ -138,8 +137,8 @@ function getCandidateTokenCost(candidate: PaperContextCandidate): number {
 function getCandidateRank(candidate: PaperContextCandidate): number {
   const hybrid = Number((candidate as { hybridScore?: unknown }).hybridScore);
   if (Number.isFinite(hybrid)) return hybrid;
-  const legacy = Number((candidate as { score?: unknown }).score);
-  if (Number.isFinite(legacy)) return legacy;
+  const score = Number((candidate as { score?: unknown }).score);
+  if (Number.isFinite(score)) return score;
   return 0;
 }
 
@@ -269,7 +268,7 @@ export async function buildLeanPaperContextPlanForRequest(
   deps: LeanPaperContextPlanDeps,
 ): Promise<LeanPaperContextPlan> {
   const contextSource = deps.resolveContextSourceItem(params.item);
-  params.setStatusSafely(contextSource.statusText, "sending");
+  params.setStatusSafely("Loading paper context...", "sending");
   const firstPaperTurn = !params.history?.length;
 
   const uploadedPdfContext = (params.pdfUploadSystemMessages || [])

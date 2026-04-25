@@ -58,8 +58,6 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
             ? item.id
             : 0
       : 0;
-  const hasPaperContext = basePaperItemId > 0;
-
   // Disable CSS scroll anchoring on the Zotero-provided panel body so that
   // Gecko doesn't fight with our programmatic scroll management.
   if (body instanceof (doc.defaultView?.HTMLElement || HTMLElement)) {
@@ -322,22 +320,7 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
     t("Select references"),
     t("Add papers from your library"),
   );
-  const slashPdfPageBtn = makeSlashItem(
-    "llm-slash-pdf-page-option",
-    t("Send current PDF page"),
-    t("Capture the visible page as an image"),
-  );
-  const slashPdfMultiplePagesBtn = makeSlashItem(
-    "llm-slash-pdf-multiple-pages-option",
-    t("Send multiple PDF pages"),
-    t("Select pages from the open PDF"),
-  );
-  slashList.append(
-    slashUploadBtn,
-    slashReferenceBtn,
-    slashPdfPageBtn,
-    slashPdfMultiplePagesBtn,
-  );
+  slashList.append(slashUploadBtn, slashReferenceBtn);
   slashMenu.append(slashList);
   // slashMenu is appended to composeArea below (after composeArea is created)
 
@@ -379,7 +362,7 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
   paperPreview.append(paperPreviewList);
   contextPreviews.appendChild(paperPreview);
 
-  // Image preview area (uploads, PDF page captures, MinerU figures)
+  // Image preview area (uploads and MinerU figures)
   const imagePreview = createElement(doc, "div", "llm-image-preview", {
     id: "llm-image-preview",
   });
@@ -606,11 +589,7 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
   const uploadSlot = createElement(doc, "div", "llm-action-slot");
   uploadSlot.append(uploadBtn, uploadInput);
 
-  const {
-    slot: modelDropdown,
-    button: modelBtn,
-    menu: modelMenu,
-  } = createActionDropdown(doc, {
+  const { slot: modelDropdown } = createActionDropdown(doc, {
     slotId: "llm-model-dropdown",
     slotClassName: "llm-model-dropdown",
     buttonId: "llm-model-toggle",
@@ -622,11 +601,7 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
     disabled: !hasItem,
   });
 
-  const {
-    slot: reasoningDropdown,
-    button: reasoningBtn,
-    menu: reasoningMenu,
-  } = createActionDropdown(doc, {
+  const { slot: reasoningDropdown } = createActionDropdown(doc, {
     slotId: "llm-reasoning-dropdown",
     slotClassName: "llm-reasoning-dropdown",
     buttonId: "llm-reasoning-toggle",

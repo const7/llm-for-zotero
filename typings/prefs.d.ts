@@ -7,23 +7,21 @@
 declare namespace _ZoteroTypes {
   interface Prefs {
     PluginPrefsMap: {
-      "enable": boolean;
-      "input": string;
-      "apiBase": string;
-      "apiKey": string;
-      "model": string;
       "modelProviderGroups": string;
       "modelProviderGroupsMigrationVersion": number;
       "lastUsedModelEntryId": string;
       "systemPrompt": string;
-      "temperaturePrimary": string;
-      "maxTokensPrimary": string;
-      "temperatureSecondary": string;
-      "maxTokensSecondary": string;
-      "temperatureTertiary": string;
-      "maxTokensTertiary": string;
-      "temperatureQuaternary": string;
-      "maxTokensQuaternary": string;
+      "lastUsedReasoningLevel": string;
+      "lastReasoningExpanded": boolean;
+      "panelFontScale": number;
+      "customShortcuts": string;
+      "shortcutOrder": string;
+      "enableSemanticSearch": boolean;
+      "embeddingProvider": string;
+      "embeddingApiBase": string;
+      "embeddingApiKey": string;
+      "embeddingModel": string;
+      "mineruEnabled": boolean;
       "locale": string;
     };
   }

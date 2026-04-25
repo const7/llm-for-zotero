@@ -25,7 +25,6 @@ import {
   scrollToExactQuoteInReader,
   splitQuoteAtEllipsis,
   stripBoundaryEllipsis,
-  warmPageTextCache,
 } from "./livePdfSelectionLocator";
 import { resolveConversationBaseItem } from "./portalScope";
 import { searchPaperCandidates } from "./paperSearch";
@@ -360,11 +359,7 @@ function getSelectedTextCount(message: Message | null | undefined): number {
           typeof entry === "string" && Boolean(entry.trim()),
       )
     : [];
-  if (selectedTexts.length) return selectedTexts.length;
-  return typeof message?.selectedText === "string" &&
-    message.selectedText.trim()
-    ? 1
-    : 0;
+  return selectedTexts.length;
 }
 
 function getFirstPdfAttachment(
@@ -1067,33 +1062,9 @@ function buildParagraphJumpSuccessStatus(pageLabel: string): string {
   return `Jumped to cited source (page ${pageLabel}, paragraph matched)`;
 }
 
-function logParagraphJumpFailure(params: {
-  contextItemId: number;
-  displayCitationLabel: string;
-  quoteText: string;
-  pageIndex: number;
-  pageLabel: string;
-  paragraphJump: ExactQuoteJumpResult;
-}): void {
-  ztoolkit.log("LLM citation paragraph jump failed", {
-    contextItemId: params.contextItemId,
-    citationLabel: params.displayCitationLabel,
-    quoteTextSample: sanitizeText(params.quoteText || "").slice(0, 240),
-    quoteTextLength: sanitizeText(params.quoteText || "").length,
-    pageIndex: params.pageIndex,
-    pageLabel: params.pageLabel,
-    expectedPageIndex: params.paragraphJump.expectedPageIndex,
-    reason: params.paragraphJump.reason,
-    queryUsed: params.paragraphJump.queryUsed,
-    queries: params.paragraphJump.queries,
-    debugSummary: params.paragraphJump.debugSummary,
-  });
-}
-
 async function attemptCitationParagraphJump(params: {
   reader: any;
   contextItemId: number;
-  displayCitationLabel: string;
   quoteText: string;
   pageIndex: number;
   pageLabel: string;
@@ -1104,14 +1075,6 @@ async function attemptCitationParagraphJump(params: {
     { expectedPageIndex: params.pageIndex },
   );
   if (!paragraphJump.matched) {
-    logParagraphJumpFailure({
-      contextItemId: params.contextItemId,
-      displayCitationLabel: params.displayCitationLabel,
-      quoteText: params.quoteText,
-      pageIndex: params.pageIndex,
-      pageLabel: params.pageLabel,
-      paragraphJump,
-    });
     // FindController did not navigate; fall back to coarse page-level jump + flash.
     const navigated = await navigateReaderToPage(
       params.reader,
@@ -1154,7 +1117,6 @@ function resolveJumpedPageLabel(
 async function navigateToCachedCitationPage(
   contextItemId: number,
   quoteText: string,
-  displayCitationLabel: string,
 ): Promise<CitationParagraphJumpNavigation | null> {
   const cacheKey = buildCitationCacheKey(contextItemId, quoteText);
   const cached = citationPageCache.get(cacheKey);
@@ -1174,7 +1136,6 @@ async function navigateToCachedCitationPage(
   const paragraphJump = await attemptCitationParagraphJump({
     reader,
     contextItemId,
-    displayCitationLabel,
     quoteText,
     pageIndex: targetPageIndex,
     pageLabel: targetPageLabel,
@@ -1320,20 +1281,6 @@ async function locateCitationPageWithPdfWorker(
   } finally {
     citationPageLookupTasks.delete(lookupKey);
   }
-}
-
-function sortCandidatesForActiveReader(
-  candidates: AssistantCitationPaperCandidate[],
-): AssistantCitationPaperCandidate[] {
-  const activeReaderItemId = getReaderItemId(getActiveReaderForSelectedTab());
-  if (!activeReaderItemId) return candidates.slice();
-  return candidates
-    .slice()
-    .sort(
-      (left, right) =>
-        Number(right.contextItemId === activeReaderItemId) -
-        Number(left.contextItemId === activeReaderItemId),
-    );
 }
 
 function updateCitationButtonPage(
@@ -1813,7 +1760,6 @@ async function resolveAndNavigateAssistantCitation(params: {
       const cached = await navigateToCachedCitationPage(
         candidate.contextItemId,
         normalizedQuoteText,
-        params.displayCitationLabel,
       );
       if (cached) {
         // Use FindController's actual page if it landed somewhere different
@@ -1870,7 +1816,6 @@ async function resolveAndNavigateAssistantCitation(params: {
           const paragraphJump = await attemptCitationParagraphJump({
             reader: target,
             contextItemId: bestRanked.contextItemId,
-            displayCitationLabel: params.displayCitationLabel,
             quoteText: normalizedQuoteText,
             pageIndex,
             pageLabel: explicitPageLabel,
@@ -1924,7 +1869,6 @@ async function resolveAndNavigateAssistantCitation(params: {
           const paragraphJump = await attemptCitationParagraphJump({
             reader: activeReader,
             contextItemId: getReaderItemId(activeReader),
-            displayCitationLabel: params.displayCitationLabel,
             quoteText: normalizedQuoteText,
             pageIndex,
             pageLabel,
@@ -1996,7 +1940,6 @@ async function resolveAndNavigateAssistantCitation(params: {
           const paragraphJump = await attemptCitationParagraphJump({
             reader,
             contextItemId: candidate.contextItemId,
-            displayCitationLabel: params.displayCitationLabel,
             quoteText: normalizedQuoteText,
             pageIndex,
             pageLabel,
@@ -2050,7 +1993,7 @@ async function resolveAndNavigateAssistantCitation(params: {
     // After any citation click, refresh all other citation buttons in the
     // panel so their page labels reflect the latest cache (which may have
     // been corrected by FindController during this click).
-    refreshAllCitationButtonPages(params.body, params.panelItem);
+    refreshAllCitationButtonPages(params.body);
   }
 }
 
@@ -2059,10 +2002,7 @@ async function resolveAndNavigateAssistantCitation(params: {
  * Buttons whose quote text already has a cache entry get the cached
  * (FindController-verified) page; others are left unchanged.
  */
-function refreshAllCitationButtonPages(
-  body: Element,
-  panelItem: Zotero.Item,
-): void {
+function refreshAllCitationButtonPages(body: Element): void {
   try {
     const doc = body.ownerDocument;
     if (!doc) return;
@@ -2334,10 +2274,6 @@ function decorateInlineCitationNodes(params: {
     }
   };
   walk(params.bubble);
-  ztoolkit.log(
-    "LLM citation decoration: inline text targets =",
-    targets.length,
-  );
 
   for (const textNode of targets) {
     const text = textNode.nodeValue || "";
@@ -2401,13 +2337,6 @@ export function decorateAssistantCitationLinks(params: {
   const ownerDoc = params.bubble.ownerDocument;
   if (!ownerDoc) return;
 
-  // Pre-warm the page text cache in the background so that when the user
-  // clicks a citation button the lookup is instant (pure in-memory search).
-  const activeReader = getActiveReaderForSelectedTab();
-  if (activeReader) {
-    void warmPageTextCache(activeReader);
-  }
-
   // Collect paper context candidates from the user message and panel item.
   // This list may be empty. Buttons are still created in that case; the click
   // handler dynamically resolves a fallback from the panel item.
@@ -2419,16 +2348,6 @@ export function decorateAssistantCitationLinks(params: {
   const blockquotes = Array.from(
     params.bubble.querySelectorAll("blockquote"),
   ) as Element[];
-  ztoolkit.log(
-    "LLM citation decoration: blockquotes found =",
-    blockquotes.length,
-    "candidates =",
-    candidates.length,
-    "bubble HTML length =",
-    String(params.bubble.innerHTML || "").length,
-    "bubble child count =",
-    params.bubble.childElementCount,
-  );
   for (const blockquote of blockquotes) {
     let quoteText = sanitizeText(blockquote.textContent || "").trim();
     if (!quoteText) continue;
@@ -2490,30 +2409,12 @@ export function decorateAssistantCitationLinks(params: {
     }
 
     if (!extractedCitation) {
-      if (!citationEl) {
-        ztoolkit.log(
-          "LLM citation decoration: no sibling citation and no inline tail citation for blockquote, text =",
-          (blockquote.textContent || "").slice(0, 80),
-        );
-      } else {
-        ztoolkit.log(
-          "LLM citation decoration: sibling text not a citation, text =",
-          JSON.stringify((citationEl.textContent || "").slice(0, 80)),
-        );
-      }
       continue;
     }
 
     if (!citationEl) {
-      ztoolkit.log(
-        "LLM citation decoration: citation parsed but no target element available",
-      );
       continue;
     }
-    ztoolkit.log(
-      "LLM citation decoration: creating button for",
-      extractedCitation.sourceLabel,
-    );
 
     // Try to match the citation label against known paper candidates.
     const matchingCandidates = resolveMatchingCandidatesForExtractedCitation(

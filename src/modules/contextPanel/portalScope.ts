@@ -98,13 +98,7 @@ export function getPaperPortalBaseItemID(item: unknown): number | null {
   return normalized || null;
 }
 
-export function getPaperPortalSessionVersion(item: unknown): number | null {
-  if (!isPaperPortalItem(item)) return null;
-  const normalized = normalizePositiveInt(item.__llmPaperPortalSessionVersion);
-  return normalized || null;
-}
-
-export function resolvePaperPortalBaseItem(
+function resolvePaperPortalBaseItem(
   item: Zotero.Item | null | undefined,
 ): Zotero.Item | null {
   const baseItemID = getPaperPortalBaseItemID(item);

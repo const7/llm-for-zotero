@@ -5,10 +5,10 @@ import type {
 import type { ReasoningLevel as LLMReasoningLevel } from "../../../../utils/llmClient";
 
 import {
-  isTextOnlyModel,
   resolveProviderCapabilities,
-  type PdfSupport,
-} from "../../../../providers";
+} from "../../../../providers/registry";
+import { isTextOnlyModel } from "../../../../providers/modelChecks";
+import type { PdfSupport } from "../../../../providers/types";
 
 export function isImageContextUnsupportedModel(modelName: string): boolean {
   return isTextOnlyModel(modelName);
@@ -28,11 +28,6 @@ export function getModelPdfSupport(
     authMode,
     apiBase,
   }).pdf;
-}
-
-export function getImageContextDisabledHint(modelName: string): string {
-  const label = modelName.trim() || "current model";
-  return `Image context is disabled for ${label}`;
 }
 
 export function getReasoningLevelDisplayLabel(

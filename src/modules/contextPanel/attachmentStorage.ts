@@ -16,7 +16,6 @@ type IOUtilsLike = {
     options?: { createAncestors?: boolean; ignoreExisting?: boolean },
   ) => Promise<void>;
   write?: (path: string, data: Uint8Array) => Promise<unknown>;
-  copy?: (sourcePath: string, destPath: string) => Promise<void>;
   remove?: (
     path: string,
     options?: { recursive?: boolean; ignoreAbsent?: boolean },
@@ -31,7 +30,6 @@ type OSFileLike = {
     options?: { from?: string; ignoreExisting?: boolean },
   ) => Promise<void>;
   writeAtomic?: (path: string, data: Uint8Array) => Promise<void>;
-  copy?: (sourcePath: string, destPath: string) => Promise<void>;
   remove?: (
     path: string,
     options?: { ignoreAbsent?: boolean },
@@ -84,7 +82,7 @@ function getBaseWritableDir(): string {
   );
 }
 
-export function getChatAttachmentsRootDir(): string {
+function getChatAttachmentsRootDir(): string {
   return joinLocalPath(getBaseWritableDir(), CHAT_ATTACHMENTS_DIR_NAME);
 }
 
@@ -272,15 +270,6 @@ function getConversationDir(conversationKey: number): string {
   return joinLocalPath(root, "chats", String(conversationKey));
 }
 
-function getConversationAttachmentPath(
-  conversationKey: number,
-  fileName: string,
-): string {
-  const dirPath = getConversationDir(conversationKey);
-  const safeName = sanitizeFileName(fileName);
-  return joinLocalPath(dirPath, safeName);
-}
-
 function getBlobDir(contentHash: string): string {
   const root = getChatAttachmentsRootDir();
   return joinLocalPath(root, "blobs", contentHash);
@@ -352,53 +341,6 @@ export async function persistAttachmentBlob(
     contentHash,
     sizeBytes: bytes.byteLength,
   };
-}
-
-export async function ensureAttachmentBlobFromPath(
-  sourcePath: string,
-  fileName: string,
-): Promise<{ storedPath: string; contentHash: string }> {
-  const normalizedSource = (sourcePath || "").trim();
-  if (!normalizedSource) {
-    throw new Error("Cannot import attachment from empty source path");
-  }
-  if (isManagedBlobPath(normalizedSource)) {
-    const contentHash = extractManagedBlobHash(normalizedSource);
-    if (contentHash) {
-      await ensureBlobTable();
-      await Zotero.DB.queryAsync(
-        `INSERT OR REPLACE INTO ${ATTACHMENT_BLOBS_TABLE} (hash, path, size_bytes, created_at)
-         VALUES (
-           ?,
-           ?,
-           COALESCE((SELECT size_bytes FROM ${ATTACHMENT_BLOBS_TABLE} WHERE hash = ?), 0),
-           COALESCE((SELECT created_at FROM ${ATTACHMENT_BLOBS_TABLE} WHERE hash = ?), ?)
-         )`,
-        [contentHash, normalizedSource, contentHash, contentHash, Date.now()],
-      );
-      return { storedPath: normalizedSource, contentHash };
-    }
-  }
-  const bytes = await readBytes(normalizedSource);
-  const persisted = await persistAttachmentBlob(fileName, bytes);
-  return {
-    storedPath: persisted.storedPath,
-    contentHash: persisted.contentHash,
-  };
-}
-
-export async function persistConversationAttachmentFile(
-  conversationKey: number,
-  fileName: string,
-  bytes: Uint8Array,
-): Promise<string> {
-  const dirPath = getConversationDir(conversationKey);
-  await ensureDir(dirPath);
-  // Conversation uploads use stable path by filename so re-uploading the same
-  // file name in the same chat overwrites instead of creating duplicates.
-  const targetPath = getConversationAttachmentPath(conversationKey, fileName);
-  await writeBytes(targetPath, bytes);
-  return targetPath;
 }
 
 export async function removeConversationAttachmentFiles(

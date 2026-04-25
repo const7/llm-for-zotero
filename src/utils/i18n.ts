@@ -24,10 +24,8 @@ const zhCN: Record<string, string> = {
   "Start a new chat": "开始新对话",
   "Conversation history": "对话历史",
   "Paper chat": "论文对话",
-  "Switch to paper chat": "切换到论文对话",
   "Settings": "设置",
   "Open plugin settings": "打开插件设置",
-  "Export": "导出",
   "Clear": "清除",
   "Rename": "重命名",
   "Rename chat": "重命名对话",
@@ -37,7 +35,6 @@ const zhCN: Record<string, string> = {
   "Delete conversation": "删除对话",
   "Delete this turn": "删除此轮对话",
   "Delete this prompt and response": "删除此提问和回答",
-  "Copy chat as md": "复制对话为 Markdown",
   "Question timeline": "问题导航",
   "Question": "问题",
   "Jump to question": "跳转到问题",
@@ -45,19 +42,6 @@ const zhCN: Record<string, string> = {
   "Add documents or images": "添加文档或图片",
   "Select references": "选择参考文献",
   "Add papers from your library": "从你的文献库添加论文",
-  "Send current PDF page": "发送当前 PDF 页面",
-  "Capture the visible page as an image": "将可见页面截图发送",
-  "Send multiple PDF pages": "发送多个 PDF 页面",
-  "Select pages from the open PDF": "选择打开 PDF 中的页面",
-  "Literature review": "文献综述",
-  "Launch a literature review workflow": "启动文献综述工作流",
-  "Edit the prompt and press Send to start your literature review.": "编辑提示词并按发送开始你的文献综述。",
-  "Please conduct a literature review on the following topic:\n\n[Enter your research topic here]\n\nPlease search my library, identify relevant papers, summarize key findings, and highlight research gaps.": "请对以下主题进行文献综述：\n\n[在此输入你的研究主题]\n\n请搜索我的文献库，找出相关论文，总结主要发现，并指出研究空白。",
-  "Capturing PDF pages...": "正在捕获 PDF 页面...",
-  "Enter page numbers or ranges (e.g. 1-5, 8, 12):": "输入页码或范围（例如 1-5, 8, 12）：",
-  "Select PDF pages": "选择 PDF 页面",
-  "Send current entire PDF": "发送当前整个 PDF",
-  "Add the open PDF file to context": "将打开的 PDF 文件添加到上下文",
   "Selected image preview": "已选图片预览",
   "Expand figures": "展开图片",
   "Clear selected images": "清除已选图片",
@@ -69,7 +53,6 @@ const zhCN: Record<string, string> = {
   "Reasoning": "推理",
   "Send": "发送",
   "Cancel": "取消",
-  "No active paper context. Use + to add context or @ to search papers.": "没有活跃的论文上下文。用 + 添加上下文，或用 @ 搜索论文。",
   "Ready": "就绪",
   "Select an item or open a PDF": "选择一个条目或打开 PDF",
 
@@ -77,8 +60,6 @@ const zhCN: Record<string, string> = {
   "No assistant text selected": "没有选中助手文本",
   "Copied response": "已复制回复",
   "No deletable turn found": "没有可删除的对话轮次",
-  "No chat history detected.": "未检测到对话历史。",
-  "Copied chat as md": "已复制对话为 Markdown",
   "Could not open plugin settings": "无法打开插件设置",
   "Could not focus this paper": "无法聚焦到此论文",
   "Failed to fully delete turn. Check logs.": "未能完全删除对话轮次，请查看日志。",
@@ -96,16 +77,11 @@ const zhCN: Record<string, string> = {
   "Cannot resolve active paper session": "无法解析当前论文会话",
   "Cannot delete active conversation right now": "当前无法删除活跃的对话",
   "Conversation deleted. Undo available.": "对话已删除。可撤销。",
-  "Wait for the current response to finish before starting a new chat": "请等待当前回复完成后再开始新对话",
-  "Failed to create conversation": "创建对话失败",
-  "Reused existing new conversation": "已复用现有新对话",
-  "Started new conversation": "已开始新对话",
   "Open a paper to start a paper chat": "打开一篇论文以开始论文对话",
   "No active paper for paper chat": "没有活跃的论文用于论文对话",
   "Failed to create paper chat": "创建论文对话失败",
   "Reused existing new chat": "已复用现有新对话",
   "Started new paper chat": "已开始新的论文对话",
-  "Wait for the current response to finish before switching modes": "请等待当前回复完成后再切换模式",
   "Conversation loaded": "对话已加载",
   "Paper already selected": "论文已选中",
   "File already selected": "文件已选中",
@@ -116,18 +92,7 @@ const zhCN: Record<string, string> = {
   "Selected text removed": "已移除选中文本",
   "Cancelled": "已取消",
   "Selection cancelled": "选择已取消",
-  "Capturing PDF page...": "正在截取 PDF 页面...",
-  "Loading PDF...": "正在加载 PDF...",
-  "No PDF page found — open a PDF in the reader first": "未找到 PDF 页面 — 请先在阅读器中打开 PDF",
-  "PDF page capture failed": "PDF 页面截取失败",
-  "Could not locate the PDF file": "无法找到 PDF 文件",
-  "Multiple PDFs found — select a specific PDF attachment": "找到多个 PDF — 请选择特定的 PDF 附件",
-  "No PDF found — open a PDF or select an item with a PDF attachment": "未找到 PDF — 请打开 PDF 或选择带有 PDF 附件的条目",
-  "PDF added to context": "PDF 已添加到上下文",
-  "Failed to load PDF": "加载 PDF 失败",
   "Type after @ to search papers.": "在 @ 后输入内容以搜索论文。",
-  "Paper mode only accepts text from this paper": "论文模式仅接受来自此论文的文本",
-  "Edit target changed. Please edit latest prompt again.": "编辑目标已更改。请重新编辑最新的提示。",
   "Deleted one turn": "已删除一轮对话",
   "No models configured yet.": "尚未配置模型。",
   "Select model": "选择模型",
@@ -156,35 +121,12 @@ const zhCN: Record<string, string> = {
   "Papers": "论文",
   "Primary": "主要",
   "Secondary": "次要",
-  "Tertiary": "第三",
-  "Quaternary": "第四",
 
-  // ── MinerU manager ──────────────────────────────────────────────────────
-  "My Library": "我的文献库",
-  "Unfiled Items": "未分类条目",
   "Title": "标题",
   "Author": "作者",
   "Year": "年份",
   "Added": "添加日期",
-  "Pause": "暂停",
-  "Start All": "全部开始",
-  "Start Folder": "开始此文件夹",
-  "Delete All Cache": "删除所有缓存",
-  "Delete Folder Cache": "删除文件夹缓存",
-  "Process This Item": "处理此条目",
-  "Show in File Manager": "在文件管理器中显示",
-  "Delete confirmation": "删除确认",
-  "Delete MinerU Cache": "删除 MinerU 缓存",
-  "Start Selected": "开始所选",
-  "Delete Cache": "删除缓存",
-  "Delete MinerU cache for": "删除 MinerU 缓存，共",
-  "selected item(s)?": "个所选条目？",
-  "item(s) in this folder?": "个此文件夹中的条目？",
-  "Delete all MinerU cached files? This cannot be undone.": "删除所有 MinerU 缓存文件？此操作无法撤销。",
-  "Manage Files": "管理文件",
-  "items failed": "个条目失败",
   "Failed": "失败",
-  "Auto-parse newly added items": "自动解析新加入文献",
   "Processing": "解析中",
 
   // ── Preferences page ───────────────────────────────────────────────────
@@ -196,17 +138,9 @@ const zhCN: Record<string, string> = {
   "Add custom instructions to the default system prompt (leave empty to use default only)": "在默认系统提示词基础上添加自定义指令（留空则仅使用默认）",
   "View default system prompt": "查看默认系统提示词",
   "MinerU PDF Parsing": "MinerU PDF 解析",
-  "Extract high-quality structured text from PDFs with preserved math formulas, tables, and figures. MinerU dramatically improves how the AI understands your papers.": "从 PDF 中提取高质量结构化文本，保留数学公式、表格和图片。MinerU 显著提升 AI 对论文的理解能力。",
-  "Enable MinerU PDF Parsing": "启用 MinerU PDF 解析",
-  "No API key needed to get started!": "无需 API 密钥即可开始使用！",
-  "You can parse up to 5 papers per day using the built-in community quota.": "使用内置社区配额，每天最多可解析 5 篇论文。",
-  "For unlimited parsing (2,000 pages/day), get your own free API key from": "如需无限解析（每天 2,000 页），请从以下网站获取免费 API 密钥：",
-  "and paste it below.": "并粘贴到下方。",
-  "API Key (Optional)": "API 密钥（可选）",
-  "Leave empty to use community quota (5/day)": "留空使用社区配额（5次/天）",
-  "With your own key: unlimited parsing, direct connection to mineru.net": "使用自己的密钥：无限解析，直连 mineru.net",
+  "Use existing MinerU cache as a structured paper-chat text source when available.": "可用时使用已有 MinerU 缓存作为结构化论文聊天文本源。",
+  "Prefer MinerU cache when available": "可用时优先使用 MinerU 缓存",
   "Test Connection": "测试连接",
-  "Enter an API key first": "请先输入 API 密钥",
   "Testing…": "测试中…",
   "✓ Connection successful": "✓ 连接成功",
   "Each provider has an auth mode, API URL, and one or more model variants.": "每个服务商有一个认证模式、API URL 和一个或多个模型变体。",
@@ -340,39 +274,6 @@ export function getWebChatWelcomeHtml(targetLabel?: string, targetDomain?: strin
           <li>Right-click a paper chip to toggle sending its <strong>full PDF</strong>. Purple = send, grey = skip.</li>
           <li>Attach image files or PDF pages when the model supports vision.</li>
           <li>Click the <strong>Exit</strong> button to leave WebChat mode and return to regular API mode.</li>
-        </ul>
-      </div>
-    </div>
-  `;
-}
-
-export function getWelcomeHtml(): string {
-  if (getEffectiveLocale().startsWith("zh")) {
-    return `
-      <div class="llm-welcome">
-        <div class="llm-welcome-icon">💬</div>
-        <div class="llm-welcome-text">
-          <div class="llm-welcome-title">开始对话 — 以下是你可以做的。</div>
-          <ul class="llm-welcome-list">
-            <li><strong>论文对话</strong>回答关于当前打开 PDF 的问题，并在第一次提问前自动预载当前论文上下文。</li>
-            <li>点击 <strong>+</strong> 打开添加菜单：附加文件、选择参考文献、发送当前 PDF 页面或发送整个 PDF。输入 <strong>@关键词</strong> 从文献库搜索论文作为上下文。</li>
-            <li>如果启用了 <strong>MinerU</strong>，插件会优先使用增强 Markdown 和图像信息；没有缓存时会自动回退到 PDF 文本。</li>
-            <li>内联添加上下文：在 PDF 阅读器中选择文本后点击 <strong>Add Text</strong>，或使用 <strong>@</strong> 添加论文上下文。右键点击论文标签可强制发送全文；再次右键点击切换回检索模式。</li>
-          </ul>
-        </div>
-      </div>
-    `;
-  }
-  return `
-    <div class="llm-welcome">
-      <div class="llm-welcome-icon">💬</div>
-      <div class="llm-welcome-text">
-        <div class="llm-welcome-title">Start chatting — here's what you can do.</div>
-        <ul class="llm-welcome-list">
-          <li><strong>Paper chat</strong> answers questions about the currently open PDF and preloads that paper before your first question.</li>
-          <li>Click <strong>+</strong> to attach files, select references, send the current PDF page, or send the entire PDF. Type <strong>@query</strong> to search your library for paper context.</li>
-          <li>If <strong>MinerU</strong> is enabled, the plugin prefers enhanced markdown and figure-aware context, then falls back to PDF text when no cache is available.</li>
-          <li>Add context inline: select text in the PDF reader and click <strong>Add Text</strong>, or use <strong>@</strong> for <strong>paper context</strong>. Right-click a paper chip to force sending its full text; right-click again to switch it back to retrieval mode.</li>
         </ul>
       </div>
     </div>

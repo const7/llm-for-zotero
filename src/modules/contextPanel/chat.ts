@@ -5,7 +5,6 @@ import {
 } from "../../utils/i18n";
 import {
   appendMessage as appendStoredMessage,
-  clearConversation as clearStoredConversation,
   loadConversation,
   pruneConversation,
   updateLatestUserMessage as updateStoredLatestUserMessage,
@@ -23,7 +22,6 @@ import {
   ReasoningEvent,
   ReasoningLevel as LLMReasoningLevel,
   UsageStats,
-  checkEmbeddingAvailability,
 } from "../../utils/llmClient";
 import { estimateConversationTokens } from "../../utils/modelInputCap";
 import type { ProviderProtocol } from "../../utils/providerProtocol";
@@ -34,25 +32,21 @@ import {
   formatFigureCountLabel,
   formatPaperCountLabel,
 } from "./constants";
-import { hasCachedMineruMd, getMineruItemDir } from "./mineruCache";
 import type {
   Message,
   ReasoningProviderKind,
   ReasoningOption,
-  ReasoningLevelSelection,
   AdvancedModelParams,
   ChatAttachment,
   SelectedTextContext,
   SelectedTextSource,
   PaperContextRef,
-  PaperContextSendMode,
   ContextAssemblyStrategy,
 } from "./types";
 import {
   chatHistory,
   loadedConversationKeys,
   loadingConversationTasks,
-  selectedModelCache,
   selectedReasoningCache,
   selectedImageCache,
   selectedFileAttachmentCache,
@@ -64,7 +58,6 @@ import {
   getAbortController,
   setAbortController,
   nextRequestId,
-  isRequestPending,
   setPendingRequestId,
   setResponseMenuTarget,
   setPromptMenuTarget,
@@ -105,7 +98,6 @@ import {
   getLastReasoningExpanded,
   getLastUsedReasoningLevel,
   getSelectedModelEntryForItem,
-  getBoolPref,
   getStringPref,
   setLastReasoningExpanded,
 } from "./prefHelpers";
@@ -113,7 +105,6 @@ import { resolveContextImages, buildImageResolver } from "./mineruImages";
 import {
   formatPaperCitationLabel,
   resolvePaperContextRefFromAttachment,
-  resolvePaperContextRefFromItem,
 } from "./paperAttribution";
 import {
   buildPaperKey,
@@ -125,7 +116,6 @@ import {
 import { buildLeanPaperContextPlanForRequest } from "./leanPaperContextPlanner";
 import { isTextOnlyModel } from "../../providers/modelChecks";
 import {
-  getActiveContextAttachmentFromTabs,
   resolveContextSourceItem,
   setSelectedTextContextEntries,
 } from "./contextResolution";
@@ -142,13 +132,9 @@ import {
   resolveChatRenderStartIndex,
 } from "./chatRenderWindow";
 import { toFileUrl } from "../../utils/pathFileUrl";
-import { replaceOwnerAttachmentRefs } from "../../utils/attachmentRefStore";
+import { replaceConversationAttachmentRefs } from "../../utils/attachmentRefStore";
 import { decorateAssistantCitationLinks } from "./assistantCitationLinks";
-import {
-  applyHistoryCompression,
-  scheduleLLMSummary,
-  clearConversationSummary,
-} from "./conversationSummaryCache";
+import { compressLongHistory } from "./historyCompression";
 import {
   hideQuestionTimeline,
   syncQuestionTimeline,
@@ -174,37 +160,6 @@ function appendReasoningPart(base: string | undefined, next?: string): string {
 
 function isReasoningExpandedByDefault(): boolean {
   return getLastReasoningExpanded();
-}
-
-function setHistoryControlsDisabled(body: Element, disabled: boolean): void {
-  const historyNewBtn = body.querySelector(
-    "#llm-history-new",
-  ) as HTMLButtonElement | null;
-  if (historyNewBtn) {
-    historyNewBtn.disabled = disabled;
-    historyNewBtn.setAttribute("aria-disabled", disabled ? "true" : "false");
-    if (disabled) {
-      historyNewBtn.setAttribute("aria-expanded", "false");
-    }
-  }
-  const historyToggleBtn = body.querySelector(
-    "#llm-history-toggle",
-  ) as HTMLButtonElement | null;
-  if (historyToggleBtn) {
-    historyToggleBtn.disabled = disabled;
-    historyToggleBtn.setAttribute("aria-disabled", disabled ? "true" : "false");
-    if (disabled) {
-      historyToggleBtn.setAttribute("aria-expanded", "false");
-    }
-  }
-  if (disabled) {
-    const historyMenu = body.querySelector(
-      "#llm-history-menu",
-    ) as HTMLDivElement | null;
-    if (historyMenu) {
-      historyMenu.style.display = "none";
-    }
-  }
 }
 
 function resolveMultimodalRetryHint(
@@ -272,10 +227,7 @@ function openStoredAttachmentFromMessage(attachment: ChatAttachment): boolean {
   return false;
 }
 
-function normalizeSelectedTexts(
-  selectedTexts: unknown,
-  legacySelectedText?: unknown,
-): string[] {
+function normalizeSelectedTexts(selectedTexts: unknown): string[] {
   const normalize = (value: unknown): string => {
     if (typeof value !== "string") return "";
     return sanitizeText(value).trim();
@@ -283,8 +235,7 @@ function normalizeSelectedTexts(
   if (Array.isArray(selectedTexts)) {
     return selectedTexts.map((value) => normalize(value)).filter(Boolean);
   }
-  const legacy = normalize(legacySelectedText);
-  return legacy ? [legacy] : [];
+  return [];
 }
 
 function normalizeSelectedTextPaperContextsByIndex(
@@ -349,31 +300,7 @@ function collectAttachmentHashesFromStoredMessages(
 }
 
 function getMessageSelectedTexts(message: Message): string[] {
-  return normalizeSelectedTexts(message.selectedTexts, message.selectedText);
-}
-
-/**
- * Renders user bubble content, detecting `/command` prefixes and showing them
- * as inline badges for visual consistency with the input compose area.
- */
-function renderUserBubbleContent(
-  bubble: HTMLElement,
-  text: string,
-  doc: Document,
-): void {
-  const match = text.match(/^\/(\S+)(\s[\s\S]*)?$/);
-  if (match) {
-    const badge = doc.createElement("span");
-    badge.className = "llm-command-badge";
-    badge.textContent = `/${match[1]}`;
-    bubble.appendChild(badge);
-    const rest = (match[2] || "").trim();
-    if (rest) {
-      bubble.appendChild(doc.createTextNode(` ${rest}`));
-    }
-  } else {
-    bubble.textContent = text;
-  }
+  return normalizeSelectedTexts(message.selectedTexts);
 }
 
 function getMessageSelectedTextExpandedIndex(
@@ -480,10 +407,6 @@ function getOrSeedSessionTokens(
   );
   sessionTokenTotals.set(conversationKey, estimated);
   return estimated;
-}
-
-export function resetSessionTokens(conversationKey: number): void {
-  sessionTokenTotals.delete(conversationKey);
 }
 
 /**
@@ -666,18 +589,6 @@ function scheduleFollowBottomStabilization(
   followBottomStabilizers.set(conversationKey, handle);
 }
 
-function applyChatScrollPolicy(
-  item: Zotero.Item,
-  chatBox: HTMLDivElement,
-): void {
-  const conversationKey = getConversationKey(item);
-  const snapshot =
-    chatScrollSnapshots.get(conversationKey) ||
-    buildChatScrollSnapshot(chatBox);
-  applyChatScrollSnapshot(chatBox, snapshot);
-  persistChatScrollSnapshotByKey(conversationKey, chatBox);
-}
-
 async function persistConversationMessage(
   conversationKey: number,
   message: StoredChatMessage,
@@ -691,8 +602,7 @@ async function persistConversationMessage(
     );
     const attachmentHashes =
       collectAttachmentHashesFromStoredMessages(storedMessages);
-    await replaceOwnerAttachmentRefs(
-      "conversation",
+    await replaceConversationAttachmentRefs(
       conversationKey,
       attachmentHashes,
     );
@@ -716,10 +626,7 @@ function toPanelMessage(message: StoredChatMessage): Message {
           Boolean(entry.name.trim()),
       )
     : undefined;
-  const selectedTexts = normalizeSelectedTexts(
-    message.selectedTexts,
-    message.selectedText,
-  );
+  const selectedTexts = normalizeSelectedTexts(message.selectedTexts);
   const selectedTextSources = normalizeSelectedTextSources(
     message.selectedTextSources,
     selectedTexts.length,
@@ -736,7 +643,6 @@ function toPanelMessage(message: StoredChatMessage): Message {
     role: message.role,
     text: message.text,
     timestamp: message.timestamp,
-    selectedText: selectedTexts[0] || message.selectedText,
     selectedTextExpanded: false,
     selectedTexts: selectedTexts.length ? selectedTexts : undefined,
     selectedTextSources: selectedTextSources.length
@@ -855,7 +761,7 @@ function formatDisplayModelName(
 export function getReasoningOptions(
   provider: ReasoningProviderKind,
   modelName: string,
-  apiBase?: string,
+  _apiBase?: string,
 ): ReasoningOption[] {
   if (provider === "unsupported") return [];
   return getRuntimeReasoningOptions(provider, modelName).map((option) => ({
@@ -995,7 +901,7 @@ function getPanelRequestUI(body: Element): PanelRequestUI {
 }
 
 function setRequestUIBusy(
-  body: Element,
+  _body: Element,
   ui: PanelRequestUI,
   conversationKey: number,
   statusText: string,
@@ -1125,8 +1031,6 @@ function resolveEffectiveRequestConfig(params: {
   const model = (
     params.model ||
     fallbackEntry?.model ||
-    getStringPref("modelPrimary") ||
-    getStringPref("model") ||
     "gpt-4o-mini"
   ).trim();
   const apiBase = (params.apiBase || fallbackEntry?.apiBase || "").trim();
@@ -1601,18 +1505,6 @@ function normalizeModelFileAttachments(
     }));
 }
 
-export type EditLatestTurnMarker = {
-  conversationKey: number;
-  userTimestamp: number;
-  assistantTimestamp: number;
-};
-
-export type EditLatestTurnResult =
-  | "ok"
-  | "missing"
-  | "stale"
-  | "persist-failed";
-
 function normalizeEditableAttachments(
   attachments?: ChatAttachment[],
 ): ChatAttachment[] {
@@ -1811,158 +1703,6 @@ function syncComposeContextForInlineEdit(
   activeContextPanelStateSync.get(body)?.();
 }
 
-export async function editLatestUserMessageAndRetry(
-  opts: import("./types").EditRetryOptions,
-): Promise<EditLatestTurnResult> {
-  const {
-    body,
-    item,
-    displayQuestion,
-    selectedTexts,
-    selectedTextSources,
-    selectedTextPaperContexts,
-    screenshotImages,
-    paperContexts,
-    fullTextPaperContexts,
-    attachments,
-    pdfUploadSystemMessages,
-    expected,
-    model,
-    apiBase,
-    apiKey,
-    reasoning,
-    advanced,
-  } = opts;
-  await ensureConversationLoaded(item);
-  const conversationKey = getConversationKey(item);
-  const history = chatHistory.get(conversationKey) || [];
-  const retryPair = findLatestRetryPair(history);
-  if (!retryPair) return "missing";
-  if (retryPair.assistantMessage.streaming) return "stale";
-  if (
-    expected &&
-    (expected.conversationKey !== conversationKey ||
-      retryPair.userMessage.timestamp !== expected.userTimestamp ||
-      retryPair.assistantMessage.timestamp !== expected.assistantTimestamp)
-  ) {
-    return "stale";
-  }
-
-  const selectedTextsForMessage = normalizeSelectedTexts(selectedTexts);
-  const selectedTextSourcesForMessage = normalizeSelectedTextSources(
-    selectedTextSources,
-    selectedTextsForMessage.length,
-  );
-  const selectedTextPaperContextsForMessage =
-    normalizeSelectedTextPaperContextsByIndex(
-      selectedTextPaperContexts,
-      selectedTextsForMessage.length,
-    );
-  const selectedTextForMessage = selectedTextsForMessage[0] || "";
-  const screenshotImagesForMessage = Array.isArray(screenshotImages)
-    ? screenshotImages
-        .filter((entry): entry is string => typeof entry === "string")
-        .map((entry) => entry.trim())
-        .filter(Boolean)
-        .slice(0, MAX_SELECTED_IMAGES)
-    : [];
-  const normalizedPaperContexts = normalizeEditablePaperContexts(paperContexts);
-  const normalizedFullTextPaperContexts =
-    normalizeEditableFullTextPaperContexts(fullTextPaperContexts);
-  const pdfExcludeKeys = derivePdfModePaperKeys(attachments, item);
-  const {
-    paperContexts: paperContextsForMessage,
-    fullTextPaperContexts: fullTextPaperContextsForMessage,
-  } = includeAutoLoadedPaperContext(
-    item,
-    normalizedPaperContexts,
-    normalizedFullTextPaperContexts,
-    pdfExcludeKeys.size > 0 ? pdfExcludeKeys : undefined,
-  );
-  const attachmentsForMessage = normalizeEditableAttachments(attachments);
-  const updatedTimestamp = Date.now();
-  const nextDisplayQuestion = sanitizeText(displayQuestion || "");
-
-  retryPair.userMessage.text = nextDisplayQuestion;
-  retryPair.userMessage.timestamp = updatedTimestamp;
-  retryPair.userMessage.selectedText = selectedTextForMessage || undefined;
-  retryPair.userMessage.selectedTextExpanded = false;
-  retryPair.userMessage.selectedTexts = selectedTextsForMessage.length
-    ? selectedTextsForMessage
-    : undefined;
-  retryPair.userMessage.selectedTextSources =
-    selectedTextSourcesForMessage.length
-      ? selectedTextSourcesForMessage
-      : undefined;
-  retryPair.userMessage.selectedTextPaperContexts =
-    selectedTextPaperContextsForMessage.some((entry) => Boolean(entry))
-      ? selectedTextPaperContextsForMessage
-      : undefined;
-  retryPair.userMessage.selectedTextExpandedIndex = -1;
-  retryPair.userMessage.screenshotImages = screenshotImagesForMessage.length
-    ? screenshotImagesForMessage
-    : undefined;
-  retryPair.userMessage.screenshotExpanded = false;
-  retryPair.userMessage.screenshotActiveIndex =
-    screenshotImagesForMessage.length ? 0 : undefined;
-  retryPair.userMessage.paperContexts = paperContextsForMessage.length
-    ? paperContextsForMessage
-    : undefined;
-  retryPair.userMessage.fullTextPaperContexts =
-    fullTextPaperContextsForMessage.length
-      ? fullTextPaperContextsForMessage
-      : undefined;
-  retryPair.userMessage.paperContextsExpanded = false;
-  retryPair.userMessage.attachments = attachmentsForMessage.length
-    ? attachmentsForMessage
-    : undefined;
-  retryPair.userMessage.attachmentsExpanded = false;
-  retryPair.userMessage.attachmentActiveIndex = undefined;
-
-  try {
-    await updateStoredLatestUserMessage(conversationKey, {
-      text: retryPair.userMessage.text,
-      timestamp: retryPair.userMessage.timestamp,
-      selectedText: retryPair.userMessage.selectedText,
-      selectedTexts: retryPair.userMessage.selectedTexts,
-      selectedTextSources: retryPair.userMessage.selectedTextSources,
-      selectedTextPaperContexts:
-        retryPair.userMessage.selectedTextPaperContexts,
-      screenshotImages: retryPair.userMessage.screenshotImages,
-      paperContexts: retryPair.userMessage.paperContexts,
-      fullTextPaperContexts: retryPair.userMessage.fullTextPaperContexts,
-      attachments: retryPair.userMessage.attachments,
-    });
-
-    const storedMessages = await loadConversation(
-      conversationKey,
-      PERSISTED_HISTORY_LIMIT,
-    );
-    const attachmentHashes =
-      collectAttachmentHashesFromStoredMessages(storedMessages);
-    await replaceOwnerAttachmentRefs(
-      "conversation",
-      conversationKey,
-      attachmentHashes,
-    );
-  } catch (err) {
-    ztoolkit.log("LLM: Failed to persist edited latest user message", err);
-    return "persist-failed";
-  }
-
-  await retryLatestAssistantResponse(
-    body,
-    item,
-    model,
-    apiBase,
-    apiKey,
-    reasoning,
-    advanced,
-    pdfUploadSystemMessages,
-  );
-  return "ok";
-}
-
 export async function retryLatestAssistantResponse(
   body: Element,
   item: Zotero.Item,
@@ -2094,7 +1834,6 @@ export async function retryLatestAssistantResponse(
     await updateStoredLatestUserMessage(conversationKey, {
       text: retryPair.userMessage.text,
       timestamp: retryPair.userMessage.timestamp,
-      selectedText: retryPair.userMessage.selectedText,
       selectedTexts: retryPair.userMessage.selectedTexts,
       selectedTextSources: retryPair.userMessage.selectedTextSources,
       selectedTextPaperContexts:
@@ -2278,7 +2017,6 @@ export async function editUserTurnAndRetry(opts: {
     body,
     item,
     userTimestamp,
-    assistantTimestamp,
     newText,
     selectedTexts,
     selectedTextSources,
@@ -2357,7 +2095,6 @@ export async function editUserTurnAndRetry(opts: {
       selectedTextPaperContexts,
       selectedTextsForMessage.length,
     );
-  const selectedTextForMessage = selectedTextsForMessage[0] || "";
   const screenshotImagesForMessage = Array.isArray(screenshotImages)
     ? screenshotImages
         .filter((entry): entry is string => typeof entry === "string")
@@ -2379,7 +2116,6 @@ export async function editUserTurnAndRetry(opts: {
     pdfExcludeKeysEdit.size > 0 ? pdfExcludeKeysEdit : undefined,
   );
   const attachmentsForMessage = normalizeEditableAttachments(attachments);
-  userMsg.selectedText = selectedTextForMessage || undefined;
   userMsg.selectedTextExpanded = false;
   userMsg.selectedTexts = selectedTextsForMessage.length
     ? selectedTextsForMessage
@@ -2418,7 +2154,6 @@ export async function editUserTurnAndRetry(opts: {
     await updateStoredLatestUserMessage(conversationKey, {
       text: userMsg.text,
       timestamp: userMsg.timestamp,
-      selectedText: userMsg.selectedText,
       selectedTexts: userMsg.selectedTexts,
       selectedTextSources: userMsg.selectedTextSources,
       selectedTextPaperContexts: userMsg.selectedTextPaperContexts,
@@ -2515,7 +2250,6 @@ export async function sendQuestion(
       selectedTextPaperContexts,
       selectedTextsForMessage.length,
     );
-  const selectedTextForMessage = selectedTextsForMessage[0] || "";
   const normalizedPaperContexts = normalizePaperContexts(paperContexts);
   const normalizedFullTextPaperContexts = normalizePaperContexts(
     fullTextPaperContexts,
@@ -2544,7 +2278,6 @@ export async function sendQuestion(
     role: "user",
     text: userMessageText,
     timestamp: Date.now(),
-    selectedText: selectedTextForMessage || undefined,
     selectedTextExpanded: false,
     selectedTexts: selectedTextsForMessage.length
       ? selectedTextsForMessage
@@ -2601,7 +2334,6 @@ export async function sendQuestion(
     role: "user",
     text: userMessage.text,
     timestamp: userMessage.timestamp,
-    selectedText: userMessage.selectedText,
     selectedTexts: userMessage.selectedTexts,
     selectedTextSources: userMessage.selectedTextSources,
     selectedTextPaperContexts: userMessage.selectedTextPaperContexts,
@@ -2764,9 +2496,7 @@ export async function sendQuestion(
 
   try {
     const rawLLMHistory = buildLLMHistoryMessages(historyForLLM);
-    // Apply auto-summary compression when the history grows long.
-    const llmHistory =
-      applyHistoryCompression(conversationKey, rawLLMHistory) ?? rawLLMHistory;
+    const llmHistory = compressLongHistory(rawLLMHistory);
     const recentPaperContexts = collectRecentPaperContexts(historyForLLM);
 
     // Create AbortController early so the signal is available during context
@@ -2803,7 +2533,6 @@ export async function sendQuestion(
     await updateStoredLatestUserMessage(conversationKey, {
       text: userMessage.text,
       timestamp: userMessage.timestamp,
-      selectedText: userMessage.selectedText,
       selectedTexts: userMessage.selectedTexts,
       selectedTextSources: userMessage.selectedTextSources,
       selectedTextPaperContexts: userMessage.selectedTextPaperContexts,
@@ -2911,14 +2640,6 @@ export async function sendQuestion(
     await waitForUiStep();
     void persistAssistantOnce();
 
-    // After the response is rendered, kick off background persistence and
-    // history summarization so the UI path stays interactive.
-    scheduleLLMSummary(conversationKey, rawLLMHistory, {
-      model: effectiveRequestConfig.model,
-      apiBase: effectiveRequestConfig.apiBase,
-      apiKey: effectiveRequestConfig.apiKey,
-      authMode: effectiveRequestConfig.authMode,
-    });
   } catch (err) {
     const isCancelled =
       getCancelledRequestId(conversationKey) >= thisRequestId ||
@@ -3209,7 +2930,6 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
       renderKey: JSON.stringify({
         text: msg.text,
         streaming: Boolean(msg.streaming),
-        selectedText: msg.selectedText || "",
         selectedTexts: msg.selectedTexts || [],
         selectedTextSources: msg.selectedTextSources || [],
         selectedTextPaperContexts: msg.selectedTextPaperContexts || [],
@@ -3302,7 +3022,6 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
     const msg = history[index];
     const isUser = msg.role === "user";
     const assistantPairMsg = history[index + 1];
-    const hasAssistantPair = isUser && assistantPairMsg?.role === "assistant";
     const canEditUserPrompt = canEditUserPromptTurn({
       isUser,
       hasItem: Boolean(item),
@@ -3378,7 +3097,7 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
         previewWrap.className = "llm-user-screenshots-preview";
         const previewImg = doc.createElement("img") as HTMLImageElement;
         previewImg.className = "llm-user-screenshots-preview-img";
-        previewImg.alt = "Screenshot preview";
+        previewImg.alt = "Image preview";
         previewWrap.appendChild(previewImg);
 
         const thumbButtons: HTMLButtonElement[] = [];
@@ -3386,12 +3105,12 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
           const thumbBtn = doc.createElement("button") as HTMLButtonElement;
           thumbBtn.type = "button";
           thumbBtn.className = "llm-user-screenshot-thumb";
-          thumbBtn.title = `Screenshot ${index + 1}`;
+          thumbBtn.title = `Image ${index + 1}`;
 
           const thumbImg = doc.createElement("img") as HTMLImageElement;
           thumbImg.className = "llm-user-screenshot-thumb-img";
           thumbImg.src = imageUrl;
-          thumbImg.alt = `Screenshot ${index + 1}`;
+          thumbImg.alt = `Image ${index + 1}`;
           thumbBtn.appendChild(thumbImg);
 
           const activateScreenshotThumb = (e: Event) => {
@@ -3830,7 +3549,7 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
           conversationKey,
         );
       } else {
-        renderUserBubbleContent(bubble, sanitizeText(msg.text || ""), doc);
+        bubble.textContent = sanitizeText(msg.text || "");
         if (canEditUserPrompt) {
           bubble.classList.add("llm-bubble-editable");
           bubble.addEventListener("click", (e: Event) => {
@@ -3928,17 +3647,6 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
           try {
             const pairedUserMessage =
               history[index - 1]?.role === "user" ? history[index - 1] : null;
-            ztoolkit.log(
-              "LLM: calling decorateAssistantCitationLinks",
-              "msgLen =",
-              msg.text.length,
-              "bubbleHTML =",
-              String(bubble.innerHTML || "").length,
-              "hasPairedUser =",
-              Boolean(pairedUserMessage),
-              "pairedPaperContexts =",
-              pairedUserMessage?.paperContexts?.length ?? "none",
-            );
             decorateAssistantCitationLinks({
               body,
               panelItem: item,

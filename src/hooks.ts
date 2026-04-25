@@ -8,7 +8,6 @@ import {
 } from "./modules/contextPanel";
 import { invalidatePaperSearchCache } from "./modules/contextPanel/paperSearch";
 import { initChatStore } from "./utils/chatStore";
-import { runLegacyMigrations } from "./utils/migrations";
 import { createZToolkit } from "./utils/ztoolkit";
 import { clearAllState, initFontScale } from "./modules/contextPanel/state";
 
@@ -18,12 +17,6 @@ async function onStartup() {
     Zotero.unlockPromise,
     Zotero.uiReadyPromise,
   ]);
-
-  try {
-    await runLegacyMigrations();
-  } catch (err) {
-    ztoolkit.log("LLM: Failed to run legacy migration", err);
-  }
 
   initLocale();
   initI18n();
@@ -41,8 +34,6 @@ async function onStartup() {
     Zotero.getMainWindows().map((win) => onMainWindowLoad(win)),
   );
 
-  // Mark initialized as true to confirm plugin loading status
-  // outside of the plugin (e.g. scaffold testing process)
   addon.data.initialized = true;
 }
 
@@ -69,7 +60,7 @@ function registerPrefsPane() {
   });
 }
 
-async function onMainWindowUnload(win: Window): Promise<void> {
+async function onMainWindowUnload(_win: Window): Promise<void> {
   ztoolkit.unregisterAll();
   addon.data.dialog?.window?.close();
 }
@@ -94,17 +85,13 @@ function onShutdown(): void {
   delete Zotero[addon.data.config.addonInstance];
 }
 
-/**
- * This function is just an example of dispatcher for Notify events.
- * Any operations should be placed in a function to keep this funcion clear.
- */
 let paperSearchInvalidateTimer: ReturnType<typeof setTimeout> | null = null;
 
 async function onNotify(
   event: string,
   type: string,
-  ids: Array<string | number>,
-  extraData: { [key: string]: any },
+  _ids: Array<string | number>,
+  _extraData: { [key: string]: any },
 ) {
   const shouldInvalidatePaperSearch =
     (type === "item" || type === "file") &&
@@ -124,12 +111,6 @@ async function onNotify(
   return;
 }
 
-/**
- * This function is just an example of dispatcher for Preference UI events.
- * Any operations should be placed in a function to keep this funcion clear.
- * @param type event type
- * @param data event data
- */
 async function onPrefsEvent(type: string, data: { [key: string]: any }) {
   switch (type) {
     case "load": {
@@ -145,10 +126,6 @@ async function onPrefsEvent(type: string, data: { [key: string]: any }) {
 function onDialogEvents(_type: string) {
   return;
 }
-
-// Add your hooks here. For element click, etc.
-// Keep in mind hooks only do dispatch. Don't add code that does real jobs in hooks.
-// Otherwise the code would be hard to read and maintain.
 
 export default {
   onStartup,

@@ -87,7 +87,7 @@ export type WebChatSendOptions = {
   sendPdf?: boolean;
   /** When true, force the next query into a fresh conversation. */
   forceNewChat?: boolean;
-  /** Screenshot images as base64 data URLs to attach. */
+  /** Context images as base64 data URLs to attach. */
   images?: string[];
   /** ChatGPT mode: "instant", "thinking_standard", or "thinking_extended". */
   chatgptMode?: string;
@@ -124,8 +124,6 @@ export async function sendWebChatQuestion(
     onAnswerSnapshot,
     onThinkingSnapshot,
   } = opts;
-
-  ztoolkit.log(`[webchat] sendWebChatQuestion: sendPdf=${sendPdf}`);
 
   // --- Resolve and read the current paper's PDF (only when explicitly requested) ---
   let pdfBase64: string | null = null;
