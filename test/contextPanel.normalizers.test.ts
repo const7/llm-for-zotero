@@ -26,10 +26,12 @@ describe("contextPanel normalizers", function () {
     assert.equal(normalizeSelectedTextSource("pdf"), "pdf");
     assert.equal(normalizeSelectedTextSource("other"), "pdf");
 
-    assert.deepEqual(
-      normalizeSelectedTextSources(["model", "pdf", "x"], 4),
-      ["model", "pdf", "pdf", "pdf"],
-    );
+    assert.deepEqual(normalizeSelectedTextSources(["model", "pdf", "x"], 4), [
+      "model",
+      "pdf",
+      "pdf",
+      "pdf",
+    ]);
     assert.deepEqual(normalizeSelectedTextSources(undefined, 2), [
       "pdf",
       "pdf",

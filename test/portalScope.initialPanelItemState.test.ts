@@ -3,9 +3,7 @@ import {
   isPaperPortalItem,
   resolveInitialPanelItemState,
 } from "../src/modules/contextPanel/portalScope";
-import {
-  activePaperConversationByPaper,
-} from "../src/modules/contextPanel/state";
+import { activePaperConversationByPaper } from "../src/modules/contextPanel/state";
 
 describe("portalScope resolveInitialPanelItemState", function () {
   const originalZotero = globalThis.Zotero;

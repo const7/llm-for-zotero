@@ -117,17 +117,14 @@ function htmlTableToMarkdown(tableHtml: string): string {
 
 function convertHtmlTablesToMarkdown(mdText: string): string {
   // Match <table>...</table> blocks (possibly spanning multiple lines)
-  return mdText.replace(
-    /<table[^>]*>[\s\S]*?<\/table>/gi,
-    (tableBlock) => {
-      try {
-        const md = htmlTableToMarkdown(tableBlock);
-        return md || tableBlock; // Keep original if conversion produces nothing
-      } catch {
-        return tableBlock; // Keep original on error
-      }
-    },
-  );
+  return mdText.replace(/<table[^>]*>[\s\S]*?<\/table>/gi, (tableBlock) => {
+    try {
+      const md = htmlTableToMarkdown(tableBlock);
+      return md || tableBlock; // Keep original if conversion produces nothing
+    } catch {
+      return tableBlock; // Keep original on error
+    }
+  });
 }
 
 async function cachePDFText(item: Zotero.Item) {
@@ -190,9 +187,17 @@ async function cachePDFText(item: Zotero.Item) {
         // Using pdfText (post-conversion) would misalign because convertHtmlTablesToMarkdown
         // changes character counts.
         const rawMd = cachedMd!;
-        const rawChunks = splitWithManifestSections(rawMd, manifest.sections, CHUNK_TARGET_LENGTH);
-        chunkMeta = buildChunkMetadataFromManifest(rawChunks, rawMd, manifest.sections);
-        chunks = rawChunks.map(chunk => convertHtmlTablesToMarkdown(chunk));
+        const rawChunks = splitWithManifestSections(
+          rawMd,
+          manifest.sections,
+          CHUNK_TARGET_LENGTH,
+        );
+        chunkMeta = buildChunkMetadataFromManifest(
+          rawChunks,
+          rawMd,
+          manifest.sections,
+        );
+        chunks = rawChunks.map((chunk) => convertHtmlTablesToMarkdown(chunk));
         // Update chunkMeta text fields to reflect converted content
         for (let i = 0; i < chunks.length; i++) {
           chunkMeta[i].text = chunks[i];
@@ -227,7 +232,6 @@ async function cachePDFText(item: Zotero.Item) {
         docFreq: {},
         avgChunkLength: 0,
         fullLength: 0,
-
       });
     }
   } catch {
@@ -239,7 +243,6 @@ async function cachePDFText(item: Zotero.Item) {
       docFreq: {},
       avgChunkLength: 0,
       fullLength: 0,
-
     });
   }
 }
@@ -262,7 +265,6 @@ export async function ensurePDFTextCached(item: Zotero.Item): Promise<void> {
   await task;
 }
 
-
 export function resetEmbeddingFailedFlags(): void {
   pdfTextCache.forEach((ctx) => {
     ctx.embeddingFailureKey = undefined;
@@ -271,10 +273,7 @@ export function resetEmbeddingFailedFlags(): void {
 
 // ── Markdown-aware chunking (MinerU only) ─────────────────────────────────────
 
-function splitMarkdownIntoChunks(
-  text: string,
-  targetLength: number,
-): string[] {
+function splitMarkdownIntoChunks(text: string, targetLength: number): string[] {
   if (!text) return [];
   const normalized = text.replace(/\r\n?/g, "\n").trim();
   if (!normalized) return [];
@@ -321,15 +320,16 @@ function splitMarkdownIntoChunks(
         if (!p) continue;
         if (p.length > targetLength) {
           // Oversized paragraph: flush and slice with sentence-aware overlap
-          if (subChunk.trim()) { chunks.push(subChunk.trim()); subChunk = ""; }
+          if (subChunk.trim()) {
+            chunks.push(subChunk.trim());
+            subChunk = "";
+          }
           let start = 0;
           while (start < p.length) {
             const prevStart = start;
             const rawEnd = Math.min(start + targetLength, p.length);
             const end =
-              rawEnd < p.length
-                ? findSentenceBoundary(p, rawEnd, 200)
-                : rawEnd;
+              rawEnd < p.length ? findSentenceBoundary(p, rawEnd, 200) : rawEnd;
             const slice = p.slice(start, end).trim();
             if (slice) chunks.push(slice);
             if (end >= p.length) break;
@@ -348,9 +348,7 @@ function splitMarkdownIntoChunks(
       if (subChunk.trim()) chunks.push(subChunk.trim());
     } else if (accumulator.length + section.length + 2 <= targetLength) {
       // Small enough to accumulate
-      accumulator = accumulator
-        ? `${accumulator}\n\n${section}`
-        : section;
+      accumulator = accumulator ? `${accumulator}\n\n${section}` : section;
     } else {
       // Would exceed budget — flush and start new
       flushAccumulator();
@@ -424,9 +422,7 @@ function splitIntoChunks(text: string, targetLength: number): string[] {
         const prevStart = start;
         const rawEnd = Math.min(start + targetLength, p.length);
         const end =
-          rawEnd < p.length
-            ? findSentenceBoundary(p, rawEnd, 200)
-            : rawEnd;
+          rawEnd < p.length ? findSentenceBoundary(p, rawEnd, 200) : rawEnd;
         const slice = p.slice(start, end).trim();
         if (slice) chunks.push(slice);
         if (end >= p.length) break;
@@ -513,11 +509,17 @@ function buildChunkMetadataFromManifest(
     const lower = heading.toLowerCase().trim();
     if (/^abstract/.test(lower)) return "abstract";
     if (/^introduction/.test(lower)) return "introduction";
-    if (/^method/.test(lower) || /^materials?\s+and\s+method/.test(lower) || /^experimental/.test(lower)) return "methods";
+    if (
+      /^method/.test(lower) ||
+      /^materials?\s+and\s+method/.test(lower) ||
+      /^experimental/.test(lower)
+    )
+      return "methods";
     if (/^results?/.test(lower)) return "results";
     if (/^discussion/.test(lower)) return "discussion";
     if (/^conclusion/.test(lower)) return "conclusion";
-    if (/^reference/.test(lower) || /^bibliography/.test(lower)) return "references";
+    if (/^reference/.test(lower) || /^bibliography/.test(lower))
+      return "references";
     if (/^appendix/.test(lower) || /^supplement/.test(lower)) return "appendix";
     if (/^fig(?:ure)?\.?\s*\d/i.test(lower)) return "figure-caption";
     if (/^table\s*\d/i.test(lower)) return "table-caption";
@@ -632,7 +634,10 @@ function sanitizePdfText(value: string): string {
 
 // ── Markdown heading detection (MinerU only) ─────────────────────────────────
 
-const MARKDOWN_HEADING_MAP: Record<string, { label: string; kind: PdfChunkKind }> = {
+const MARKDOWN_HEADING_MAP: Record<
+  string,
+  { label: string; kind: PdfChunkKind }
+> = {
   abstract: { label: "Abstract", kind: "abstract" },
   introduction: { label: "Introduction", kind: "introduction" },
   "related work": { label: "Related Work", kind: "introduction" },
@@ -671,11 +676,12 @@ function matchMarkdownSectionHeading(
     .slice(0, 3);
   for (const line of lines) {
     // Match: # Title, ## Title, ### Title (with optional numbering after #)
-    const md = line.match(
-      /^#{1,4}\s+(?:\d+(?:\.\d+)*\s*)?(.+?)\s*$/,
-    );
+    const md = line.match(/^#{1,4}\s+(?:\d+(?:\.\d+)*\s*)?(.+?)\s*$/);
     if (md) {
-      const heading = md[1].replace(/[:.;\-–—]+$/, "").trim().toLowerCase();
+      const heading = md[1]
+        .replace(/[:.;\-–—]+$/, "")
+        .trim()
+        .toLowerCase();
       const match = MARKDOWN_HEADING_MAP[heading];
       if (match) return match;
     }
@@ -773,7 +779,10 @@ function looksLikeTableCaption(text: string): boolean {
   return TABLE_CAPTION_PATTERN.test(sanitizePdfText(text));
 }
 
-function cleanLeadingEvidenceNoise(text: string, chunkKind: PdfChunkKind): {
+function cleanLeadingEvidenceNoise(
+  text: string,
+  chunkKind: PdfChunkKind,
+): {
   text: string;
   removedLeadingNoise: boolean;
 } {
@@ -784,17 +793,14 @@ function cleanLeadingEvidenceNoise(text: string, chunkKind: PdfChunkKind): {
   } else if (chunkKind === "table-caption") {
     cleaned = cleaned.replace(TABLE_CAPTION_PATTERN, "").trim();
   }
-  cleaned = cleaned.replace(/^[-–—:;,.()\[\]]+\s*/, "").trim();
+  cleaned = cleaned.replace(/^[-–—:;,.()[\]]+\s*/, "").trim();
   cleaned = cleaned.replace(/^(?:\d{1,3}\s+){1,3}(?=[A-Za-z])/u, "").trim();
-  cleaned = cleaned.replace(
-    /^(?:[a-z][a-z-]{1,24}\.)\s+(?=[A-Z])/u,
-    "",
-  );
+  cleaned = cleaned.replace(/^(?:[a-z][a-z-]{1,24}\.)\s+(?=[A-Z])/u, "");
   cleaned = cleaned.replace(
     /^(?:page|p)\s*\d{1,4}(?:\s+of\s+\d{1,4})?\s*/i,
     "",
   );
-  cleaned = cleaned.replace(/^[-–—:;,.()\[\]]+\s*/, "").trim();
+  cleaned = cleaned.replace(/^[-–—:;,.()[\]]+\s*/, "").trim();
   return {
     text: cleaned || original,
     removedLeadingNoise: Boolean(cleaned && cleaned !== original),
@@ -827,7 +833,10 @@ function resolveChunkKind(params: {
   if (sectionHeading?.kind) {
     return sectionHeading.kind;
   }
-  if (looksLikeReferenceEntry(normalizedText) || looksLikeCitationList(normalizedText)) {
+  if (
+    looksLikeReferenceEntry(normalizedText) ||
+    looksLikeCitationList(normalizedText)
+  ) {
     return "references";
   }
   if (looksLikeFigureCaption(chunkText)) {
@@ -849,9 +858,11 @@ export function buildChunkMetadata(
   const chunkMeta: PdfChunkMeta[] = [];
   let activeSection: SectionHeadingMatch | undefined;
   for (const [chunkIndex, chunkText] of chunks.entries()) {
-    const explicitSection = sourceType === "mineru"
-      ? (matchMarkdownSectionHeading(chunkText) || matchSectionHeading(chunkText))
-      : matchSectionHeading(chunkText);
+    const explicitSection =
+      sourceType === "mineru"
+        ? matchMarkdownSectionHeading(chunkText) ||
+          matchSectionHeading(chunkText)
+        : matchSectionHeading(chunkText);
     if (explicitSection) {
       activeSection = explicitSection;
     }
@@ -980,10 +991,7 @@ function cosineSimilarity(a: number[], b: number[]): number {
   return dot / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
-
-async function embedTexts(
-  texts: string[],
-): Promise<number[][]> {
+async function embedTexts(texts: string[]): Promise<number[][]> {
   const all: number[][] = [];
   for (let i = 0; i < texts.length; i += EMBEDDING_BATCH_SIZE) {
     const batch = texts.slice(i, i + EMBEDDING_BATCH_SIZE);
@@ -1043,7 +1051,12 @@ async function ensureEmbeddings(
     // Layer 2: Disk cache — check before calling the API
     if (itemId != null) {
       try {
-        const cached = await loadCachedEmbeddings(itemId, chunkHash, embeddingModel, providerKey);
+        const cached = await loadCachedEmbeddings(
+          itemId,
+          chunkHash,
+          embeddingModel,
+          providerKey,
+        );
         if (cached && cached.length === chunkCount) return cached;
       } catch {
         /* disk cache miss or read error — continue to API */
@@ -1074,9 +1087,14 @@ async function ensureEmbeddings(
     // Persist to disk cache in background (fire-and-forget)
     if (itemId != null && result.length > 0) {
       const dims = result[0].length;
-      saveCachedEmbeddings(itemId, chunkHash, embeddingModel, providerKey, dims, result).catch(
-        () => {},
-      );
+      saveCachedEmbeddings(
+        itemId,
+        chunkHash,
+        embeddingModel,
+        providerKey,
+        dims,
+        result,
+      ).catch(() => {});
     }
     return result.length === chunkCount;
   }
@@ -1238,9 +1256,7 @@ function detectQueryIntent(question: string): QueryIntent {
     )
   )
     return "comparative";
-  if (
-    /\b(?:cit(?:e|ation|ed)|refer(?:ence|red)|bibliograph)\b/i.test(question)
-  )
+  if (/\b(?:cit(?:e|ation|ed)|refer(?:ence|red)|bibliograph)\b/i.test(question))
     return "citation";
   if (
     /\b(?:how many|sample size|number of|percentage|ratio|count|statistic)\b/i.test(
@@ -1413,7 +1429,8 @@ export async function buildPaperRetrievalCandidates(
       try {
         const queryEmbedding =
           options?.precomputedQueryEmbedding ||
-          (await callEmbeddings([question]))[0] || [];
+          (await callEmbeddings([question]))[0] ||
+          [];
         if (queryEmbedding.length) {
           rawEmbeddingScores = pdfContext.embeddings.map((vec) =>
             cosineSimilarity(queryEmbedding, vec),
@@ -1438,7 +1455,9 @@ export async function buildPaperRetrievalCandidates(
 
   const scored = chunkStats.map((chunk, idx) => {
     const bm25Score = bm25Scores[idx] || 0;
-    const embeddingScore = rawEmbeddingScores ? rawEmbeddingScores[idx] || 0 : 0;
+    const embeddingScore = rawEmbeddingScores
+      ? rawEmbeddingScores[idx] || 0
+      : 0;
     const hybridScore = embedRank
       ? 1 / (RRF_K + bm25Rank[idx]) + 1 / (RRF_K + embedRank[idx])
       : 1 / (RRF_K + bm25Rank[idx]);
@@ -1550,7 +1569,9 @@ export function renderEvidencePack(params: {
       lines.push("", "Evidence:");
       for (const [candidateIndex, candidate] of paperCandidates.entries()) {
         lines.push(`Evidence snippet ${candidateIndex + 1}`);
-        lines.push(`Section: ${candidate.sectionLabel || "Unlabeled body text"}`);
+        lines.push(
+          `Section: ${candidate.sectionLabel || "Unlabeled body text"}`,
+        );
         lines.push(`Source label: ${formatPaperSourceLabel(paper)}`);
         lines.push("Quoted evidence:");
         lines.push(formatMarkdownBlockquote(buildEvidenceQuoteText(candidate)));

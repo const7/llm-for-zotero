@@ -1,6 +1,4 @@
-import {
-  PAPER_CONVERSATION_KEY_BASE,
-} from "./constants";
+import { PAPER_CONVERSATION_KEY_BASE } from "./constants";
 import { normalizePositiveInt } from "./normalizers";
 import {
   getLastUsedPaperConversationKey,
@@ -120,7 +118,6 @@ export function resolveConversationBaseItem(
   }
   return targetItem?.isRegularItem?.() ? targetItem : null;
 }
-
 
 function resolveLibraryIdFromItem(
   targetItem: Zotero.Item | null | undefined,

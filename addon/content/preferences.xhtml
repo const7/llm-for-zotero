@@ -41,7 +41,8 @@
             align-items: center;
             justify-content: center;
           "
-        >AI Providers</html:button>
+          >AI Providers</html:button
+        >
         <html:button
           data-pref-tab="customization"
           type="button"
@@ -59,7 +60,8 @@
             align-items: center;
             justify-content: center;
           "
-        >Customization</html:button>
+          >Customization</html:button
+        >
         <html:button
           data-pref-tab="mineru"
           type="button"
@@ -77,7 +79,8 @@
             align-items: center;
             justify-content: center;
           "
-        >MinerU</html:button>
+          >MinerU</html:button
+        >
       </html:div>
 
       <html:div
@@ -99,7 +102,13 @@
         <html:div style="display: flex; flex-direction: column; gap: 4px">
           <html:label
             for="__addonRef__-system-prompt"
-            style="display: block; font-weight: 600; font-size: 12px; color: var(--fill-primary, inherit); margin-bottom: 4px;"
+            style="
+              display: block;
+              font-weight: 600;
+              font-size: 12px;
+              color: var(--fill-primary, inherit);
+              margin-bottom: 4px;
+            "
           >
             Custom System Prompt (Optional)
           </html:label>
@@ -119,11 +128,26 @@
               color: FieldText;
             "
           ></html:textarea>
-          <html:span style="font-size: 11px; color: var(--fill-secondary, #888); margin-top: 3px; display: block;">
-            Add custom instructions to the default system prompt (leave empty to use default only)
+          <html:span
+            style="
+              font-size: 11px;
+              color: var(--fill-secondary, #888);
+              margin-top: 3px;
+              display: block;
+            "
+          >
+            Add custom instructions to the default system prompt (leave empty to
+            use default only)
           </html:span>
-          <html:details style="margin-top: 6px;">
-            <html:summary style="font-size: 11px; color: var(--fill-secondary, #888); cursor: pointer; user-select: none;">
+          <html:details style="margin-top: 6px">
+            <html:summary
+              style="
+                font-size: 11px;
+                color: var(--fill-secondary, #888);
+                cursor: pointer;
+                user-select: none;
+              "
+            >
               View default system prompt
             </html:summary>
             <html:pre
@@ -165,14 +189,21 @@
             ></html:input>
             Semantic Search
           </html:label>
-          <html:span style="font-size: 11px; color: var(--fill-secondary, #888); margin-top: 1px; display: block;">
-            Uses vector embeddings for meaning-aware search. When disabled,
-            only keyword matching (BM25) is used.
+          <html:span
+            style="
+              font-size: 11px;
+              color: var(--fill-secondary, #888);
+              margin-top: 1px;
+              display: block;
+            "
+          >
+            Uses vector embeddings for meaning-aware search. When disabled, only
+            keyword matching (BM25) is used.
           </html:span>
         </html:div>
         <html:div
           id="__addonRef__-semantic-search-sub-settings"
-          style="display: none; flex-direction: column; gap: 10px;"
+          style="display: none; flex-direction: column; gap: 10px"
         >
           <html:div id="__addonRef__-semantic-search-mount"></html:div>
         </html:div>
@@ -180,7 +211,13 @@
         <html:div style="display: flex; flex-direction: column; gap: 4px">
           <html:label
             for="__addonRef__-locale-select"
-            style="display: block; font-weight: 600; font-size: 12px; color: var(--fill-primary, inherit); margin-bottom: 2px;"
+            style="
+              display: block;
+              font-weight: 600;
+              font-size: 12px;
+              color: var(--fill-primary, inherit);
+              margin-bottom: 2px;
+            "
           >
             Language
           </html:label>
@@ -202,7 +239,12 @@
           </html:select>
           <html:span
             id="__addonRef__-locale-restart-hint"
-            style="font-size: 11px; color: #f59e0b; margin-top: 2px; display: none;"
+            style="
+              font-size: 11px;
+              color: #f59e0b;
+              margin-top: 2px;
+              display: none;
+            "
           >
             Restart Zotero to apply language change.
           </html:span>
@@ -215,12 +257,25 @@
         style="display: none; flex-direction: column; gap: 18px"
       >
         <html:div style="display: flex; flex-direction: column; gap: 8px">
-          <html:div style="display: flex; flex-direction: column; gap: 2px;">
-            <html:span style="font-size: 14px; font-weight: 800; color: var(--fill-primary, inherit);">
+          <html:div style="display: flex; flex-direction: column; gap: 2px">
+            <html:span
+              style="
+                font-size: 14px;
+                font-weight: 800;
+                color: var(--fill-primary, inherit);
+              "
+            >
               MinerU PDF Parsing
             </html:span>
-            <html:span style="font-size: 11.5px; color: var(--fill-secondary, #888); line-height: 1.5;">
-              Use existing MinerU cache as a structured paper-chat text source when available.
+            <html:span
+              style="
+                font-size: 11.5px;
+                color: var(--fill-secondary, #888);
+                line-height: 1.5;
+              "
+            >
+              Use existing MinerU cache as a structured paper-chat text source
+              when available.
             </html:span>
           </html:div>
 

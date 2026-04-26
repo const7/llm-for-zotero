@@ -105,10 +105,7 @@ async function readFileBytes(path: string): Promise<Uint8Array | null> {
   return null;
 }
 
-async function writeFileBytes(
-  path: string,
-  bytes: Uint8Array,
-): Promise<void> {
+async function writeFileBytes(path: string, bytes: Uint8Array): Promise<void> {
   const io = getIOUtils();
   if (io?.write) {
     await io.write(path, bytes);

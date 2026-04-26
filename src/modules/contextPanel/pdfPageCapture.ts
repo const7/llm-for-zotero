@@ -5,7 +5,6 @@ import {
   selectZoteroTab,
 } from "./contextResolution";
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function unwrapWrappedJsObject<T>(value: T): T {
   if (!value || (typeof value !== "object" && typeof value !== "function")) {
     return value;
@@ -48,7 +47,6 @@ function resolveRenderablePdfPage(value: unknown): RenderablePdfPage | null {
   return null;
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function getPdfViewerApplication(reader: any): any | null {
   const candidates = [
     reader?._internalReader?._lastView,
@@ -76,7 +74,6 @@ function getPdfViewerApplication(reader: any): any | null {
   return null;
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function getReaderDocument(reader: any): Document | null {
   return (
     reader?._iframeWindow?.document ||
@@ -89,10 +86,10 @@ function getReaderDocument(reader: any): Document | null {
 function isCanvasElement(value: unknown): value is HTMLCanvasElement {
   return Boolean(
     value &&
-      typeof value === "object" &&
-      typeof (value as { getContext?: unknown }).getContext === "function" &&
-      ((value as { nodeName?: unknown }).nodeName === "CANVAS" ||
-        (value as { tagName?: unknown }).tagName === "CANVAS"),
+    typeof value === "object" &&
+    typeof (value as { getContext?: unknown }).getContext === "function" &&
+    ((value as { nodeName?: unknown }).nodeName === "CANVAS" ||
+      (value as { tagName?: unknown }).tagName === "CANVAS"),
   );
 }
 
@@ -111,8 +108,10 @@ function pickLargestCanvas(
   return best;
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function getPageViewCanvas(app: any, pageIndex: number): HTMLCanvasElement | null {
+function getPageViewCanvas(
+  app: any,
+  pageIndex: number,
+): HTMLCanvasElement | null {
   const pageView = unwrapWrappedJsObject(
     app?.pdfViewer?.getPageView?.(pageIndex) ||
       app?.pdfViewer?._pages?.[pageIndex] ||
@@ -123,7 +122,9 @@ function getPageViewCanvas(app: any, pageIndex: number): HTMLCanvasElement | nul
   if (isCanvasElement(directCanvas)) return directCanvas;
   if (pageView.div) {
     return pickLargestCanvas(
-      Array.from(pageView.div.querySelectorAll("canvas")) as HTMLCanvasElement[],
+      Array.from(
+        pageView.div.querySelectorAll("canvas"),
+      ) as HTMLCanvasElement[],
     );
   }
   return null;
@@ -147,9 +148,8 @@ function findRenderedPageCanvas(
 }
 
 async function waitForRenderedPageCanvas(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   app: any,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
   reader: any,
   pageNumber: number,
   timeoutMs = 1800,
@@ -171,7 +171,7 @@ async function waitForRenderedPageCanvas(
 /**
  * Navigates the reader to a specific page index (0-based).
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+
 async function navigateReaderToPage(
   reader: any,
   pageIndex: number,
@@ -197,13 +197,11 @@ async function navigateReaderToPage(
   }
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function getReaderItemId(reader: any): number {
   const raw = Number(reader?._item?.id || reader?.itemID || 0);
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 0;
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function waitForReaderForItem(targetItemId: number): Promise<any | null> {
   const normalizedTargetItemId = Math.floor(targetItemId);
   const startedAt = Date.now();
@@ -217,7 +215,6 @@ async function waitForReaderForItem(targetItemId: number): Promise<any | null> {
   return null;
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function openReaderForItem(
   targetItemId: number,
   location?: { pageIndex: number; pageLabel?: string },
@@ -273,8 +270,10 @@ function restoreNonReaderTab(savedTabId: string | number | null): void {
   setTimeout(doRestore, 3000);
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function waitForPdfDocument(reader: any, timeoutMs = 2200): Promise<any | null> {
+async function waitForPdfDocument(
+  reader: any,
+  timeoutMs = 2200,
+): Promise<any | null> {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
     const app = getPdfViewerApplication(reader);
@@ -284,7 +283,6 @@ async function waitForPdfDocument(reader: any, timeoutMs = 2200): Promise<any | 
   return null;
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function captureRenderedReaderPage(
   app: any,
   reader: any,
@@ -304,7 +302,9 @@ async function captureRenderedReaderPage(
     const tempCanvas = doc.createElement("canvas") as HTMLCanvasElement;
     tempCanvas.width = Math.max(1, sourceCanvas.width);
     tempCanvas.height = Math.max(1, sourceCanvas.height);
-    const context = tempCanvas.getContext("2d") as CanvasRenderingContext2D | null;
+    const context = tempCanvas.getContext(
+      "2d",
+    ) as CanvasRenderingContext2D | null;
     if (!context) return null;
     context.drawImage(sourceCanvas, 0, 0);
     return canvasToBytes(tempCanvas);
@@ -347,11 +347,15 @@ export async function renderAllPdfPages(
       throw new Error("Could not load PDF document");
     }
     const pdfDocument = unwrapWrappedJsObject(
-      app.pdfDocument as { numPages?: number; getPage?: (n: number) => Promise<unknown> },
+      app.pdfDocument as {
+        numPages?: number;
+        getPage?: (n: number) => Promise<unknown>;
+      },
     );
     const rawCount = Number(
       pdfDocument?.numPages ??
-        (app as { pdfDocument?: { numPages?: number } })?.pdfDocument?.numPages ??
+        (app as { pdfDocument?: { numPages?: number } })?.pdfDocument
+          ?.numPages ??
         0,
     );
     const numPages = Math.min(
@@ -369,17 +373,22 @@ export async function renderAllPdfPages(
       await navigateReaderToPage(reader, i, `${i + 1}`);
       let bytes = await captureRenderedReaderPage(app, reader, i);
       if (!bytes) {
-        const canvasDoc = getReaderDocument(reader) || Zotero.getMainWindow?.()?.document;
+        const canvasDoc =
+          getReaderDocument(reader) || Zotero.getMainWindow?.()?.document;
         if (canvasDoc && typeof pdfDocument?.getPage === "function") {
           const pdfPage = resolveRenderablePdfPage(
             await pdfDocument.getPage(i + 1),
           );
           if (pdfPage) {
             const viewport = pdfPage.getViewport({ scale: 1.8 });
-            const canvas = canvasDoc.createElement("canvas") as HTMLCanvasElement;
+            const canvas = canvasDoc.createElement(
+              "canvas",
+            ) as HTMLCanvasElement;
             canvas.width = Math.max(1, Math.ceil(viewport.width));
             canvas.height = Math.max(1, Math.ceil(viewport.height));
-            const context = canvas.getContext("2d") as CanvasRenderingContext2D | null;
+            const context = canvas.getContext(
+              "2d",
+            ) as CanvasRenderingContext2D | null;
             if (context) {
               const renderTask = pdfPage.render({
                 canvasContext: context,

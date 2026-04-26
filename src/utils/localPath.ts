@@ -75,6 +75,26 @@ function decodeFileUrlSegments(pathname: string): string[] {
     .map((segment) => decodeURIComponent(segment));
 }
 
+function parseUncFileUrl(raw: string): string | undefined {
+  const match = raw.match(/^file:\/\/([^/?#]+)(\/[^?#]*)?(?:[?#].*)?$/i);
+  if (!match) return undefined;
+
+  const host = match[1];
+  if (!host || host.toLowerCase() === "localhost" || /^[A-Za-z]:$/.test(host)) {
+    return undefined;
+  }
+
+  const [share, ...segments] = decodeFileUrlSegments(match[2] || "");
+  if (!share) return undefined;
+
+  return formatLocalPath({
+    kind: "unc",
+    host,
+    share,
+    segments,
+  });
+}
+
 export function joinLocalPath(...parts: string[]): string {
   const filtered = parts.filter((part) => Boolean(part));
   if (!filtered.length) return "";
@@ -147,6 +167,9 @@ export function fileUrlToPath(url: string | undefined): string | undefined {
   const raw = (url || "").trim();
   if (!raw) return undefined;
   if (!/^file:\/\//i.test(raw)) return undefined;
+
+  const uncPath = parseUncFileUrl(raw);
+  if (uncPath) return uncPath;
 
   try {
     const parsed = new URL(raw);

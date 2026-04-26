@@ -18,9 +18,7 @@ describe("assistantCitationLinks", function () {
   });
 
   it("extracts a paper source label from a citation line", function () {
-    const extracted = extractPaperSourceLabel(
-      " (Smith et al., 2024) ",
-    );
+    const extracted = extractPaperSourceLabel(" (Smith et al., 2024) ");
 
     assert.deepInclude(extracted, {
       sourceLabel: "(Smith et al., 2024)",

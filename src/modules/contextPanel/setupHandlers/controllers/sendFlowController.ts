@@ -161,7 +161,7 @@ export function createSendFlowController(deps: SendFlowControllerDeps): {
     );
     let pdfFileAttachments: ChatAttachment[] = [];
     let pdfPageImageDataUrls: string[] = [];
-    let pdfUploadSystemMessages: string[] = [];
+    const pdfUploadSystemMessages: string[] = [];
     if (pdfModePaperContexts.length && !isWebChat) {
       const pdfSupport = deps.getModelPdfSupport(
         activeModelName,

@@ -36,7 +36,9 @@ const questionTimelineOptions = new WeakMap<
 function getQuestionTimelineTooltip(timeline: HTMLElement): HTMLElement | null {
   const doc = timeline.ownerDocument;
   if (!doc) return null;
-  return doc.getElementById("llm-question-timeline-tooltip") as HTMLElement | null;
+  return doc.getElementById(
+    "llm-question-timeline-tooltip",
+  ) as HTMLElement | null;
 }
 
 function hideQuestionTimelineTooltip(timeline: HTMLElement): void {
@@ -104,7 +106,9 @@ function getQuestionTimelineSignature(
   entries: QuestionTimelineEntry[],
 ): string {
   return `${conversationKey}|${entries
-    .map((entry) => `${entry.messageIndex}:${entry.timestamp}:${entry.fullText}`)
+    .map(
+      (entry) => `${entry.messageIndex}:${entry.timestamp}:${entry.fullText}`,
+    )
     .join("|")}`;
 }
 

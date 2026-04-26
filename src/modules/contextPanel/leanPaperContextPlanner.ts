@@ -314,11 +314,24 @@ export async function buildLeanPaperContextPlanForRequest(
       params.pdfModePaperKeys,
     ),
   );
+  const explicitPaperContexts = dedupePaperContexts(
+    filterPdfModePaperContexts(params.paperContexts, params.pdfModePaperKeys),
+  );
+  const followupPaperContexts =
+    explicitPaperContexts.length || fullTextPapers.length
+      ? []
+      : dedupePaperContexts(
+          filterPdfModePaperContexts(
+            params.recentPaperContexts,
+            params.pdfModePaperKeys,
+          ),
+        );
   const displayPaperContexts = dedupePaperContexts(
     filterPdfModePaperContexts(
       [
         ...(activePaperContext ? [activePaperContext] : []),
-        ...params.paperContexts,
+        ...explicitPaperContexts,
+        ...followupPaperContexts,
       ],
       params.pdfModePaperKeys,
     ),

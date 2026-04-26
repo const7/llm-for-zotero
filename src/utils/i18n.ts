@@ -14,29 +14,29 @@
 
 const zhCN: Record<string, string> = {
   // ── Shortcut actions ────────────────────────────────────────────────────
-  "Summarize": "摘要",
+  Summarize: "摘要",
   "Key Points": "要点",
-  "Methodology": "方法论",
-  "Limitations": "局限性",
+  Methodology: "方法论",
+  Limitations: "局限性",
 
   // ── Chat panel UI ───────────────────────────────────────────────────────
   "LLM-for-Zotero Lite": "LLM-for-Zotero Lite",
   "Start a new chat": "开始新对话",
   "Conversation history": "对话历史",
   "Paper chat": "论文对话",
-  "Settings": "设置",
+  Settings: "设置",
   "Open plugin settings": "打开插件设置",
-  "Clear": "清除",
-  "Rename": "重命名",
+  Clear: "清除",
+  Rename: "重命名",
   "Rename chat": "重命名对话",
-  "Undo": "撤销",
+  Undo: "撤销",
   "Restore deleted conversation": "恢复已删除的对话",
-  "Copy": "复制",
+  Copy: "复制",
   "Delete conversation": "删除对话",
   "Delete this turn": "删除此轮对话",
   "Delete this prompt and response": "删除此提问和回答",
   "Question timeline": "问题导航",
-  "Question": "问题",
+  Question: "问题",
   "Jump to question": "跳转到问题",
   "Upload files": "上传文件",
   "Add documents or images": "添加文档或图片",
@@ -47,13 +47,14 @@ const zhCN: Record<string, string> = {
   "Clear selected images": "清除已选图片",
   "Expand files": "展开文件",
   "Clear uploaded files": "清除已上传文件",
-  "Ask about this paper... Use + to add context, @ to search papers": "询问关于这篇论文的问题... 用 + 添加上下文，@ 搜索论文",
+  "Ask about this paper... Use + to add context, @ to search papers":
+    "询问关于这篇论文的问题... 用 + 添加上下文，@ 搜索论文",
   "Open a PDF first": "请先打开一个 PDF",
   "Add context": "添加上下文",
-  "Reasoning": "推理",
-  "Send": "发送",
-  "Cancel": "取消",
-  "Ready": "就绪",
+  Reasoning: "推理",
+  Send: "发送",
+  Cancel: "取消",
+  Ready: "就绪",
   "Select an item or open a PDF": "选择一个条目或打开 PDF",
 
   // ── Status messages ─────────────────────────────────────────────────────
@@ -62,7 +63,8 @@ const zhCN: Record<string, string> = {
   "No deletable turn found": "没有可删除的对话轮次",
   "Could not open plugin settings": "无法打开插件设置",
   "Could not focus this paper": "无法聚焦到此论文",
-  "Failed to fully delete turn. Check logs.": "未能完全删除对话轮次，请查看日志。",
+  "Failed to fully delete turn. Check logs.":
+    "未能完全删除对话轮次，请查看日志。",
   "Turn deleted": "已删除对话轮次",
   "Turn restored": "已恢复对话轮次",
   "Cannot delete while generating": "生成中无法删除",
@@ -90,7 +92,7 @@ const zhCN: Record<string, string> = {
   "File pinned for next sends": "文件已固定于后续发送",
   "File unpinned": "文件已取消固定",
   "Selected text removed": "已移除选中文本",
-  "Cancelled": "已取消",
+  Cancelled: "已取消",
   "Selection cancelled": "选择已取消",
   "Type after @ to search papers.": "在 @ 后输入内容以搜索论文。",
   "Deleted one turn": "已删除一轮对话",
@@ -107,50 +109,59 @@ const zhCN: Record<string, string> = {
   "Image unpinned": "图片已取消固定",
   "Paper set to always send full text.": "论文已设为始终发送全文。",
   "Paper set to retrieval mode.": "论文已设为检索模式。",
-  "Paper context added. Full text will be sent on the next turn.": "论文上下文已添加。全文将在下一轮发送。",
+  "Paper context added. Full text will be sent on the next turn.":
+    "论文上下文已添加。全文将在下一轮发送。",
   "Source: MinerU (enhanced markdown)": "来源: MinerU（增强 Markdown）",
   "(MinerU)": "（MinerU）",
-  "Failed to fully delete conversation. Check logs.": "未能完全删除对话，请查看日志。",
+  "Failed to fully delete conversation. Check logs.":
+    "未能完全删除对话，请查看日志。",
 
   // ── Constants / count labels ────────────────────────────────────────────
   "Add Text": "添加文本",
   "Add selected text to LLM panel": "将选中文本添加到 LLM 面板",
-  "Figure": "图片",
-  "Figures": "图片",
-  "Files": "文件",
-  "Papers": "论文",
-  "Primary": "主要",
-  "Secondary": "次要",
+  Figure: "图片",
+  Figures: "图片",
+  Files: "文件",
+  Papers: "论文",
+  Primary: "主要",
+  Secondary: "次要",
 
-  "Title": "标题",
-  "Author": "作者",
-  "Year": "年份",
-  "Added": "添加日期",
-  "Failed": "失败",
-  "Processing": "解析中",
+  Title: "标题",
+  Author: "作者",
+  Year: "年份",
+  Added: "添加日期",
+  Failed: "失败",
+  Processing: "解析中",
 
   // ── Preferences page ───────────────────────────────────────────────────
   "AI Providers": "AI 服务商",
-  "Customization": "自定义",
-  "MinerU": "MinerU",
+  Customization: "自定义",
+  MinerU: "MinerU",
   "Custom System Prompt (Optional)": "自定义系统提示词（可选）",
   "Custom instructions for the AI assistant...": "为 AI 助手设置自定义指令...",
-  "Add custom instructions to the default system prompt (leave empty to use default only)": "在默认系统提示词基础上添加自定义指令（留空则仅使用默认）",
+  "Add custom instructions to the default system prompt (leave empty to use default only)":
+    "在默认系统提示词基础上添加自定义指令（留空则仅使用默认）",
   "View default system prompt": "查看默认系统提示词",
   "MinerU PDF Parsing": "MinerU PDF 解析",
-  "Use existing MinerU cache as a structured paper-chat text source when available.": "可用时使用已有 MinerU 缓存作为结构化论文聊天文本源。",
+  "Use existing MinerU cache as a structured paper-chat text source when available.":
+    "可用时使用已有 MinerU 缓存作为结构化论文聊天文本源。",
   "Prefer MinerU cache when available": "可用时优先使用 MinerU 缓存",
   "Test Connection": "测试连接",
   "Testing…": "测试中…",
   "✓ Connection successful": "✓ 连接成功",
-  "Each provider has an auth mode, API URL, and one or more model variants.": "每个服务商有一个认证模式、API URL 和一个或多个模型变体。",
-  "Choose a preset above, or switch to Customized to enter a full base URL or endpoint manually.": '选择上方的预设，或切换到"自定义"以手动输入完整的基础 URL 或端点。',
-  "codex auth usually uses https://chatgpt.com/backend-api/codex/responses": "codex 认证通常使用 https://chatgpt.com/backend-api/codex/responses",
-  "Switch Provider to Customized to edit this URL manually.": '将服务商切换到"自定义"以手动编辑此 URL。',
-  "Switch to Customized to edit the URL manually.": '切换到"自定义"以手动编辑 URL。',
-  "Provider": "服务商",
-  "Customized": "自定义",
-  "Protocol": "协议",
+  "Each provider has an auth mode, API URL, and one or more model variants.":
+    "每个服务商有一个认证模式、API URL 和一个或多个模型变体。",
+  "Choose a preset above, or switch to Customized to enter a full base URL or endpoint manually.":
+    '选择上方的预设，或切换到"自定义"以手动输入完整的基础 URL 或端点。',
+  "codex auth usually uses https://chatgpt.com/backend-api/codex/responses":
+    "codex 认证通常使用 https://chatgpt.com/backend-api/codex/responses",
+  "Switch Provider to Customized to edit this URL manually.":
+    '将服务商切换到"自定义"以手动编辑此 URL。',
+  "Switch to Customized to edit the URL manually.":
+    '切换到"自定义"以手动编辑 URL。',
+  Provider: "服务商",
+  Customized: "自定义",
+  Protocol: "协议",
   "API URL": "API URL",
   "API Key": "API 密钥",
   "codex auth": "codex 认证",
@@ -159,23 +170,26 @@ const zhCN: Record<string, string> = {
   "Model names": "模型名称",
   "Add model": "添加模型",
   "Fill in the current model name first": "请先填写当前模型名称",
-  "Test": "测试",
+  Test: "测试",
   "Advanced options": "高级选项",
   "Remove model": "移除模型",
   "Remove provider": "移除服务商",
-  "Temperature": "温度",
+  Temperature: "温度",
   "Max tokens": "最大 Token 数",
   "Input cap": "输入上限",
-  "Temperature: randomness (0–2)  ·  Max tokens: output limit  ·  Input cap: context limit (optional)": "温度：随机性 (0–2)  ·  最大 Token 数：输出限制  ·  输入上限：上下文限制（可选）",
+  "Temperature: randomness (0–2)  ·  Max tokens: output limit  ·  Input cap: context limit (optional)":
+    "温度：随机性 (0–2)  ·  最大 Token 数：输出限制  ·  输入上限：上下文限制（可选）",
   "Complete the empty provider first": "请先完善空白的服务商",
   "Add provider": "添加服务商",
   "+ Add Provider": "+ 添加服务商",
   "API URL is required": "API URL 为必填项",
   "API Key is required": "API 密钥为必填项",
-  "codex token missing. Run `codex login` first.": "codex 令牌缺失。请先运行 `codex login`。",
+  "codex token missing. Run `codex login` first.":
+    "codex 令牌缺失。请先运行 `codex login`。",
   "Provider capability: ": "服务商能力: ",
   "✓ Success — model says: ": "✓ 成功 — 模型回复: ",
-  "codex auth reuses local `codex login` credentials from ~/.codex/auth.json": "codex 认证复用本地 `codex login` 凭据（~/.codex/auth.json）",
+  "codex auth reuses local `codex login` credentials from ~/.codex/auth.json":
+    "codex 认证复用本地 `codex login` 凭据（~/.codex/auth.json）",
   "GitHub Copilot": "GitHub Copilot",
   "Login with GitHub Copilot": "使用 GitHub Copilot 登录",
   "Re-login": "重新登录",
@@ -184,15 +198,17 @@ const zhCN: Record<string, string> = {
   "Requesting device code…": "正在请求设备码…",
   "Enter this code on GitHub:": "在 GitHub 上输入此代码：",
   "Login successful!": "登录成功！",
-  "Copilot token missing. Click Login first.": "Copilot 令牌缺失。请先点击登录。",
-  "GitHub Copilot uses device-based login. Click Login to authenticate via GitHub.": "GitHub Copilot 使用设备认证。点击登录按钮通过 GitHub 进行认证。",
+  "Copilot token missing. Click Login first.":
+    "Copilot 令牌缺失。请先点击登录。",
+  "GitHub Copilot uses device-based login. Click Login to authenticate via GitHub.":
+    "GitHub Copilot 使用设备认证。点击登录按钮通过 GitHub 进行认证。",
   "Fetch available models": "获取可用模型",
   "Fetching models…": "正在获取模型…",
   "No models found": "未找到模型",
   "Synced %n models": "已同步 %n 个模型",
 
   // ── Language setting ────────────────────────────────────────────────────
-  "Language": "语言",
+  Language: "语言",
   "Auto (follow Zotero)": "自动（跟随 Zotero）",
   "Restart Zotero to apply language change.": "重启 Zotero 以应用语言更改。",
 };
@@ -245,7 +261,10 @@ export function t(en: string): string {
  * Returns the welcome screen HTML, translated if needed.
  * Centralized here to keep the full welcome text in one place.
  */
-export function getWebChatWelcomeHtml(targetLabel?: string, targetDomain?: string): string {
+export function getWebChatWelcomeHtml(
+  targetLabel?: string,
+  targetDomain?: string,
+): string {
   const label = targetLabel || "WebChat";
   const domain = targetDomain || "the chat site";
   if (getEffectiveLocale().startsWith("zh")) {

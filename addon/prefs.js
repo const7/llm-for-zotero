@@ -9,7 +9,10 @@ pref("customShortcuts", "");
 pref("shortcutOrder", "");
 pref("enableSemanticSearch", false);
 pref("embeddingProvider", "gemini");
-pref("embeddingApiBase", "https://generativelanguage.googleapis.com/v1beta/openai");
+pref(
+  "embeddingApiBase",
+  "https://generativelanguage.googleapis.com/v1beta/openai",
+);
 pref("embeddingApiKey", "");
 pref("embeddingModel", "gemini-embedding-001");
 pref("mineruEnabled", false);

@@ -248,4 +248,53 @@ describe("leanPaperContextPlanner", function () {
     assert.deepEqual(mineruArgs?.paperContexts, [retrievalPaper]);
     assert.deepEqual(mineruArgs?.fullTextPaperContexts, []);
   });
+
+  it("carries recent paper context into follow-up retrieval when no papers are explicitly selected", async function () {
+    const priorPaper = createPaperContext({
+      itemId: 2,
+      contextItemId: 202,
+      title: "Prior paper",
+    });
+    const retrievalCalls: number[] = [];
+
+    const plan = await buildLeanPaperContextPlanForRequest(
+      {
+        item,
+        question: "How does that compare with the current paper?",
+        paperContexts: [],
+        fullTextPaperContexts: [],
+        recentPaperContexts: [priorPaper],
+        history: [
+          {
+            role: "assistant",
+            content: "The prior paper used a different baseline.",
+          } as ChatMessage,
+        ],
+        effectiveModel: "gpt-5",
+        setStatusSafely: () => {},
+      },
+      {
+        resolveContextSourceItem: () => ({
+          contextItem: { id: activePaper.contextItemId } as Zotero.Item,
+        }),
+        resolvePaperContextRefFromAttachment: () => activePaper,
+        ensurePaperContextsCached: async () => {},
+        getPdfContext: () => undefined,
+        buildTruncatedFullPaperContext: (paperContext) => ({
+          text: `FULL:${paperContext.contextItemId}`,
+        }),
+        buildPaperRetrievalCandidates: async (paperContext) => {
+          retrievalCalls.push(paperContext.contextItemId);
+          return [createCandidate(paperContext)];
+        },
+        renderEvidencePack: ({ papers, candidates }) =>
+          `EVIDENCE:${papers.map((paper) => paper.contextItemId).join(",")}:${candidates.length}`,
+        resolveContextPlanMineruImages: async () => [],
+      },
+    );
+
+    assert.deepEqual(retrievalCalls, [101, 202]);
+    assert.deepEqual(plan.paperContexts, [activePaper, priorPaper]);
+    assert.equal(plan.combinedContext, "EVIDENCE:101,202:2");
+  });
 });

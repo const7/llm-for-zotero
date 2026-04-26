@@ -76,8 +76,12 @@ async function rebuildAttachmentRefsTableIfNeeded(): Promise<void> {
     !existingColumnSet.has("owner_id");
   if (hasCurrentSchema) return;
 
-  await Zotero.DB.queryAsync(`DROP INDEX IF EXISTS ${ATTACHMENT_REFS_BLOB_INDEX}`);
-  await Zotero.DB.queryAsync(`DROP TABLE IF EXISTS ${TEMP_ATTACHMENT_REFS_TABLE}`);
+  await Zotero.DB.queryAsync(
+    `DROP INDEX IF EXISTS ${ATTACHMENT_REFS_BLOB_INDEX}`,
+  );
+  await Zotero.DB.queryAsync(
+    `DROP TABLE IF EXISTS ${TEMP_ATTACHMENT_REFS_TABLE}`,
+  );
   await Zotero.DB.queryAsync(
     `ALTER TABLE ${ATTACHMENT_REFS_TABLE}
      RENAME TO ${TEMP_ATTACHMENT_REFS_TABLE}`,
@@ -106,7 +110,9 @@ async function rebuildAttachmentRefsTableIfNeeded(): Promise<void> {
        WHERE owner_type = 'conversation'`,
     );
   }
-  await Zotero.DB.queryAsync(`DROP TABLE IF EXISTS ${TEMP_ATTACHMENT_REFS_TABLE}`);
+  await Zotero.DB.queryAsync(
+    `DROP TABLE IF EXISTS ${TEMP_ATTACHMENT_REFS_TABLE}`,
+  );
 }
 
 async function filterKnownBlobHashes(hashes: string[]): Promise<string[]> {

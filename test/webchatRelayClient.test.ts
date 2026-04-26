@@ -508,14 +508,18 @@ describe("webchat relay/client", function () {
     const claimed = relayServer.relayClaimQuery(submit.seq);
     assert.isTrue(claimed.ok);
 
-    await invokeEndpoint("/llm-for-zotero-lite/webchat/submit_response", "POST", {
-      seq: submit.seq,
-      attempt: claimed.query?.attempt || 1,
-      response: "",
-      thinking: "Reasoning only",
-      run_state: "done",
-      completion_reason: "settled",
-    });
+    await invokeEndpoint(
+      "/llm-for-zotero-lite/webchat/submit_response",
+      "POST",
+      {
+        seq: submit.seq,
+        attempt: claimed.query?.attempt || 1,
+        response: "",
+        thinking: "Reasoning only",
+        run_state: "done",
+        completion_reason: "settled",
+      },
+    );
 
     const result = await client.pollForResponse(
       "",
@@ -536,14 +540,18 @@ describe("webchat relay/client", function () {
     const claimed = relayServer.relayClaimQuery(submit.seq);
     assert.isTrue(claimed.ok);
 
-    await invokeEndpoint("/llm-for-zotero-lite/webchat/submit_response", "POST", {
-      seq: submit.seq,
-      attempt: claimed.query?.attempt || 1,
-      response: "Final answer",
-      thinking: "Trace",
-      run_state: "done",
-      completion_reason: "settled",
-    });
+    await invokeEndpoint(
+      "/llm-for-zotero-lite/webchat/submit_response",
+      "POST",
+      {
+        seq: submit.seq,
+        attempt: claimed.query?.attempt || 1,
+        response: "Final answer",
+        thinking: "Trace",
+        run_state: "done",
+        completion_reason: "settled",
+      },
+    );
 
     const result = await client.pollForResponse(
       "",
@@ -565,14 +573,18 @@ describe("webchat relay/client", function () {
     const claimed = relayServer.relayClaimQuery(submit.seq);
     assert.isTrue(claimed.ok);
 
-    await invokeEndpoint("/llm-for-zotero-lite/webchat/submit_response", "POST", {
-      seq: submit.seq,
-      attempt: claimed.query?.attempt || 1,
-      response: "",
-      thinking: "",
-      run_state: "done",
-      completion_reason: "settled",
-    });
+    await invokeEndpoint(
+      "/llm-for-zotero-lite/webchat/submit_response",
+      "POST",
+      {
+        seq: submit.seq,
+        attempt: claimed.query?.attempt || 1,
+        response: "",
+        thinking: "",
+        run_state: "done",
+        completion_reason: "settled",
+      },
+    );
 
     let thrown: Error | null = null;
     try {

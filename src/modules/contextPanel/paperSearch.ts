@@ -178,7 +178,10 @@ function getCreatorDisplayName(
   creator: _ZoteroTypes.Item.Creator | null | undefined,
 ): string {
   if (!creator) return "";
-  const parts = [normalizeText(creator.firstName), normalizeText(creator.lastName)]
+  const parts = [
+    normalizeText(creator.firstName),
+    normalizeText(creator.lastName),
+  ]
     .filter(Boolean)
     .join(" ")
     .trim();
@@ -216,7 +219,9 @@ function collectVenue(item: Zotero.Item): string {
     "proceedingsTitle",
     "conferenceName",
   ];
-  const values = fields.map((field) => getItemFieldText(item, field)).filter(Boolean);
+  const values = fields
+    .map((field) => getItemFieldText(item, field))
+    .filter(Boolean);
   if (!values.length) return "";
   const deduped: string[] = [];
   const seen = new Set<string>();
@@ -229,7 +234,9 @@ function collectVenue(item: Zotero.Item): string {
   return deduped.join(" ");
 }
 
-function buildIndexedCandidate(item: Zotero.Item): IndexedPaperCandidate | null {
+function buildIndexedCandidate(
+  item: Zotero.Item,
+): IndexedPaperCandidate | null {
   if (!item?.isRegularItem?.()) return null;
   const attachments = buildIndexedAttachments(getPdfChildAttachments(item));
   if (!attachments.length) return null;
@@ -335,7 +342,9 @@ function buildVisibleCandidate(
       ? Math.floor(excludeContextItemId)
       : null;
   const attachments = candidate.attachments
-    .filter((attachment) => !excludeId || attachment.contextItemId !== excludeId)
+    .filter(
+      (attachment) => !excludeId || attachment.contextItemId !== excludeId,
+    )
     .map((attachment) => ({
       contextItemId: attachment.contextItemId,
       title: attachment.title,
@@ -423,7 +432,11 @@ function scoreField(
   return phraseScore + tokenScore;
 }
 
-function scoreAttachmentTitle(title: string, query: string, tokens: string[]): number {
+function scoreAttachmentTitle(
+  title: string,
+  query: string,
+  tokens: string[],
+): number {
   const normalizedTitle = normalizePaperSearchText(title);
   if (!normalizedTitle) return 0;
   const scoreState: PaperSearchScore = {
@@ -478,7 +491,10 @@ function scoreCandidate(
     scoreNormalizedField(candidate.normalized.shortTitle, query, 1, 1, 1) > 0
   ) {
     score += 500;
-    for (const token of getMatchingTokens(candidate.normalized.shortTitle, tokens)) {
+    for (const token of getMatchingTokens(
+      candidate.normalized.shortTitle,
+      tokens,
+    )) {
       scoreState.matchedTokens.add(token);
     }
   }
@@ -496,7 +512,10 @@ function scoreCandidate(
       scoreState.matchedTokens.add(token);
     }
   } else {
-    const yearTokenMatches = getMatchingTokens(candidate.normalized.year, tokens);
+    const yearTokenMatches = getMatchingTokens(
+      candidate.normalized.year,
+      tokens,
+    );
     if (yearTokenMatches.length > 0) {
       score += yearTokenMatches.length * 40;
       for (const token of yearTokenMatches) {
@@ -530,7 +549,9 @@ function scoreCandidate(
     ]
       .filter(Boolean)
       .join(" ");
-    if (getMatchingTokens(titleAndCreatorBlob, tokens).length === tokens.length) {
+    if (
+      getMatchingTokens(titleAndCreatorBlob, tokens).length === tokens.length
+    ) {
       score += 120;
     }
   }
@@ -553,7 +574,10 @@ export function parseAtSearchToken(
   while (atIndex >= 0) {
     if (atIndex === 0 || /\s/u.test(safeInput[atIndex - 1] || "")) {
       let tokenEnd = atIndex + 1;
-      while (tokenEnd < safeInput.length && !/\s/u.test(safeInput[tokenEnd] || "")) {
+      while (
+        tokenEnd < safeInput.length &&
+        !/\s/u.test(safeInput[tokenEnd] || "")
+      ) {
         tokenEnd += 1;
       }
       if (normalizedCaret > tokenEnd) {

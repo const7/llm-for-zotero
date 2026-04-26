@@ -29,9 +29,7 @@ export const CHAT_ATTACHMENTS_DIR_NAME = "chat-attachments";
 export const PAPER_CONVERSATION_KEY_BASE = 1_500_000_000;
 export const PAPER_HISTORY_LIMIT = 50;
 
-export function formatFigureCountLabel(
-  count: number,
-): string {
+export function formatFigureCountLabel(count: number): string {
   if (count <= 0) return "";
   const noun = count === 1 ? t("Figure") : t("Figures");
   return `${noun} (${count})`;
@@ -62,7 +60,6 @@ export const BUILTIN_SHORTCUT_FILES = [
   { id: "methodology", label: "Methodology", file: "methodology.txt" },
   { id: "limitations", label: "Limitations", file: "limitations.txt" },
 ] as const;
-
 
 export const STOPWORDS = new Set([
   "an",
