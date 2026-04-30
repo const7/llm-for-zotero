@@ -15,5 +15,9 @@ tsconfig.tsbuildinfo
 build
 logs
 
+# Generated/release artifacts
+assets/
+*.xpi
+
 # Ignore all contents inside a folder
 .claude/
