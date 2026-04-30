@@ -706,7 +706,7 @@
     0 12px 30px rgba(0, 0, 0, 0.2),
     0 2px 8px rgba(0, 0, 0, 0.12);
   color: var(--fill-primary);
-  font-size: var(--llm-fs-12);
+  font-size: var(--llm-fs-12, 12px);
   line-height: 1.35;
   white-space: normal;
   overflow-wrap: anywhere;

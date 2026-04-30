@@ -216,7 +216,7 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
   questionTimelineTooltip.setAttribute("aria-hidden", "true");
   questionTimelinePanel.appendChild(questionTimelineList);
   questionTimeline.append(questionTimelinePeek, questionTimelinePanel);
-  chatShell.append(chatBox, questionTimeline, questionTimelineTooltip);
+  chatShell.append(chatBox, questionTimeline);
   container.appendChild(chatShell);
 
   // Response context menu
@@ -628,7 +628,7 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
   composeArea.appendChild(actionsRow);
   container.appendChild(inputSection);
   container.appendChild(statusBar);
-  body.appendChild(container);
+  body.append(container, questionTimelineTooltip);
 }
 
 export { buildUI };
