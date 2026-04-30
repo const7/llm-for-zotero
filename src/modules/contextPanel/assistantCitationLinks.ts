@@ -170,6 +170,75 @@ const citationPageLookupTasks = new Map<
     pageLabel: string;
   } | null>
 >();
+const queuedCitationPageResolutionKeys = new Set<string>();
+const citationPageResolutionQueues = new WeakMap<
+  Document,
+  {
+    tasks: Array<() => Promise<void>>;
+    scheduled: boolean;
+  }
+>();
+
+export function shouldEagerResolveCitationPage(quoteText: string): boolean {
+  return Boolean(sanitizeText(quoteText || "").trim());
+}
+
+function enqueueCitationPageResolution(
+  ownerDoc: Document,
+  task: () => Promise<void>,
+): void {
+  let queue = citationPageResolutionQueues.get(ownerDoc);
+  if (!queue) {
+    queue = { tasks: [], scheduled: false };
+    citationPageResolutionQueues.set(ownerDoc, queue);
+  }
+  queue.tasks.push(task);
+  scheduleNextCitationPageResolution(ownerDoc, queue);
+}
+
+function scheduleNextCitationPageResolution(
+  ownerDoc: Document,
+  queue: {
+    tasks: Array<() => Promise<void>>;
+    scheduled: boolean;
+  },
+): void {
+  if (queue.scheduled) return;
+  if (!queue.tasks.length) return;
+  queue.scheduled = true;
+
+  const run = () => {
+    const task = queue.tasks.shift();
+    if (!task) {
+      queue.scheduled = false;
+      return;
+    }
+    void task()
+      .catch(() => {
+        // Eager page labels are best-effort; click handling still resolves.
+      })
+      .finally(() => {
+        queue.scheduled = false;
+        scheduleNextCitationPageResolution(ownerDoc, queue);
+      });
+  };
+
+  const win = ownerDoc.defaultView as
+    | (Window & {
+        requestIdleCallback?: (
+          callback: () => void,
+          options?: { timeout?: number },
+        ) => number;
+      })
+    | null;
+  if (typeof win?.requestIdleCallback === "function") {
+    win.requestIdleCallback(run, { timeout: 1200 });
+  } else if (typeof win?.setTimeout === "function") {
+    win.setTimeout(run, 120);
+  } else {
+    setTimeout(run, 120);
+  }
+}
 
 function normalizeCachedCitationPageLabel(
   pageIndex: number,
@@ -1366,15 +1435,14 @@ async function resolvePageForCitationButton(params: {
 }): Promise<void> {
   try {
     const normalizedQuoteText = sanitizeText(params.quoteText || "").trim();
-    const orderedCandidates = await buildOrderedCitationCandidates(
+    if (!shouldEagerResolveCitationPage(normalizedQuoteText)) return;
+
+    const orderedCandidates = buildEagerCitationPageCandidates(
       params.panelItem,
       params.extractedCitation,
       params.candidates,
     );
     if (!orderedCandidates.length) return;
-
-    // No quote snippet -> nothing to resolve eagerly at page level.
-    if (!normalizedQuoteText) return;
 
     // Cache check — skip rank-0 candidates to avoid stale entries from
     // whatever PDF happens to be open winning over the actual cited paper.
@@ -1643,20 +1711,16 @@ async function resolveCitationCandidatesFromLibrarySearch(
     .map((entry) => entry.candidate);
 }
 
-async function buildOrderedCitationCandidates(
-  panelItem: Zotero.Item,
-  extractedCitation: ExtractedCitationLabel | null,
-  staticCandidates: AssistantCitationPaperCandidate[],
-): Promise<AssistantCitationPaperCandidate[]> {
-  const dynamicFallbackCandidates = resolveFallbackCandidates(panelItem);
-  const searchedCandidates = await resolveCitationCandidatesFromLibrarySearch(
-    panelItem,
-    extractedCitation,
-  );
+function rankAndOrderCitationCandidates(params: {
+  extractedCitation: ExtractedCitationLabel | null;
+  staticCandidates: AssistantCitationPaperCandidate[];
+  searchedCandidates: AssistantCitationPaperCandidate[];
+  dynamicFallbackCandidates: AssistantCitationPaperCandidate[];
+}): AssistantCitationPaperCandidate[] {
   const effectiveCandidates = mergeCitationCandidates(
-    staticCandidates,
-    searchedCandidates,
-    dynamicFallbackCandidates,
+    params.staticCandidates,
+    params.searchedCandidates,
+    params.dynamicFallbackCandidates,
   );
   // Track which candidates came from conversation context so they receive a
   // ranking boost.  This handles cross-language author name mismatches (e.g.
@@ -1664,7 +1728,7 @@ async function buildOrderedCitationCandidates(
   // otherwise be outranked by an unrelated library result with a matching
   // romanized name.
   const staticKeySet = new Set(
-    staticCandidates.map(
+    params.staticCandidates.map(
       (c) =>
         `${Math.floor(c.paperContext.itemId)}:${Math.floor(c.contextItemId)}`,
     ),
@@ -1676,10 +1740,10 @@ async function buildOrderedCitationCandidates(
     const leftIsContext = staticKeySet.has(leftKey);
     const rightIsContext = staticKeySet.has(rightKey);
     const leftRank =
-      rankCandidateForCitation(extractedCitation, left) +
+      rankCandidateForCitation(params.extractedCitation, left) +
       (leftIsContext ? 1 : 0);
     const rightRank =
-      rankCandidateForCitation(extractedCitation, right) +
+      rankCandidateForCitation(params.extractedCitation, right) +
       (rightIsContext ? 1 : 0);
     const rankDelta = rightRank - leftRank;
     if (rankDelta !== 0) return rankDelta;
@@ -1694,6 +1758,37 @@ async function buildOrderedCitationCandidates(
       undefined,
       { sensitivity: "base" },
     );
+  });
+}
+
+function buildEagerCitationPageCandidates(
+  panelItem: Zotero.Item,
+  extractedCitation: ExtractedCitationLabel | null,
+  staticCandidates: AssistantCitationPaperCandidate[],
+): AssistantCitationPaperCandidate[] {
+  return rankAndOrderCitationCandidates({
+    extractedCitation,
+    staticCandidates,
+    searchedCandidates: [],
+    dynamicFallbackCandidates: resolveFallbackCandidates(panelItem),
+  });
+}
+
+async function buildOrderedCitationCandidates(
+  panelItem: Zotero.Item,
+  extractedCitation: ExtractedCitationLabel | null,
+  staticCandidates: AssistantCitationPaperCandidate[],
+): Promise<AssistantCitationPaperCandidate[]> {
+  const dynamicFallbackCandidates = resolveFallbackCandidates(panelItem);
+  const searchedCandidates = await resolveCitationCandidatesFromLibrarySearch(
+    panelItem,
+    extractedCitation,
+  );
+  return rankAndOrderCitationCandidates({
+    extractedCitation,
+    staticCandidates,
+    searchedCandidates,
+    dynamicFallbackCandidates,
   });
 }
 
@@ -2098,6 +2193,48 @@ function resolveMatchingCandidatesForExtractedCitation(
   return out;
 }
 
+function scheduleCitationPageResolution(params: {
+  ownerDoc: Document;
+  button: HTMLButtonElement;
+  displayCitationLabel: string;
+  candidates: AssistantCitationPaperCandidate[];
+  panelItem: Zotero.Item;
+  extractedCitation: ExtractedCitationLabel;
+  quoteText: string;
+}): void {
+  if (!shouldEagerResolveCitationPage(params.quoteText)) return;
+
+  const syncKey = sanitizeText(
+    params.button.dataset.citationSyncKey || "",
+  ).trim();
+  if (!syncKey) return;
+  const candidateKey = params.candidates
+    .map(
+      (candidate) =>
+        `${Math.floor(candidate.paperContext.itemId)}:${Math.floor(candidate.contextItemId)}`,
+    )
+    .join(",");
+  const queueKey = `${syncKey}|${normalizeCitationLabel(params.displayCitationLabel)}|${candidateKey}`;
+  if (queuedCitationPageResolutionKeys.has(queueKey)) return;
+  queuedCitationPageResolutionKeys.add(queueKey);
+
+  enqueueCitationPageResolution(params.ownerDoc, async () => {
+    try {
+      if (!params.button.isConnected) return;
+      await resolvePageForCitationButton({
+        button: params.button,
+        displayCitationLabel: params.displayCitationLabel,
+        candidates: params.candidates,
+        panelItem: params.panelItem,
+        extractedCitation: params.extractedCitation,
+        quoteText: params.quoteText,
+      });
+    } finally {
+      queuedCitationPageResolutionKeys.delete(queueKey);
+    }
+  });
+}
+
 function createCitationButton(params: {
   ownerDoc: Document;
   body: Element;
@@ -2212,7 +2349,8 @@ function createCitationButton(params: {
 
   container.appendChild(citationButton);
 
-  void resolvePageForCitationButton({
+  scheduleCitationPageResolution({
+    ownerDoc: params.ownerDoc,
     button: citationButton,
     displayCitationLabel,
     candidates: params.candidates,

@@ -9,12 +9,23 @@ import {
   lookupCachedCitationPage,
   matchAssistantCitationCandidates,
   rememberCachedCitationPage,
+  shouldEagerResolveCitationPage,
 } from "../src/modules/contextPanel/assistantCitationLinks";
 import type { PaperContextRef } from "../src/modules/contextPanel/types";
 
 describe("assistantCitationLinks", function () {
   afterEach(function () {
     clearCachedCitationPagesForTests();
+  });
+
+  it("only eagerly resolves page labels when a quote is available", function () {
+    assert.isFalse(shouldEagerResolveCitationPage(""));
+    assert.isFalse(shouldEagerResolveCitationPage("   \n\t"));
+    assert.isTrue(
+      shouldEagerResolveCitationPage(
+        "We choose Hebbian learning for its biological plausibility.",
+      ),
+    );
   });
 
   it("extracts a paper source label from a citation line", function () {
